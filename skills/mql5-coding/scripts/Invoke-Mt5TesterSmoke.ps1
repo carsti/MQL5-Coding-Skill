@@ -140,6 +140,28 @@ namespace Mql5Coding
             public uint dwThreadId;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct FileTime
+        {
+            public uint LowDateTime;
+            public uint HighDateTime;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ByHandleFileInformation
+        {
+            public uint FileAttributes;
+            public FileTime CreationTime;
+            public FileTime LastAccessTime;
+            public FileTime LastWriteTime;
+            public uint VolumeSerialNumber;
+            public uint FileSizeHigh;
+            public uint FileSizeLow;
+            public uint NumberOfLinks;
+            public uint FileIndexHigh;
+            public uint FileIndexLow;
+        }
+
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern SafeWaitHandle CreateJobObject(
             IntPtr jobAttributes,
@@ -201,6 +223,20 @@ namespace Mql5Coding
         private static extern uint WaitForSingleObject(
             SafeWaitHandle handle,
             uint milliseconds);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetFileInformationByHandle(
+            SafeFileHandle file,
+            out ByHandleFileInformation information);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool QueryFullProcessImageName(
+            SafeWaitHandle process,
+            uint flags,
+            StringBuilder imagePath,
+            ref uint size);
 
         private SafeWaitHandle jobHandle;
         private SafeWaitHandle processHandle;
@@ -352,6 +388,42 @@ namespace Mql5Coding
                     Marshal.GetLastWin32Error(),
                     "ResumeThread failed.");
             resumed = true;
+        }
+
+        public static string GetFileIdentity(SafeFileHandle fileHandle)
+        {
+            if (fileHandle == null || fileHandle.IsInvalid || fileHandle.IsClosed)
+                throw new InvalidOperationException("The file handle is unavailable.");
+
+            ByHandleFileInformation information;
+            if (!GetFileInformationByHandle(fileHandle, out information))
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "GetFileInformationByHandle failed.");
+
+            ulong fileIndex =
+                ((ulong)information.FileIndexHigh << 32) |
+                (ulong)information.FileIndexLow;
+            return information.VolumeSerialNumber.ToString("X8") +
+                ":" + fileIndex.ToString("X16");
+        }
+
+        public string GetImagePath()
+        {
+            if (processHandle == null || processHandle.IsInvalid || processHandle.IsClosed)
+                throw new InvalidOperationException("The process handle is unavailable.");
+
+            uint capacity = 32768;
+            StringBuilder imagePath = new StringBuilder((int)capacity);
+            if (!QueryFullProcessImageName(
+                    processHandle,
+                    0,
+                    imagePath,
+                    ref capacity))
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "QueryFullProcessImageName failed.");
+            return imagePath.ToString();
         }
 
         public void TerminateAndWaitForEmpty(int timeoutMilliseconds)
@@ -599,49 +671,153 @@ function Resolve-TerminalBinding {
     }
 }
 
+function Get-FileIdentityFromPath {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $share = [IO.FileShare](
+        [int][IO.FileShare]::ReadWrite -bor
+        [int][IO.FileShare]::Delete
+    )
+    $stream = [IO.File]::Open(
+        $Path,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::Read,
+        $share
+    )
+    try {
+        return [Mql5Coding.JobProcessLaunch]::GetFileIdentity($stream.SafeFileHandle)
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
+function Open-TerminalImageReadLock {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Tracker
+    )
+
+    $stream = $null
+    try {
+        $stream = [IO.File]::Open(
+            $Path,
+            [IO.FileMode]::Open,
+            [IO.FileAccess]::Read,
+            [IO.FileShare]::Read
+        )
+        if ([long]$stream.Length -le 0) {
+            throw "Terminal executable is empty: $Path"
+        }
+
+        $record = [pscustomobject][ordered]@{
+            kind = 'terminal executable'
+            destination_path = [IO.Path]::GetFullPath($Path)
+            byte_length = [long]$stream.Length
+            sha256 = Get-StreamSha256 -Stream $stream
+            file_identity = [Mql5Coding.JobProcessLaunch]::GetFileIdentity(
+                $stream.SafeFileHandle
+            )
+            verified = $true
+        }
+        $Tracker.Add([pscustomobject][ordered]@{
+            record = $record
+            stream = $stream
+        })
+        $stream = $null
+        return $record
+    }
+    finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+    }
+}
+
 function Get-MatchingTerminalProcesses {
     param(
         [Parameter(Mandatory)][string]$ExecutablePath,
+        [Parameter(Mandatory)][string]$ExpectedFileIdentity,
         $TrustedSuspendedIdentity
     )
     $wanted = [IO.Path]::GetFullPath($ExecutablePath)
+    $wantedLeaf = [IO.Path]::GetFileName($wanted)
     $matches = New-Object 'System.Collections.Generic.List[object]'
     $unknown = New-Object 'System.Collections.Generic.List[int]'
 
     try {
-        $processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='terminal64.exe'")
+        # Enumerate all process images so a hard-link, junction, symlink, or
+        # short-path alias cannot evade the selected executable's file identity.
+        $processes = @(Get-CimInstance -ClassName Win32_Process)
     }
     catch {
-        throw "BLOCKED: Cannot safely inspect running terminal64.exe processes: $($_.Exception.Message)"
+        throw "BLOCKED: Cannot safely inspect running process images: $($_.Exception.Message)"
     }
 
     foreach ($process in $processes) {
-        $path = [string]$process.ExecutablePath
+        $processId = [int]$process.ProcessId
+        $processName = [string]$process.Name
+        $sameLeafName = $processName.Equals(
+            $wantedLeaf,
+            [StringComparison]::OrdinalIgnoreCase
+        )
+
+        try {
+            $path = [string]$process.ExecutablePath
+        }
+        catch {
+            $path = ''
+        }
         if ([string]::IsNullOrWhiteSpace($path)) {
-            if (
+            $trustedIdentityMatch = (
                 $null -ne $TrustedSuspendedIdentity -and
-                [int]$process.ProcessId -eq [int]$TrustedSuspendedIdentity.process_id
-            ) {
+                $processId -eq [int]$TrustedSuspendedIdentity.process_id -and
+                [string]$TrustedSuspendedIdentity.executable_file_identity -ceq
+                    $ExpectedFileIdentity
+            )
+            if ($trustedIdentityMatch) {
                 $matches.Add([pscustomobject][ordered]@{
-                    process_id = [int]$process.ProcessId
+                    process_id = $processId
                     parent_process_id = [int]$process.ParentProcessId
                     creation_utc_ticks = [long]$TrustedSuspendedIdentity.creation_utc_ticks
                     session_id = [int]$TrustedSuspendedIdentity.session_id
-                    executable_path = $wanted
+                    executable_path = [string]$TrustedSuspendedIdentity.executable_path
+                    executable_file_identity = $ExpectedFileIdentity
+                    identity_match = $true
+                    path_match = $true
                 })
-                continue
             }
-            $unknown.Add([int]$process.ProcessId)
+            elseif ($sameLeafName) {
+                $unknown.Add($processId)
+            }
             continue
         }
+
+        $candidate = $null
         try {
             $candidate = [IO.Path]::GetFullPath($path)
+            $candidateIdentity = Get-FileIdentityFromPath -Path $candidate
         }
         catch {
-            $unknown.Add([int]$process.ProcessId)
+            $pathMatches = (
+                $null -ne $candidate -and
+                $candidate.Equals($wanted, [StringComparison]::OrdinalIgnoreCase)
+            )
+            if ($sameLeafName -or $pathMatches) {
+                $unknown.Add($processId)
+            }
             continue
         }
-        if ($candidate.Equals($wanted, [StringComparison]::OrdinalIgnoreCase)) {
+
+        $pathMatch = $candidate.Equals(
+            $wanted,
+            [StringComparison]::OrdinalIgnoreCase
+        )
+        $identityMatch = $candidateIdentity.Equals(
+            $ExpectedFileIdentity,
+            [StringComparison]::Ordinal
+        )
+        if ($pathMatch -or $identityMatch) {
             $creationTicks = if ($process.CreationDate -is [datetime]) {
                 [long]$process.CreationDate.ToUniversalTime().Ticks
             }
@@ -649,17 +825,20 @@ function Get-MatchingTerminalProcesses {
                 $null
             }
             $matches.Add([pscustomobject][ordered]@{
-                process_id = [int]$process.ProcessId
+                process_id = $processId
                 parent_process_id = [int]$process.ParentProcessId
                 creation_utc_ticks = $creationTicks
                 session_id = [int]$process.SessionId
                 executable_path = $candidate
+                executable_file_identity = $candidateIdentity
+                identity_match = [bool]$identityMatch
+                path_match = [bool]$pathMatch
             })
         }
     }
 
     if ($unknown.Count -gt 0) {
-        throw "BLOCKED: Running terminal64.exe process path is unreadable for PID(s) $($unknown -join ', '); refusing an unsafe launch."
+        throw "BLOCKED: Running terminal64.exe process identity is unreadable for PID(s) $($unknown -join ', '); refusing an unsafe launch."
     }
     return $matches.ToArray()
 }
@@ -1378,7 +1557,8 @@ function Select-JournalEvidence {
 function Get-SpawnedProcessIdentity {
     param(
         [Parameter(Mandatory)][Diagnostics.Process]$Process,
-        [Parameter(Mandatory)][string]$ExecutablePath
+        [Parameter(Mandatory)][string]$ExecutablePath,
+        [Parameter(Mandatory)][string]$ExecutableFileIdentity
     )
 
     try {
@@ -1394,6 +1574,7 @@ function Get-SpawnedProcessIdentity {
         creation_utc_ticks = $creationUtcTicks
         session_id = $sessionId
         executable_path = [IO.Path]::GetFullPath($ExecutablePath)
+        executable_file_identity = $ExecutableFileIdentity
     }
 }
 
@@ -1801,11 +1982,20 @@ try {
         terminal_path = $terminal
         terminal_data_path = $data
         output_directory = $output
+        terminal_image = $null
         terminal_origin = $null
     }
 
     $lock = Open-DataDirectoryLock -TerminalDataPath $data -RunId $runId
     $stagingReadLocksReleased = $false
+    $terminalImageRecord = Open-TerminalImageReadLock -Path $terminal -Tracker $stagingReadLocks
+    $result.binding.terminal_image = [ordered]@{
+        path = $terminalImageRecord.destination_path
+        byte_length = [long]$terminalImageRecord.byte_length
+        sha256 = $terminalImageRecord.sha256
+        file_identity = $terminalImageRecord.file_identity
+        read_lock_acquired = $true
+    }
     $originRecord = Open-TerminalOriginReadLock `
         -TerminalDataPath $data `
         -TerminalPath $terminal `
@@ -1817,7 +2007,7 @@ try {
         sha256 = $originRecord.sha256
         read_lock_acquired = $true
     }
-    $conflicts = @(Get-MatchingTerminalProcesses -ExecutablePath $terminal)
+    $conflicts = @(Get-MatchingTerminalProcesses -ExecutablePath $terminal -ExpectedFileIdentity $terminalImageRecord.file_identity)
     if ($conflicts.Count -gt 0) {
         $pids = @($conflicts | ForEach-Object { $_.process_id })
         throw "BLOCKED: The bound MT5 terminal is already running (PID(s) $($pids -join ', ')). Close it before an isolated smoke run; the runner will not stop it."
@@ -2041,7 +2231,7 @@ try {
     $beforeTester = Get-JournalSnapshot -RootPath $testerLogRoot
 
     if ($PreflightOnly) {
-        $preflightFinalConflicts = @(Get-MatchingTerminalProcesses -ExecutablePath $terminal)
+        $preflightFinalConflicts = @(Get-MatchingTerminalProcesses -ExecutablePath $terminal -ExpectedFileIdentity $terminalImageRecord.file_identity)
         if ($preflightFinalConflicts.Count -gt 0) {
             $pids = @($preflightFinalConflicts | ForEach-Object { $_.process_id })
             throw "BLOCKED: The bound MT5 terminal started during preflight (PID(s) $($pids -join ', ')); preflight readiness is no longer valid."
@@ -2056,7 +2246,7 @@ try {
             $generatedOwnedPaths.Add($path)
         }
 
-        $conflicts = @(Get-MatchingTerminalProcesses -ExecutablePath $terminal)
+        $conflicts = @(Get-MatchingTerminalProcesses -ExecutablePath $terminal -ExpectedFileIdentity $terminalImageRecord.file_identity)
         if ($conflicts.Count -gt 0) {
             $pids = @($conflicts | ForEach-Object { $_.process_id })
             throw "BLOCKED: The bound MT5 terminal started during preflight (PID(s) $($pids -join ', ')); refusing to continue."
@@ -2073,11 +2263,23 @@ try {
         $result.process.process_id = [int]$jobLaunch.ProcessId
         $result.process.job_containment_established = $true
         $process = [Diagnostics.Process]::GetProcessById([int]$jobLaunch.ProcessId)
-        $spawnedProcessIdentity = Get-SpawnedProcessIdentity -Process $process -ExecutablePath $terminal
+        $spawnedImagePath = [IO.Path]::GetFullPath($jobLaunch.GetImagePath())
+        $spawnedImageFileIdentity = Get-FileIdentityFromPath -Path $spawnedImagePath
+        if ($spawnedImageFileIdentity -cne [string]$terminalImageRecord.file_identity) {
+            throw (
+                "BLOCKED: Suspended PID $($process.Id) did not map to the pinned " +
+                'terminal executable file identity.'
+            )
+        }
+        $spawnedProcessIdentity = Get-SpawnedProcessIdentity `
+            -Process $process `
+            -ExecutablePath $spawnedImagePath `
+            -ExecutableFileIdentity $spawnedImageFileIdentity
 
         $postStartMatches = @(
             Get-MatchingTerminalProcesses `
                 -ExecutablePath $terminal `
+                -ExpectedFileIdentity $terminalImageRecord.file_identity `
                 -TrustedSuspendedIdentity $spawnedProcessIdentity
         )
         $ownedMatches = @($postStartMatches | Where-Object { [int]$_.process_id -eq [int]$process.Id })
@@ -2089,7 +2291,7 @@ try {
             throw "BLOCKED: Creation time was unavailable for the owned suspended terminal PID $($process.Id)."
         }
         $result.process.post_start_identity_verified = $true
-        $result.process.identity_source = 'suspended_cim_cross_checked'
+        $result.process.identity_source = 'pinned_file_identity_and_suspended_cim_cross_check'
 
         $jobLaunch.Resume()
         $result.process.resumed = $true
@@ -2113,7 +2315,7 @@ try {
             $result.process.exit_code = [int]$process.ExitCode
         }
 
-        $postExitMatches = @(Get-MatchingTerminalProcesses -ExecutablePath $terminal)
+        $postExitMatches = @(Get-MatchingTerminalProcesses -ExecutablePath $terminal -ExpectedFileIdentity $terminalImageRecord.file_identity)
         if ($postExitMatches.Count -gt 0) {
             $remaining = @($postExitMatches | ForEach-Object { $_.process_id })
             throw "BLOCKED: Bound terminal PID(s) $($remaining -join ', ') remained after the owned process ended. The runner will not stop them."

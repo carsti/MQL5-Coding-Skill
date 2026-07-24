@@ -134,7 +134,13 @@ function Resolve-MetaEditorExecutable {
 
     foreach ($processName in @('metaeditor64', 'metaeditor')) {
         foreach ($process in @(Get-Process -Name $processName -ErrorAction SilentlyContinue)) {
-            $fromProcess = Get-MetaEditorFromCandidate -Candidate $process.Path
+            try {
+                $processPath = [string]$process.Path
+            }
+            catch {
+                continue
+            }
+            $fromProcess = Get-MetaEditorFromCandidate -Candidate $processPath
             if ($null -ne $fromProcess) {
                 return $fromProcess
             }
@@ -157,10 +163,30 @@ function Resolve-MetaEditorExecutable {
         'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
     )
     foreach ($entry in @(Get-ItemProperty -Path $uninstallRoots -ErrorAction SilentlyContinue)) {
-        if ($entry.DisplayName -notmatch 'MetaTrader 5|MetaEditor') {
+        $displayNameProperty = $entry.PSObject.Properties['DisplayName']
+        $installLocationProperty = $entry.PSObject.Properties['InstallLocation']
+        if ($null -eq $displayNameProperty -or $null -eq $installLocationProperty) {
             continue
         }
-        $fromRegistry = Get-MetaEditorFromCandidate -Candidate $entry.InstallLocation
+
+        try {
+            $displayName = [string]$displayNameProperty.Value
+            $installLocation = [string]$installLocationProperty.Value
+        }
+        catch {
+            continue
+        }
+        if ($displayName -notmatch 'MetaTrader 5|MetaEditor' -or
+            [string]::IsNullOrWhiteSpace($installLocation)) {
+            continue
+        }
+
+        try {
+            $fromRegistry = Get-MetaEditorFromCandidate -Candidate $installLocation
+        }
+        catch {
+            continue
+        }
         if ($null -ne $fromRegistry) {
             return $fromRegistry
         }
