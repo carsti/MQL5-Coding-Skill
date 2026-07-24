@@ -301,41 +301,125 @@ $postExitWaitProbe = & {
     param([Parameter(Mandatory = $true)][string]$DefinitionText)
 
     . ([scriptblock]::Create($DefinitionText))
+    $ownedIdentity = [pscustomobject]@{
+        process_id = 4242
+        creation_utc_ticks = [long]638574336000000000
+        session_id = 3
+        executable_file_identity = 'synthetic-identity'
+    }
     $state = [pscustomobject]@{
+        mode = 'stale_owned'
         calls = 0
         sleeps = 0
     }
     function Get-MatchingTerminalProcesses {
         param($ExecutablePath, $ExpectedFileIdentity)
         $state.calls++
-        if ($state.calls -lt 3) {
-            return [pscustomobject]@{ process_id = 4242 }
+        switch ($state.mode) {
+            'stale_owned' {
+                if ($state.calls -lt 3) {
+                    return $ownedIdentity
+                }
+                return @()
+            }
+            'foreign' {
+                return [pscustomobject]@{
+                    process_id = 5252
+                    creation_utc_ticks = [long]638574336000000100
+                    session_id = 3
+                    executable_file_identity = 'synthetic-identity'
+                }
+            }
+            'inspection_error' {
+                throw 'BLOCKED: synthetic inspection failure'
+            }
+            default {
+                throw "Unexpected process-discovery probe mode: $($state.mode)"
+            }
         }
-        return @()
     }
     function Start-Sleep {
         param([int]$Milliseconds)
         $state.sleeps++
     }
 
-    $remaining = @(
+    $staleRemaining = @(
         Wait-ForNoMatchingTerminalProcesses `
             -ExecutablePath 'C:\synthetic\terminal64.exe' `
             -ExpectedFileIdentity 'synthetic-identity' `
+            -VerifiedOwnedProcessIdentity $ownedIdentity `
             -TimeoutMilliseconds 1000 `
             -PollMilliseconds 1
     )
+    $staleCalls = $state.calls
+    $staleSleeps = $state.sleeps
+
+    $state.mode = 'foreign'
+    $state.calls = 0
+    $state.sleeps = 0
+    $foreignRemaining = @(
+        Wait-ForNoMatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -VerifiedOwnedProcessIdentity $ownedIdentity `
+            -TimeoutMilliseconds 1000 `
+            -PollMilliseconds 1
+    )
+    $foreignCalls = $state.calls
+    $foreignSleeps = $state.sleeps
+
+    $state.mode = 'inspection_error'
+    $state.calls = 0
+    $state.sleeps = 0
+    $inspectionError = $null
+    try {
+        $ignored = @(
+            Wait-ForNoMatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -VerifiedOwnedProcessIdentity $ownedIdentity `
+                -TimeoutMilliseconds 1000 `
+                -PollMilliseconds 1
+        )
+    }
+    catch {
+        $inspectionError = $_.Exception.Message
+    }
+
     return [pscustomobject]@{
-        calls = $state.calls
-        sleeps = $state.sleeps
-        remaining = $remaining.Count
+        stale_calls = $staleCalls
+        stale_sleeps = $staleSleeps
+        stale_remaining = $staleRemaining.Count
+        foreign_calls = $foreignCalls
+        foreign_sleeps = $foreignSleeps
+        foreign_remaining = $foreignRemaining.Count
+        foreign_pid = if ($foreignRemaining.Count -gt 0) {
+            [int]$foreignRemaining[0].process_id
+        }
+        else {
+            -1
+        }
+        inspection_calls = $state.calls
+        inspection_sleeps = $state.sleeps
+        inspection_error = $inspectionError
     }
 } $postExitWaitDefinitionText
 Assert-True -Condition (
-    $postExitWaitProbe.calls -eq 3 -and
-    $postExitWaitProbe.sleeps -eq 2 -and
-    $postExitWaitProbe.remaining -eq 0
-) -Message 'Post-job-empty process discovery did not tolerate bounded stale CIM observations.'
+    $postExitWaitProbe.stale_calls -eq 3 -and
+    $postExitWaitProbe.stale_sleeps -eq 2 -and
+    $postExitWaitProbe.stale_remaining -eq 0
+) -Message 'Post-job-empty process discovery did not tolerate bounded stale owned-process observations.'
+Assert-True -Condition (
+    $postExitWaitProbe.foreign_calls -eq 1 -and
+    $postExitWaitProbe.foreign_sleeps -eq 0 -and
+    $postExitWaitProbe.foreign_remaining -eq 1 -and
+    $postExitWaitProbe.foreign_pid -eq 5252
+) -Message 'Post-job-empty process discovery retried a foreign terminal process.'
+Assert-True -Condition (
+    $postExitWaitProbe.inspection_calls -eq 1 -and
+    $postExitWaitProbe.inspection_sleeps -eq 0 -and
+    $postExitWaitProbe.inspection_error -match 'BLOCKED: synthetic inspection failure'
+) -Message 'Post-job-empty process discovery suppressed or retried an inspection failure.'
 
 Assert-True -Condition ($skillText -notmatch '(?i)[A-Z]:\\Users\\') `
     -Message 'SKILL.md contains a user-specific path.'

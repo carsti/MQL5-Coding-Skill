@@ -738,37 +738,52 @@ function Wait-ForNoMatchingTerminalProcesses {
     param(
         [Parameter(Mandatory)][string]$ExecutablePath,
         [Parameter(Mandatory)][string]$ExpectedFileIdentity,
+        [Parameter(Mandatory)]$VerifiedOwnedProcessIdentity,
         [ValidateRange(0, 60000)][int]$TimeoutMilliseconds = 5000,
         [ValidateRange(0, 1000)][int]$PollMilliseconds = 100
     )
 
+    if (
+        $null -eq $VerifiedOwnedProcessIdentity.creation_utc_ticks -or
+        [string]$VerifiedOwnedProcessIdentity.executable_file_identity -cne
+            $ExpectedFileIdentity
+    ) {
+        throw 'Cannot retry post-exit process discovery without the verified owned process identity.'
+    }
+
     $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMilliseconds)
-    $lastMatches = @()
-    $lastInspectionError = $null
     while ($true) {
-        try {
-            $lastMatches = @(
-                Get-MatchingTerminalProcesses `
-                    -ExecutablePath $ExecutablePath `
-                    -ExpectedFileIdentity $ExpectedFileIdentity
-            )
-            $lastInspectionError = $null
-            if ($lastMatches.Count -eq 0) {
-                return @()
-            }
+        # Inspection failures remain immediate blockers. Only an exact row for
+        # the already verified owned process is eligible for bounded settling.
+        $matches = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath $ExecutablePath `
+                -ExpectedFileIdentity $ExpectedFileIdentity
+        )
+        if ($matches.Count -eq 0) {
+            return @()
         }
-        catch {
-            $lastMatches = @()
-            $lastInspectionError = $_
+
+        $foreignMatch = @(
+            $matches | Where-Object {
+                [int]$_.process_id -ne
+                    [int]$VerifiedOwnedProcessIdentity.process_id -or
+                $null -eq $_.creation_utc_ticks -or
+                [long]$_.creation_utc_ticks -ne
+                    [long]$VerifiedOwnedProcessIdentity.creation_utc_ticks -or
+                [int]$_.session_id -ne
+                    [int]$VerifiedOwnedProcessIdentity.session_id -or
+                [string]$_.executable_file_identity -cne
+                    [string]$VerifiedOwnedProcessIdentity.executable_file_identity
+            }
+        )
+        if ($foreignMatch.Count -gt 0) {
+            return $matches
         }
 
         if ([DateTime]::UtcNow -ge $deadline) {
-            if ($null -ne $lastInspectionError) {
-                throw $lastInspectionError
-            }
-            return $lastMatches
+            return $matches
         }
-
         if ($PollMilliseconds -gt 0) {
             Start-Sleep -Milliseconds $PollMilliseconds
         }
@@ -2342,6 +2357,7 @@ try {
             Wait-ForNoMatchingTerminalProcesses `
                 -ExecutablePath $terminal `
                 -ExpectedFileIdentity $terminalImageRecord.file_identity `
+                -VerifiedOwnedProcessIdentity $ownedMatches[0] `
                 -TimeoutMilliseconds 5000 `
                 -PollMilliseconds 100
         )
