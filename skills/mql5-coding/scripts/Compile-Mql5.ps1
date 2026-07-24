@@ -318,8 +318,11 @@ function Move-OriginalLogAside {
     param([Parameter(Mandatory = $true)][string]$LiteralPath)
 
     $directory = [System.IO.Path]::GetDirectoryName($LiteralPath)
+    $maximumLeafLength = [System.IO.Path]::GetFileName($LiteralPath).Length
+    $backupLeafLength = [Math]::Min(32, $maximumLeafLength)
     for ($attempt = 0; $attempt -lt 100; $attempt++) {
-        $candidate = Join-Path $directory ([System.IO.Path]::GetRandomFileName())
+        $candidateLeaf = [guid]::NewGuid().ToString('N').Substring(0, $backupLeafLength)
+        $candidate = Join-Path $directory $candidateLeaf
         if (-not (Test-Path -LiteralPath $candidate)) {
             [System.IO.File]::Move($LiteralPath, $candidate)
             return $candidate
@@ -387,6 +390,19 @@ function Complete-CompilationLog {
     }
 
     Restore-OriginalLog -LiteralPath $LiteralPath -Snapshot $Snapshot
+}
+
+function Test-CompilerLaunchCleanupVerified {
+    param([Parameter(Mandatory = $true)][Exception]$Exception)
+
+    $current = $Exception
+    while ($null -ne $current) {
+        if ($current.Data.Contains('Mql5Coding.CleanupVerified')) {
+            return [bool]$current.Data['Mql5Coding.CleanupVerified']
+        }
+        $current = $current.InnerException
+    }
+    return $false
 }
 
 try {
@@ -490,12 +506,20 @@ try {
         Write-Output "MQL5_INCLUDE_ROOT=$resolvedInclude"
     }
 
-    $compileLaunch = [Mql5Coding.CompilerProcessJob]::Start(
-        $resolvedMetaEditor,
-        $arguments,
-        (Split-Path -Parent $resolvedMetaEditor)
-    )
     $compileJobEmpty = $false
+    try {
+        $compileLaunch = [Mql5Coding.CompilerProcessJob]::Start(
+            $resolvedMetaEditor,
+            $arguments,
+            (Split-Path -Parent $resolvedMetaEditor)
+        )
+    }
+    catch {
+        if (Test-CompilerLaunchCleanupVerified -Exception $_.Exception) {
+            $compileJobEmpty = $true
+        }
+        throw
+    }
     Write-Output "MQL5_METAEDITOR_PROCESS_ID=$($compileLaunch.ProcessId)"
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()

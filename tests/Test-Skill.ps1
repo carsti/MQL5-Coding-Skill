@@ -330,6 +330,31 @@ $completeLogNode = $compilerAst.Find(
 Assert-True -Condition ($null -ne $completeLogNode) `
     -Message 'Complete-CompilationLog was not found for unsafe-cleanup regression testing.'
 $completeLogDefinitionText = $completeLogNode.Extent.Text
+$launchCleanupNode = $compilerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Test-CompilerLaunchCleanupVerified'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $launchCleanupNode) `
+    -Message 'Test-CompilerLaunchCleanupVerified was not found for launch-state regression testing.'
+$launchCleanupDefinitionText = $launchCleanupNode.Extent.Text
+$markLaunchUnsafeIndex = $compilerText.IndexOf(
+    '$compileJobEmpty = $false',
+    [StringComparison]::Ordinal
+)
+$nativeStartIndex = $compilerText.IndexOf(
+    '$compileLaunch = [Mql5Coding.CompilerProcessJob]::Start(',
+    [StringComparison]::Ordinal
+)
+Assert-True -Condition (
+    $markLaunchUnsafeIndex -ge 0 -and
+    $nativeStartIndex -gt $markLaunchUnsafeIndex
+) -Message 'Compiler launch was not marked unsafe before native process creation.'
 $discoveryResult = & {
     param([Parameter(Mandatory = $true)][string]$DefinitionText)
 
@@ -427,7 +452,7 @@ try {
     $compileDirectory = Join-Path $testRoot 'compile'
     [IO.Directory]::CreateDirectory($compileDirectory) | Out-Null
 
-    $backupNameProbe = Join-Path $compileDirectory 'backup-name-probe.log'
+    $backupNameProbe = Join-Path $compileDirectory 'a.log'
     [IO.File]::WriteAllText($backupNameProbe, 'probe', [Text.Encoding]::ASCII)
     $boundedBackupPath = & {
         param($DefinitionText, $ProbePath)
@@ -435,8 +460,9 @@ try {
         Move-OriginalLogAside -LiteralPath $ProbePath
     } $moveLogDefinitionText $backupNameProbe
     Assert-True -Condition (
-        [IO.Path]::GetFileName([string]$boundedBackupPath).Length -le 16
-    ) -Message 'The adjacent log backup name is not bounded independently of the source filename.'
+        [IO.Path]::GetFileName([string]$boundedBackupPath).Length -le
+            [IO.Path]::GetFileName($backupNameProbe).Length
+    ) -Message 'The adjacent log backup can lengthen a valid near-limit path.'
     [IO.File]::Move([string]$boundedBackupPath, $backupNameProbe)
     Remove-Item -LiteralPath $backupNameProbe -Force
 
@@ -475,6 +501,27 @@ try {
     ) -Message 'Unsafe cleanup modified a generated log or its preserved original.'
     Remove-Item -LiteralPath $unsafeGeneratedLog, $unsafePreservedLog -Force
 
+    $unverifiedLaunchError = [InvalidOperationException]::new('unverified launch')
+    $unverifiedLaunchError.Data['Mql5Coding.CleanupVerified'] = $false
+    $wrappedLaunchError = [Exception]::new('wrapper', $unverifiedLaunchError)
+    $unverifiedLaunchAccepted = & {
+        param($DefinitionText, $ErrorObject)
+        . ([scriptblock]::Create($DefinitionText))
+        Test-CompilerLaunchCleanupVerified -Exception $ErrorObject
+    } $launchCleanupDefinitionText $wrappedLaunchError
+    Assert-True -Condition (-not $unverifiedLaunchAccepted) `
+        -Message 'An unverified native launch failure was treated as safe for log restoration.'
+
+    $verifiedLaunchError = [InvalidOperationException]::new('verified launch')
+    $verifiedLaunchError.Data['Mql5Coding.CleanupVerified'] = $true
+    $verifiedLaunchAccepted = & {
+        param($DefinitionText, $ErrorObject)
+        . ([scriptblock]::Create($DefinitionText))
+        Test-CompilerLaunchCleanupVerified -Exception $ErrorObject
+    } $launchCleanupDefinitionText $verifiedLaunchError
+    Assert-True -Condition ([bool]$verifiedLaunchAccepted) `
+        -Message 'A verified no-process launch failure was not recognized.'
+
     $compileSource = Join-Path $compileDirectory 'fixture.mq5'
     [IO.File]::WriteAllText(
         $compileSource,
@@ -506,6 +553,25 @@ try {
         [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileLog) -ceq $sentinelLogIdentity -and
         [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileLogMirror) -ceq $sentinelLogIdentity
     ) -Message 'Compiler wrapper replaced the pre-existing log file object instead of restoring it.'
+
+    $invalidMetaEditorDirectory = Join-Path $testRoot 'invalid-editor'
+    [IO.Directory]::CreateDirectory($invalidMetaEditorDirectory) | Out-Null
+    $invalidMetaEditor = Join-Path $invalidMetaEditorDirectory 'metaeditor64.exe'
+    [IO.File]::WriteAllText(
+        $invalidMetaEditor,
+        'not a Windows executable',
+        [Text.Encoding]::ASCII
+    )
+    $launchFailure = Invoke-CompilerCase `
+        -SourcePath $compileSource `
+        -MetaEditorPath $invalidMetaEditor `
+        -FakeMode 'success'
+    Assert-True -Condition ($launchFailure.ExitCode -eq 2) `
+        -Message 'Invalid compiler launch did not produce a tooling failure.'
+    Assert-True -Condition (
+        [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileLog) -ceq
+            $sentinelLogIdentity
+    ) -Message 'Verified pre-process launch failure did not restore the original log.'
 
     $delayedCompletion = Invoke-CompilerCase `
         -SourcePath $compileSource `
@@ -845,6 +911,36 @@ try {
         -Message "Tab-prefixed tester evidence was rejected: $($prefixedPass.StandardError)"
     Assert-True -Condition ($prefixedPass.Result.status -eq 'application_marker_passed') `
         -Message 'Tab-prefixed application marker produced the wrong status.'
+
+    $systemInitializedWithBuild = Invoke-RunnerCase `
+        -Name 'execute-system-initialized-with-build' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'system_initialized_with_build'
+    Assert-True -Condition ($systemInitializedWithBuild.ExitCode -eq 0) `
+        -Message 'A genuine initialization with trailing key/value detail was rejected.'
+    Assert-True -Condition (
+        [bool]$systemInitializedWithBuild.Result.evidence.checks.tester_initialized
+    ) -Message 'A genuine initialization with trailing detail was not recorded.'
+
+    $systemOnInitWithCode = Invoke-RunnerCase `
+        -Name 'execute-system-oninit-failure-with-code' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'system_oninit_failure_with_code'
+    Assert-True -Condition ($systemOnInitWithCode.ExitCode -eq 1) `
+        -Message 'A genuine OnInit failure with trailing code=1 was ignored.'
+    Assert-True -Condition (
+        -not [bool]$systemOnInitWithCode.Result.evidence.checks.on_init_failure_absent
+    ) -Message 'A genuine OnInit failure with trailing detail was not recorded.'
 
     $systemInitializedOnly = Invoke-RunnerCase `
         -Name 'execute-system-input-initialized-only' `

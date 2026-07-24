@@ -288,6 +288,8 @@ namespace Mql5Coding
             SafeWaitHandle process = null;
             SafeWaitHandle thread = null;
             CompilerProcessJob launch = null;
+            bool processCreated = false;
+            bool cleanupVerified = true;
             try
             {
                 job = CreateJobObject(IntPtr.Zero, null);
@@ -331,6 +333,8 @@ namespace Mql5Coding
                         Marshal.GetLastWin32Error(),
                         "CreateProcessW failed.");
 
+                processCreated = true;
+                cleanupVerified = false;
                 process = new SafeWaitHandle(created.hProcess, true);
                 thread = new SafeWaitHandle(created.hThread, true);
                 if (!AssignProcessToJobObject(job, process))
@@ -342,6 +346,7 @@ namespace Mql5Coding
                         throw new InvalidOperationException(
                             "AssignProcessToJobObject failed and termination of the suspended compiler process could not be verified.",
                             new Win32Exception(assignmentError));
+                    cleanupVerified = true;
                     throw new Win32Exception(
                         assignmentError,
                         "AssignProcessToJobObject failed; the suspended compiler process was terminated.");
@@ -372,6 +377,7 @@ namespace Mql5Coding
                                 new Win32Exception(resumeError, "ResumeThread failed."),
                                 cleanupError));
                     }
+                    cleanupVerified = true;
                     throw new Win32Exception(
                         resumeError,
                         "ResumeThread failed; the suspended compiler process was terminated.");
@@ -380,6 +386,13 @@ namespace Mql5Coding
                 CompilerProcessJob result = launch;
                 launch = null;
                 return result;
+            }
+            catch (Exception error)
+            {
+                error.Data["Mql5Coding.ProcessCreated"] = processCreated;
+                error.Data["Mql5Coding.CleanupVerified"] =
+                    !processCreated || cleanupVerified;
+                throw;
             }
             finally
             {

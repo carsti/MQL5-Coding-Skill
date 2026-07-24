@@ -193,6 +193,23 @@ internal static class FakeTerminal
                 SystemLine("  SelfTestMarker=" + marker),
                 SystemLine(pass));
         }
+        else if (mode == "system_initialized_with_build")
+        {
+            WriteLog(
+                testerLog,
+                CoreSystemLine("successfully initialized; build=6032"),
+                CoreSystemLine(start),
+                CoreSystemLine(pass));
+        }
+        else if (mode == "system_oninit_failure_with_code")
+        {
+            WriteLog(
+                testerLog,
+                CoreSystemLine("successfully initialized"),
+                CoreSystemLine(start),
+                CoreSystemLine("tester stopped because OnInit returns non-zero; code=1"),
+                CoreSystemLine(pass));
+        }
         else if (mode == "system_input_initialized_only")
         {
             WriteLog(

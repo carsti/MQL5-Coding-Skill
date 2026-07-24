@@ -2429,19 +2429,23 @@ try {
             $testPassedPattern,
             [Text.RegularExpressions.RegexOptions]::IgnoreCase
         )
+        $testerInitializedNeedle = 'successfully initialized'
         $testerInitializedPattern = (
             $testerSystemMessagePrefix +
-            '(?![^\r\n]*=)' +
-            '[^\r\n]*' + [regex]::Escape('successfully initialized') +
+            '(?![^=\r\n]+=[^\r\n]*' +
+                [regex]::Escape($testerInitializedNeedle) + ')' +
+            '[^\r\n]*' + [regex]::Escape($testerInitializedNeedle) +
             '[^\r\n]*\r?$'
         )
         $testerInitializedRegex = New-Object Text.RegularExpressions.Regex(
             $testerInitializedPattern,
             [Text.RegularExpressions.RegexOptions]::IgnoreCase
         )
+        $genericTestStartSignal = 'testing of Experts\'
         $genericTestStartPattern = (
             $testerSystemMessagePrefix +
-            '(?![^\r\n]*=)' +
+            '(?![^=\r\n]+=[^\r\n]*' +
+                [regex]::Escape($genericTestStartSignal) + ')' +
             '[^,\r\n]+,[^:\r\n]+:[ ]*testing of Experts\\[^\r\n]+ ' +
             'from \d{4}\.\d{2}\.\d{2} \d{2}:\d{2} ' +
             'to \d{4}\.\d{2}\.\d{2} \d{2}:\d{2} ' +
@@ -2454,7 +2458,8 @@ try {
         $onInitFailureNeedle = 'tester stopped because OnInit returns non-zero'
         $onInitFailurePattern = (
             $testerSystemMessagePrefix +
-            '(?![^\r\n]*=)' +
+            '(?![^=\r\n]+=[^\r\n]*' +
+                [regex]::Escape($onInitFailureNeedle) + ')' +
             '[^\r\n]*' + [regex]::Escape($onInitFailureNeedle) +
             '[^\r\n]*\r?$'
         )
