@@ -82,7 +82,7 @@ internal static class FakeTerminal
 
     private static string CoreApplicationLine(Dictionary<string, string> config, string message)
     {
-        return "2026.07.24 12:00:00.000\tCore 1\t" +
+        return "2026.07.24 12:00:00.000\tCore 1\t   " +
             config["FromDate"] + " 00:00:00   " + message;
     }
 
@@ -192,6 +192,77 @@ internal static class FakeTerminal
                 SystemLine(start),
                 SystemLine("  SelfTestMarker=" + marker),
                 SystemLine(pass));
+        }
+        else if (mode == "system_initialized_with_build")
+        {
+            WriteLog(
+                testerLog,
+                CoreSystemLine("successfully initialized; build=6032"),
+                CoreSystemLine(start),
+                CoreSystemLine(pass));
+        }
+        else if (mode == "system_oninit_failure_with_code")
+        {
+            WriteLog(
+                testerLog,
+                CoreSystemLine("successfully initialized"),
+                CoreSystemLine(start),
+                CoreSystemLine("tester stopped because OnInit returns non-zero; code=1"),
+                CoreSystemLine(pass));
+        }
+        else if (mode == "system_input_initialized_only")
+        {
+            WriteLog(
+                testerLog,
+                CoreSystemLine("  Diagnostic=successfully initialized"),
+                CoreSystemLine(start),
+                CoreSystemLine(pass));
+        }
+        else if (mode == "system_input_generic_boundary")
+        {
+            WriteLog(
+                testerLog,
+                CoreSystemLine("successfully initialized"),
+                CoreSystemLine(start),
+                CoreSystemLine(
+                    "  Diagnostic=SYNTH,H1: testing of Experts\\Other.ex5 " +
+                    "from 2024.01.01 00:00 to 2024.01.02 00:00 started with inputs:"),
+                CoreSystemLine(pass));
+        }
+        else if (mode == "system_input_oninit_failure")
+        {
+            WriteLog(
+                testerLog,
+                CoreSystemLine("successfully initialized"),
+                CoreSystemLine(start),
+                CoreSystemLine("  Diagnostic=tester stopped because OnInit returns non-zero"),
+                CoreSystemLine(pass));
+        }
+        else if (mode == "application_initialized_only")
+        {
+            WriteLog(
+                testerLog,
+                CoreApplicationLine(config, "successfully initialized"),
+                CoreSystemLine(start),
+                CoreSystemLine(pass));
+        }
+        else if (mode == "application_generic_boundary")
+        {
+            WriteLog(
+                testerLog,
+                CoreSystemLine("successfully initialized"),
+                CoreSystemLine(start),
+                CoreApplicationLine(config, "testing of Experts\\Other.ex5 started with inputs:"),
+                CoreSystemLine(pass));
+        }
+        else if (mode == "application_oninit_failure")
+        {
+            WriteLog(
+                testerLog,
+                CoreSystemLine("successfully initialized"),
+                CoreSystemLine(start),
+                CoreApplicationLine(config, "tester stopped because OnInit returns non-zero"),
+                CoreSystemLine(pass));
         }
         else if (mode == "prefixed_pass")
         {

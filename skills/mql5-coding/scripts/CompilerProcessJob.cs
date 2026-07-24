@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -19,6 +20,31 @@ namespace Mql5Coding
         private const int JobObjectExtendedLimitInformationClass = 9;
         private const uint WaitObject0 = 0x00000000;
         private const uint WaitFailed = 0xFFFFFFFF;
+        private const uint ShareReadWriteDelete = 0x00000007;
+        private const uint OpenExisting = 3;
+        private const uint FileFlagBackupSemantics = 0x02000000;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct NativeFileTime
+        {
+            public uint LowDateTime;
+            public uint HighDateTime;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ByHandleFileInformation
+        {
+            public uint FileAttributes;
+            public NativeFileTime CreationTime;
+            public NativeFileTime LastAccessTime;
+            public NativeFileTime LastWriteTime;
+            public uint VolumeSerialNumber;
+            public uint FileSizeHigh;
+            public uint FileSizeLow;
+            public uint NumberOfLinks;
+            public uint FileIndexHigh;
+            public uint FileIndexLow;
+        }
 
         [StructLayout(LayoutKind.Sequential)]
         private struct IoCounters
@@ -123,6 +149,26 @@ namespace Mql5Coding
             uint informationLength,
             out uint returnLength);
 
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetFileInformationByHandle(
+            SafeFileHandle file,
+            out ByHandleFileInformation information);
+
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "CreateFileW")]
+        private static extern SafeFileHandle OpenPathHandle(
+            string path,
+            uint desiredAccess,
+            uint shareMode,
+            IntPtr securityAttributes,
+            uint creationDisposition,
+            uint flagsAndAttributes,
+            IntPtr templateFile);
+
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool CreateProcessW(
@@ -181,6 +227,58 @@ namespace Mql5Coding
 
         public int ProcessId { get; private set; }
 
+        private static string ReadFileIdentity(SafeFileHandle handle)
+        {
+            ByHandleFileInformation information;
+            if (!GetFileInformationByHandle(handle, out information))
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "GetFileInformationByHandle failed.");
+
+            return String.Format(
+                "{0:X8}:{1:X8}{2:X8}",
+                information.VolumeSerialNumber,
+                information.FileIndexHigh,
+                information.FileIndexLow);
+        }
+
+        public static string GetFileIdentity(string path)
+        {
+            if (String.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("A file path is required.", "path");
+
+            using (FileStream stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete))
+            {
+                return ReadFileIdentity(stream.SafeFileHandle);
+            }
+        }
+
+        public static string GetDirectoryIdentity(string path)
+        {
+            if (String.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("A directory path is required.", "path");
+
+            using (SafeFileHandle handle = OpenPathHandle(
+                path,
+                0,
+                ShareReadWriteDelete,
+                IntPtr.Zero,
+                OpenExisting,
+                FileFlagBackupSemantics,
+                IntPtr.Zero))
+            {
+                if (handle == null || handle.IsInvalid)
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "Opening the directory identity handle failed.");
+                return ReadFileIdentity(handle);
+            }
+        }
+
         public static CompilerProcessJob Start(
             string applicationPath,
             string arguments,
@@ -190,6 +288,8 @@ namespace Mql5Coding
             SafeWaitHandle process = null;
             SafeWaitHandle thread = null;
             CompilerProcessJob launch = null;
+            bool processCreated = false;
+            bool cleanupVerified = true;
             try
             {
                 job = CreateJobObject(IntPtr.Zero, null);
@@ -233,6 +333,8 @@ namespace Mql5Coding
                         Marshal.GetLastWin32Error(),
                         "CreateProcessW failed.");
 
+                processCreated = true;
+                cleanupVerified = false;
                 process = new SafeWaitHandle(created.hProcess, true);
                 thread = new SafeWaitHandle(created.hThread, true);
                 if (!AssignProcessToJobObject(job, process))
@@ -244,6 +346,7 @@ namespace Mql5Coding
                         throw new InvalidOperationException(
                             "AssignProcessToJobObject failed and termination of the suspended compiler process could not be verified.",
                             new Win32Exception(assignmentError));
+                    cleanupVerified = true;
                     throw new Win32Exception(
                         assignmentError,
                         "AssignProcessToJobObject failed; the suspended compiler process was terminated.");
@@ -260,13 +363,36 @@ namespace Mql5Coding
 
                 uint previousSuspendCount = ResumeThread(launch.threadHandle);
                 if (previousSuspendCount == uint.MaxValue)
+                {
+                    int resumeError = Marshal.GetLastWin32Error();
+                    try
+                    {
+                        launch.TerminateAndWaitForEmpty(5000);
+                    }
+                    catch (Exception cleanupError)
+                    {
+                        throw new InvalidOperationException(
+                            "ResumeThread failed and termination of the suspended compiler process could not be verified.",
+                            new AggregateException(
+                                new Win32Exception(resumeError, "ResumeThread failed."),
+                                cleanupError));
+                    }
+                    cleanupVerified = true;
                     throw new Win32Exception(
-                        Marshal.GetLastWin32Error(),
-                        "ResumeThread failed.");
+                        resumeError,
+                        "ResumeThread failed; the suspended compiler process was terminated.");
+                }
 
                 CompilerProcessJob result = launch;
                 launch = null;
                 return result;
+            }
+            catch (Exception error)
+            {
+                error.Data["Mql5Coding.ProcessCreated"] = processCreated;
+                error.Data["Mql5Coding.CleanupVerified"] =
+                    !processCreated || cleanupVerified;
+                throw;
             }
             finally
             {
@@ -281,28 +407,34 @@ namespace Mql5Coding
             }
         }
 
+        public bool IsEmpty()
+        {
+            if (jobHandle == null || jobHandle.IsInvalid || jobHandle.IsClosed)
+                throw new InvalidOperationException("The compiler Job Object is unavailable.");
+
+            JobObjectBasicAccounting accounting;
+            uint returned;
+            if (!QueryInformationJobObject(
+                    jobHandle,
+                    JobObjectBasicAccountingInformationClass,
+                    out accounting,
+                    unchecked((uint)Marshal.SizeOf(typeof(JobObjectBasicAccounting))),
+                    out returned))
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "QueryInformationJobObject failed.");
+            return accounting.ActiveProcesses == 0;
+        }
+
         public void WaitForEmpty(int timeoutMilliseconds)
         {
             if (timeoutMilliseconds < 0)
                 throw new ArgumentOutOfRangeException("timeoutMilliseconds");
-            if (jobHandle == null || jobHandle.IsInvalid || jobHandle.IsClosed)
-                throw new InvalidOperationException("The compiler Job Object is unavailable.");
 
             Stopwatch stopwatch = Stopwatch.StartNew();
             while (true)
             {
-                JobObjectBasicAccounting accounting;
-                uint returned;
-                if (!QueryInformationJobObject(
-                        jobHandle,
-                        JobObjectBasicAccountingInformationClass,
-                        out accounting,
-                        unchecked((uint)Marshal.SizeOf(typeof(JobObjectBasicAccounting))),
-                        out returned))
-                    throw new Win32Exception(
-                        Marshal.GetLastWin32Error(),
-                        "QueryInformationJobObject failed.");
-                if (accounting.ActiveProcesses == 0)
+                if (IsEmpty())
                     return;
                 if (stopwatch.ElapsedMilliseconds >= timeoutMilliseconds)
                     throw new TimeoutException(

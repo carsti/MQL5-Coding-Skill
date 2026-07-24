@@ -10,6 +10,7 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $skillRoot = Join-Path $repositoryRoot 'skills\mql5-coding'
 $runner = Join-Path $skillRoot 'scripts\Invoke-Mt5TesterSmoke.ps1'
 $compiler = Join-Path $skillRoot 'scripts\Compile-Mql5.ps1'
+$compilerProcessJobSource = Join-Path $skillRoot 'scripts\CompilerProcessJob.cs'
 $fakeTerminalSource = Join-Path $PSScriptRoot 'FakeTerminal.cs'
 $fakeMetaEditorSource = Join-Path $PSScriptRoot 'FakeMetaEditor.cs'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('mql5-coding-skill-test-' + [guid]::NewGuid().ToString('N'))
@@ -186,6 +187,8 @@ function Invoke-CompilerCase {
         [Parameter(Mandatory = $true)]
         [string]$FakeMode,
         [string]$ChildPidPath,
+        [string]$IncludePath,
+        [string]$ArgumentsPath,
         [int]$TimeoutSeconds = 5,
         [switch]$SyntaxOnly,
         [switch]$WarningsAsErrors
@@ -208,6 +211,10 @@ function Invoke-CompilerCase {
         )) {
         $arguments.Add((Quote-NativeArgument -Value ([string]$value)))
     }
+    if (-not [string]::IsNullOrWhiteSpace($IncludePath)) {
+        $arguments.Add('-IncludePath')
+        $arguments.Add((Quote-NativeArgument -Value $IncludePath))
+    }
     if ($SyntaxOnly) {
         $arguments.Add('-SyntaxOnly')
     }
@@ -225,6 +232,9 @@ function Invoke-CompilerCase {
     $startInfo.EnvironmentVariables['FAKE_METAEDITOR_MODE'] = $FakeMode
     if (-not [string]::IsNullOrWhiteSpace($ChildPidPath)) {
         $startInfo.EnvironmentVariables['FAKE_METAEDITOR_CHILD_PID_PATH'] = $ChildPidPath
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ArgumentsPath)) {
+        $startInfo.EnvironmentVariables['FAKE_METAEDITOR_ARGS_PATH'] = $ArgumentsPath
     }
 
     $process = New-Object Diagnostics.Process
@@ -247,17 +257,561 @@ function Invoke-CompilerCase {
     }
 }
 
-foreach ($requiredFile in @($runner, $compiler, $fakeTerminalSource, $fakeMetaEditorSource)) {
+foreach ($requiredFile in @(
+        $runner,
+        $compiler,
+        $compilerProcessJobSource,
+        $fakeTerminalSource,
+        $fakeMetaEditorSource
+    )) {
     Assert-True -Condition (Test-Path -LiteralPath $requiredFile -PathType Leaf) `
         -Message "Required file is missing: $requiredFile"
 }
 
 Assert-PowerShellParses -Path $runner
 Assert-PowerShellParses -Path $compiler
+if (-not ('Mql5Coding.CompilerProcessJob' -as [type])) {
+    Add-Type -Path $compilerProcessJobSource
+}
 
 $skillText = Get-Content -LiteralPath (Join-Path $skillRoot 'SKILL.md') -Raw
 $referenceText = Get-Content -LiteralPath (Join-Path $skillRoot 'references\strategy-tester.md') -Raw
 $compilerText = Get-Content -LiteralPath $compiler -Raw
+$runnerTokens = $null
+$runnerParseErrors = $null
+$runnerAst = [Management.Automation.Language.Parser]::ParseFile(
+    $runner,
+    [ref]$runnerTokens,
+    [ref]$runnerParseErrors
+)
+$postExitWaitNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Wait-ForNoMatchingTerminalProcesses'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $postExitWaitNode) `
+    -Message 'Wait-ForNoMatchingTerminalProcesses was not found for CIM-settling regression testing.'
+$postExitWaitDefinitionText = $postExitWaitNode.Extent.Text
+$postExitMatcherNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Get-MatchingTerminalProcesses'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $postExitMatcherNode) `
+    -Message 'Get-MatchingTerminalProcesses was not found for trusted-identity regression testing.'
+$postExitMatcherDefinitionText = $postExitMatcherNode.Extent.Text
+$postExitWaitProbe = & {
+    param([Parameter(Mandatory = $true)][string]$DefinitionText)
+
+    . ([scriptblock]::Create($DefinitionText))
+    $ownedIdentity = [pscustomobject]@{
+        process_id = 4242
+        creation_utc_ticks = [long]638574336000000000
+        session_id = 3
+        executable_path = 'C:\synthetic\terminal64.exe'
+        executable_file_identity = 'synthetic-identity'
+    }
+    $state = [pscustomobject]@{
+        mode = 'stale_unresolved'
+        calls = 0
+        sleeps = 0
+    }
+    function New-UnresolvedOwnedObservation {
+        return [pscustomobject]@{
+            process_id = 4242
+            creation_utc_ticks = $null
+            session_id = $null
+            executable_file_identity = 'synthetic-identity'
+            identity_unresolved = $true
+        }
+    }
+    function Get-MatchingTerminalProcesses {
+        param(
+            $ExecutablePath,
+            $ExpectedFileIdentity,
+            $TrustedSuspendedIdentity,
+            $SettlingOwnedIdentity
+        )
+        $state.calls++
+        switch ($state.mode) {
+            'stale_unresolved' {
+                if ($state.calls -lt 3) {
+                    return New-UnresolvedOwnedObservation
+                }
+                return @()
+            }
+            'persistent_unresolved' {
+                return New-UnresolvedOwnedObservation
+            }
+            'foreign' {
+                return [pscustomobject]@{
+                    process_id = 5252
+                    creation_utc_ticks = [long]638574336000000100
+                    session_id = 3
+                    executable_file_identity = 'synthetic-identity'
+                    identity_unresolved = $false
+                }
+            }
+            'inspection_error' {
+                throw 'BLOCKED: synthetic inspection failure'
+            }
+            default {
+                throw "Unexpected process-discovery probe mode: $($state.mode)"
+            }
+        }
+    }
+    function Start-Sleep {
+        param([int]$Milliseconds)
+        $state.sleeps++
+    }
+
+    $staleRemaining = @(
+        Wait-ForNoMatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -VerifiedOwnedProcessIdentity $ownedIdentity `
+            -TimeoutMilliseconds 1000 `
+            -PollMilliseconds 1
+    )
+    $staleCalls = $state.calls
+    $staleSleeps = $state.sleeps
+
+    $state.mode = 'persistent_unresolved'
+    $state.calls = 0
+    $state.sleeps = 0
+    $persistentRemaining = @(
+        Wait-ForNoMatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -VerifiedOwnedProcessIdentity $ownedIdentity `
+            -TimeoutMilliseconds 0 `
+            -PollMilliseconds 1
+    )
+    $persistentCalls = $state.calls
+    $persistentSleeps = $state.sleeps
+
+    $state.mode = 'foreign'
+    $state.calls = 0
+    $state.sleeps = 0
+    $foreignRemaining = @(
+        Wait-ForNoMatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -VerifiedOwnedProcessIdentity $ownedIdentity `
+            -TimeoutMilliseconds 1000 `
+            -PollMilliseconds 1
+    )
+    $foreignCalls = $state.calls
+    $foreignSleeps = $state.sleeps
+
+    $state.mode = 'inspection_error'
+    $state.calls = 0
+    $state.sleeps = 0
+    $inspectionError = $null
+    try {
+        $ignored = @(
+            Wait-ForNoMatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -VerifiedOwnedProcessIdentity $ownedIdentity `
+                -TimeoutMilliseconds 1000 `
+                -PollMilliseconds 1
+        )
+    }
+    catch {
+        $inspectionError = $_.Exception.Message
+    }
+
+    return [pscustomobject]@{
+        stale_calls = $staleCalls
+        stale_sleeps = $staleSleeps
+        stale_remaining = $staleRemaining.Count
+        persistent_calls = $persistentCalls
+        persistent_sleeps = $persistentSleeps
+        persistent_remaining = $persistentRemaining.Count
+        persistent_unresolved = if ($persistentRemaining.Count -gt 0) {
+            [bool]$persistentRemaining[0].identity_unresolved
+        }
+        else {
+            $false
+        }
+        foreign_calls = $foreignCalls
+        foreign_sleeps = $foreignSleeps
+        foreign_remaining = $foreignRemaining.Count
+        foreign_pid = if ($foreignRemaining.Count -gt 0) {
+            [int]$foreignRemaining[0].process_id
+        }
+        else {
+            -1
+        }
+        inspection_calls = $state.calls
+        inspection_sleeps = $state.sleeps
+        inspection_error = $inspectionError
+    }
+} $postExitWaitDefinitionText
+Assert-True -Condition (
+    $postExitWaitProbe.stale_calls -eq 3 -and
+    $postExitWaitProbe.stale_sleeps -eq 2 -and
+    $postExitWaitProbe.stale_remaining -eq 0
+) -Message 'Post-job-empty process discovery did not tolerate a settling owned row.'
+Assert-True -Condition (
+    $postExitWaitProbe.persistent_calls -eq 1 -and
+    $postExitWaitProbe.persistent_sleeps -eq 0 -and
+    $postExitWaitProbe.persistent_remaining -eq 1 -and
+    $postExitWaitProbe.persistent_unresolved
+) -Message 'A persistent unresolved owned row was incorrectly accepted as gone.'
+Assert-True -Condition (
+    $postExitWaitProbe.foreign_calls -eq 1 -and
+    $postExitWaitProbe.foreign_sleeps -eq 0 -and
+    $postExitWaitProbe.foreign_remaining -eq 1 -and
+    $postExitWaitProbe.foreign_pid -eq 5252
+) -Message 'Post-job-empty process discovery retried a foreign terminal process.'
+Assert-True -Condition (
+    $postExitWaitProbe.inspection_calls -eq 1 -and
+    $postExitWaitProbe.inspection_sleeps -eq 0 -and
+    $postExitWaitProbe.inspection_error -match 'BLOCKED: synthetic inspection failure'
+) -Message 'Post-job-empty process discovery suppressed or retried an inspection failure.'
+
+$trustedMatcherProbe = & {
+    param([Parameter(Mandatory = $true)][string]$DefinitionText)
+
+    . ([scriptblock]::Create($DefinitionText))
+    $creationDate = [DateTime]::SpecifyKind(
+        [DateTime]::ParseExact(
+            '2024-01-01T00:00:00',
+            'yyyy-MM-ddTHH:mm:ss',
+            [Globalization.CultureInfo]::InvariantCulture
+        ),
+        [DateTimeKind]::Utc
+    )
+    $ownedIdentity = [pscustomobject]@{
+        process_id = 4242
+        creation_utc_ticks = [long]$creationDate.Ticks
+        session_id = 3
+        executable_path = 'C:\synthetic\terminal64.exe'
+        executable_file_identity = 'synthetic-identity'
+    }
+    $processRecord = [pscustomobject]@{
+        ProcessId = 4242
+        ParentProcessId = 111
+        Name = 'terminal64.exe'
+        CreationDate = $null
+        SessionId = $null
+        ExecutablePath = $null
+    }
+    function Get-CimInstance {
+        param($ClassName)
+        return $processRecord
+    }
+    $identityState = [pscustomobject]@{
+        throw = $false
+        value = 'synthetic-identity'
+    }
+    function Get-FileIdentityFromPath {
+        param($Path)
+        if ($identityState.throw) {
+            throw 'Synthetic file identity lookup failure.'
+        }
+        return [string]$identityState.value
+    }
+
+    $suspendedMissingFields = @(
+        Get-MatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -TrustedSuspendedIdentity $ownedIdentity
+    )
+
+    $noTrustedError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity'
+        )
+    }
+    catch {
+        $noTrustedError = $_.Exception.Message
+    }
+
+    $processRecord.CreationDate = $creationDate.AddMilliseconds(250)
+    $processRecord.SessionId = 4
+    $suspendedObservedFields = @(
+        Get-MatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -TrustedSuspendedIdentity $ownedIdentity
+    )
+    $settlingIdentity = $suspendedObservedFields[0]
+
+    $processRecord.CreationDate = $null
+    $processRecord.SessionId = $null
+    $processRecord.Name = 'other.exe'
+    $suspendedNameMismatchError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -TrustedSuspendedIdentity $ownedIdentity
+        )
+    }
+    catch {
+        $suspendedNameMismatchError = $_.Exception.Message
+    }
+
+    $processRecord.Name = 'terminal64.exe'
+    $mixedModeError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -TrustedSuspendedIdentity $ownedIdentity `
+                -SettlingOwnedIdentity $settlingIdentity
+        )
+    }
+    catch {
+        $mixedModeError = $_.Exception.Message
+    }
+
+    $processRecord.CreationDate = $null
+    $processRecord.SessionId = $null
+    $settlingMissingFields = @(
+        Get-MatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -SettlingOwnedIdentity $settlingIdentity
+    )
+
+    $processRecord.Name = $null
+    $settlingMissingName = @(
+        Get-MatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -SettlingOwnedIdentity $settlingIdentity
+    )
+
+    $processRecord.Name = 'terminal64.exe'
+    $processRecord.CreationDate = $creationDate.AddSeconds(1)
+    $settlingCreationMismatchError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -SettlingOwnedIdentity $settlingIdentity
+        )
+    }
+    catch {
+        $settlingCreationMismatchError = $_.Exception.Message
+    }
+
+    $processRecord.Name = 'terminal64.exe'
+    $processRecord.CreationDate = $null
+    $processRecord.SessionId = $null
+    $processRecord.ExecutablePath = 'C:\other\terminal64.exe'
+    $identityState.throw = $true
+    $suspendedWrongPathError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -TrustedSuspendedIdentity $ownedIdentity
+        )
+    }
+    catch {
+        $suspendedWrongPathError = $_.Exception.Message
+    }
+    $settlingWrongPathError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -SettlingOwnedIdentity $settlingIdentity
+        )
+    }
+    catch {
+        $settlingWrongPathError = $_.Exception.Message
+    }
+
+    $processRecord.ExecutablePath = 'C:\synthetic\terminal64.exe'
+    $identityState.throw = $false
+    $identityState.value = 'wrong-identity'
+    $suspendedWrongIdentityError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -TrustedSuspendedIdentity $ownedIdentity
+        )
+    }
+    catch {
+        $suspendedWrongIdentityError = $_.Exception.Message
+    }
+    $settlingWrongIdentityError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -SettlingOwnedIdentity $settlingIdentity
+        )
+    }
+    catch {
+        $settlingWrongIdentityError = $_.Exception.Message
+    }
+
+    $processRecord.ExecutablePath = 'C:\alias\terminal64.exe'
+    $identityState.value = 'synthetic-identity'
+    $suspendedIdentityAlias = @(
+        Get-MatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -TrustedSuspendedIdentity $ownedIdentity
+    )
+    $settlingIdentityAlias = @(
+        Get-MatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -SettlingOwnedIdentity $settlingIdentity
+    )
+
+    return [pscustomobject]@{
+        suspended_count = $suspendedMissingFields.Count
+        suspended_creation_ticks = if ($suspendedMissingFields.Count -gt 0) {
+            [long]$suspendedMissingFields[0].creation_utc_ticks
+        }
+        else {
+            0
+        }
+        suspended_session = if ($suspendedMissingFields.Count -gt 0) {
+            [int]$suspendedMissingFields[0].session_id
+        }
+        else {
+            -1
+        }
+        no_trusted_error = $noTrustedError
+        suspended_observed_count = $suspendedObservedFields.Count
+        suspended_observed_creation_ticks = if ($suspendedObservedFields.Count -gt 0) {
+            [long]$suspendedObservedFields[0].creation_utc_ticks
+        }
+        else {
+            0
+        }
+        suspended_observed_session = if ($suspendedObservedFields.Count -gt 0) {
+            [int]$suspendedObservedFields[0].session_id
+        }
+        else {
+            -1
+        }
+        suspended_observed_creation_flag = if ($suspendedObservedFields.Count -gt 0) {
+            [bool]$suspendedObservedFields[0].creation_cim_observed
+        }
+        else {
+            $false
+        }
+        suspended_observed_session_flag = if ($suspendedObservedFields.Count -gt 0) {
+            [bool]$suspendedObservedFields[0].session_cim_observed
+        }
+        else {
+            $false
+        }
+        suspended_name_mismatch_error = $suspendedNameMismatchError
+        mixed_mode_error = $mixedModeError
+        settling_missing_count = $settlingMissingFields.Count
+        settling_missing_unresolved = if ($settlingMissingFields.Count -gt 0) {
+            [bool]$settlingMissingFields[0].identity_unresolved
+        }
+        else {
+            $false
+        }
+        settling_missing_name_count = $settlingMissingName.Count
+        settling_missing_name_unresolved = if ($settlingMissingName.Count -gt 0) {
+            [bool]$settlingMissingName[0].identity_unresolved
+        }
+        else {
+            $false
+        }
+        settling_creation_mismatch_error = $settlingCreationMismatchError
+        suspended_wrong_path_error = $suspendedWrongPathError
+        settling_wrong_path_error = $settlingWrongPathError
+        suspended_wrong_identity_error = $suspendedWrongIdentityError
+        settling_wrong_identity_error = $settlingWrongIdentityError
+        suspended_alias_count = $suspendedIdentityAlias.Count
+        settling_alias_count = $settlingIdentityAlias.Count
+        settling_alias_unresolved = if ($settlingIdentityAlias.Count -gt 0) {
+            [bool]$settlingIdentityAlias[0].identity_unresolved
+        }
+        else {
+            $false
+        }
+    }
+} $postExitMatcherDefinitionText
+Assert-True -Condition (
+    $trustedMatcherProbe.suspended_count -eq 1 -and
+    $trustedMatcherProbe.suspended_creation_ticks -eq [long]638396640000000000 -and
+    $trustedMatcherProbe.suspended_session -eq 3
+) -Message 'The native suspended-process proof did not fill missing CIM fields.'
+Assert-True -Condition (
+    $trustedMatcherProbe.suspended_observed_count -eq 1 -and
+    $trustedMatcherProbe.suspended_observed_creation_ticks -eq
+        [long]638396640002500000 -and
+    $trustedMatcherProbe.suspended_observed_session -eq 4 -and
+    $trustedMatcherProbe.suspended_observed_creation_flag -and
+    $trustedMatcherProbe.suspended_observed_session_flag
+) -Message 'Observed CIM values were not preserved as the post-exit identity baseline.'
+foreach ($blockedSuspendedError in @(
+        $trustedMatcherProbe.no_trusted_error,
+        $trustedMatcherProbe.suspended_name_mismatch_error
+    )) {
+    Assert-True -Condition (
+        $blockedSuspendedError -match 'identity is unreadable for PID\(s\) 4242'
+    ) -Message 'An untrusted or contradictory suspended-process observation did not fail closed.'
+}
+Assert-True -Condition (
+    $trustedMatcherProbe.mixed_mode_error -match
+        'cannot use suspended and settling identities together'
+) -Message 'Process discovery accepted conflicting identity modes.'
+Assert-True -Condition (
+    $trustedMatcherProbe.settling_missing_count -eq 1 -and
+    $trustedMatcherProbe.settling_missing_unresolved -and
+    $trustedMatcherProbe.settling_missing_name_count -eq 1 -and
+    $trustedMatcherProbe.settling_missing_name_unresolved
+) -Message 'Missing post-exit CIM fields were accepted instead of marked unresolved.'
+Assert-True -Condition (
+    $trustedMatcherProbe.settling_creation_mismatch_error -match
+        'identity is unreadable for PID\(s\) 4242'
+) -Message 'A positive post-exit identity mismatch did not fail closed.'
+foreach ($readableContradictionError in @(
+        $trustedMatcherProbe.suspended_wrong_path_error,
+        $trustedMatcherProbe.settling_wrong_path_error,
+        $trustedMatcherProbe.suspended_wrong_identity_error,
+        $trustedMatcherProbe.settling_wrong_identity_error
+    )) {
+    Assert-True -Condition (
+        $readableContradictionError -match 'identity is unreadable for PID\(s\) 4242'
+    ) -Message 'A readable path or file-identity contradiction did not fail closed.'
+}
+Assert-True -Condition (
+    $trustedMatcherProbe.suspended_alias_count -eq 1 -and
+    $trustedMatcherProbe.settling_alias_count -eq 1 -and
+    $trustedMatcherProbe.settling_alias_unresolved
+) -Message 'An identity-equivalent executable alias was incorrectly rejected.'
+
 Assert-True -Condition ($skillText -notmatch '(?i)[A-Z]:\\Users\\') `
     -Message 'SKILL.md contains a user-specific path.'
 Assert-True -Condition ($referenceText -notmatch '(?i)[A-Z]:\\Users\\') `
@@ -285,6 +839,57 @@ $resolverNode = $compilerAst.Find(
 Assert-True -Condition ($null -ne $resolverNode) `
     -Message 'Resolve-MetaEditorExecutable was not found for discovery regression testing.'
 $resolverDefinitionText = $resolverNode.Extent.Text
+$moveLogNode = $compilerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Move-OriginalLogAside'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $moveLogNode) `
+    -Message 'Move-OriginalLogAside was not found for backup-name regression testing.'
+$moveLogDefinitionText = $moveLogNode.Extent.Text
+$completeLogNode = $compilerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Complete-CompilationLog'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $completeLogNode) `
+    -Message 'Complete-CompilationLog was not found for unsafe-cleanup regression testing.'
+$completeLogDefinitionText = $completeLogNode.Extent.Text
+$launchCleanupNode = $compilerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Test-CompilerLaunchCleanupVerified'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $launchCleanupNode) `
+    -Message 'Test-CompilerLaunchCleanupVerified was not found for launch-state regression testing.'
+$launchCleanupDefinitionText = $launchCleanupNode.Extent.Text
+$markLaunchUnsafeIndex = $compilerText.IndexOf(
+    '$compileJobEmpty = $false',
+    [StringComparison]::Ordinal
+)
+$nativeStartIndex = $compilerText.IndexOf(
+    '$compileLaunch = [Mql5Coding.CompilerProcessJob]::Start(',
+    [StringComparison]::Ordinal
+)
+Assert-True -Condition (
+    $markLaunchUnsafeIndex -ge 0 -and
+    $nativeStartIndex -gt $markLaunchUnsafeIndex
+) -Message 'Compiler launch was not marked unsafe before native process creation.'
 $discoveryResult = & {
     param([Parameter(Mandatory = $true)][string]$DefinitionText)
 
@@ -381,6 +986,77 @@ try {
 
     $compileDirectory = Join-Path $testRoot 'compile'
     [IO.Directory]::CreateDirectory($compileDirectory) | Out-Null
+
+    $backupNameProbe = Join-Path $compileDirectory 'a.log'
+    [IO.File]::WriteAllText($backupNameProbe, 'probe', [Text.Encoding]::ASCII)
+    $boundedBackupPath = & {
+        param($DefinitionText, $ProbePath)
+        . ([scriptblock]::Create($DefinitionText))
+        Move-OriginalLogAside -LiteralPath $ProbePath
+    } $moveLogDefinitionText $backupNameProbe
+    Assert-True -Condition (
+        [IO.Path]::GetFileName([string]$boundedBackupPath).Length -le
+            [IO.Path]::GetFileName($backupNameProbe).Length
+    ) -Message 'The adjacent log backup can lengthen a valid near-limit path.'
+    [IO.File]::Move([string]$boundedBackupPath, $backupNameProbe)
+    Remove-Item -LiteralPath $backupNameProbe -Force
+
+    $unsafeGeneratedLog = Join-Path $compileDirectory 'unsafe-generated.log'
+    $unsafePreservedLog = Join-Path $compileDirectory 'unsafe-preserved.tmp'
+    [IO.File]::WriteAllText($unsafeGeneratedLog, 'generated', [Text.Encoding]::ASCII)
+    [IO.File]::WriteAllText($unsafePreservedLog, 'preserved', [Text.Encoding]::ASCII)
+    $unsafeGeneratedHash = (Get-FileHash -LiteralPath $unsafeGeneratedLog -Algorithm SHA256).Hash
+    $unsafePreservedHash = (Get-FileHash -LiteralPath $unsafePreservedLog -Algorithm SHA256).Hash
+    $unsafeRestoreError = $null
+    try {
+        & {
+            param($DefinitionText, $LogPath, $BackupPath)
+            . ([scriptblock]::Create($DefinitionText))
+            Complete-CompilationLog `
+                -LiteralPath $LogPath `
+                -Snapshot ([pscustomobject]@{
+                    Existed = $true
+                    BackupPath = $BackupPath
+                }) `
+                -ProcessTreeEmpty $false
+        } $completeLogDefinitionText $unsafeGeneratedLog $unsafePreservedLog
+    }
+    catch {
+        $unsafeRestoreError = $_.Exception.Message
+    }
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($unsafeRestoreError)) `
+        -Message 'Unverified process-tree cleanup did not block log restoration.'
+    Assert-True -Condition ($unsafeRestoreError.Contains($unsafePreservedLog)) `
+        -Message 'Unsafe log restoration failure did not report the preserved backup path.'
+    Assert-True -Condition (
+        (Get-FileHash -LiteralPath $unsafeGeneratedLog -Algorithm SHA256).Hash -eq
+            $unsafeGeneratedHash -and
+        (Get-FileHash -LiteralPath $unsafePreservedLog -Algorithm SHA256).Hash -eq
+            $unsafePreservedHash
+    ) -Message 'Unsafe cleanup modified a generated log or its preserved original.'
+    Remove-Item -LiteralPath $unsafeGeneratedLog, $unsafePreservedLog -Force
+
+    $unverifiedLaunchError = [InvalidOperationException]::new('unverified launch')
+    $unverifiedLaunchError.Data['Mql5Coding.CleanupVerified'] = $false
+    $wrappedLaunchError = [Exception]::new('wrapper', $unverifiedLaunchError)
+    $unverifiedLaunchAccepted = & {
+        param($DefinitionText, $ErrorObject)
+        . ([scriptblock]::Create($DefinitionText))
+        Test-CompilerLaunchCleanupVerified -Exception $ErrorObject
+    } $launchCleanupDefinitionText $wrappedLaunchError
+    Assert-True -Condition (-not $unverifiedLaunchAccepted) `
+        -Message 'An unverified native launch failure was treated as safe for log restoration.'
+
+    $verifiedLaunchError = [InvalidOperationException]::new('verified launch')
+    $verifiedLaunchError.Data['Mql5Coding.CleanupVerified'] = $true
+    $verifiedLaunchAccepted = & {
+        param($DefinitionText, $ErrorObject)
+        . ([scriptblock]::Create($DefinitionText))
+        Test-CompilerLaunchCleanupVerified -Exception $ErrorObject
+    } $launchCleanupDefinitionText $verifiedLaunchError
+    Assert-True -Condition ([bool]$verifiedLaunchAccepted) `
+        -Message 'A verified no-process launch failure was not recognized.'
+
     $compileSource = Join-Path $compileDirectory 'fixture.mq5'
     [IO.File]::WriteAllText(
         $compileSource,
@@ -394,6 +1070,9 @@ try {
     [IO.File]::SetLastWriteTimeUtc($compileLog, [datetime]::UtcNow.AddDays(-1))
     $sentinelLogHash = (Get-FileHash -LiteralPath $compileLog -Algorithm SHA256).Hash
     $sentinelLogLastWriteUtc = (Get-Item -LiteralPath $compileLog).LastWriteTimeUtc
+    $compileLogMirror = Join-Path $compileDirectory 'fixture-log-mirror.log'
+    $null = New-Item -ItemType HardLink -Path $compileLogMirror -Target $compileLog
+    $sentinelLogIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileLog)
 
     $compileSuccess = Invoke-CompilerCase `
         -SourcePath $compileSource `
@@ -405,6 +1084,29 @@ try {
         -Message 'Synthetic compiler success summary was missing or inaccurate.'
     Assert-True -Condition ($compileSuccess.StandardOutput -match 'MQL5_COMPILE_ARTIFACT=') `
         -Message 'Successful real compilation did not report its artifact.'
+    Assert-True -Condition (
+        [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileLog) -ceq $sentinelLogIdentity -and
+        [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileLogMirror) -ceq $sentinelLogIdentity
+    ) -Message 'Compiler wrapper replaced the pre-existing log file object instead of restoring it.'
+
+    $invalidMetaEditorDirectory = Join-Path $testRoot 'invalid-editor'
+    [IO.Directory]::CreateDirectory($invalidMetaEditorDirectory) | Out-Null
+    $invalidMetaEditor = Join-Path $invalidMetaEditorDirectory 'metaeditor64.exe'
+    [IO.File]::WriteAllText(
+        $invalidMetaEditor,
+        'not a Windows executable',
+        [Text.Encoding]::ASCII
+    )
+    $launchFailure = Invoke-CompilerCase `
+        -SourcePath $compileSource `
+        -MetaEditorPath $invalidMetaEditor `
+        -FakeMode 'success'
+    Assert-True -Condition ($launchFailure.ExitCode -eq 2) `
+        -Message 'Invalid compiler launch did not produce a tooling failure.'
+    Assert-True -Condition (
+        [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileLog) -ceq
+            $sentinelLogIdentity
+    ) -Message 'Verified pre-process launch failure did not restore the original log.'
 
     $delayedCompletion = Invoke-CompilerCase `
         -SourcePath $compileSource `
@@ -483,6 +1185,117 @@ try {
         -SyntaxOnly
     Assert-True -Condition ($syntaxOnly.ExitCode -eq 0) `
         -Message "Synthetic syntax-only exit code was $($syntaxOnly.ExitCode)."
+
+    $argumentsPath = Join-Path $testRoot 'fake-metaeditor-arguments.txt'
+    $rootInclude = [IO.Path]::GetPathRoot($testRoot)
+    $rootIncludeCase = Invoke-CompilerCase `
+        -SourcePath $compileSource `
+        -MetaEditorPath $metaEditor `
+        -FakeMode 'success' `
+        -IncludePath $rootInclude `
+        -ArgumentsPath $argumentsPath `
+        -SyntaxOnly
+    Assert-True -Condition ($rootIncludeCase.ExitCode -eq 0) `
+        -Message "Root include-path compile exit code was $($rootIncludeCase.ExitCode)."
+    $receivedCompilerArguments = @([IO.File]::ReadAllLines($argumentsPath))
+    Assert-True -Condition ($receivedCompilerArguments -ccontains "/include:$rootInclude") `
+        -Message 'A root include path ending in a backslash was not delivered as one exact argument.'
+    Assert-True -Condition ($receivedCompilerArguments -ccontains '/s') `
+        -Message 'The syntax-only switch was swallowed by include-path command-line quoting.'
+
+    $earlyExit = Invoke-CompilerCase `
+        -SourcePath $compileSource `
+        -MetaEditorPath $metaEditor `
+        -FakeMode 'exit_without_result'
+    Assert-True -Condition ($earlyExit.ExitCode -eq 2) `
+        -Message "A compiler that exited without Result was classified as exit code $($earlyExit.ExitCode)."
+    Assert-True -Condition ($earlyExit.StandardError -match 'exited without producing a complete Result line') `
+        -Message 'Early compiler exit did not report the missing Result line.'
+    Assert-True -Condition ($earlyExit.StandardOutput -notmatch 'MQL5_COMPILE_ARTIFACT=') `
+        -Message 'Early compiler exit incorrectly reported an artifact.'
+
+    $compileAliasDirectory = Join-Path $testRoot 'compile-junction'
+    $null = New-Item -ItemType Junction -Path $compileAliasDirectory -Target $compileDirectory
+    try {
+        $compileAliasSource = Join-Path $compileAliasDirectory 'fixture.mq5'
+        $aliasIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileAliasSource)
+        $sourceIdentityBeforeReplace = [Mql5Coding.CompilerProcessJob]::GetFileIdentity(
+            $compileSource
+        )
+        Assert-True -Condition ($aliasIdentity -ceq $sourceIdentityBeforeReplace) `
+            -Message 'Junction alias did not resolve to the source file identity.'
+
+        $directoryIdentity = [Mql5Coding.CompilerProcessJob]::GetDirectoryIdentity(
+            $compileDirectory
+        )
+        $outputNamespace = (
+            $directoryIdentity + '|' +
+            [IO.Path]::GetFileName($compileLog).ToUpperInvariant()
+        )
+        $identityBytes = [Text.Encoding]::UTF8.GetBytes($outputNamespace)
+        $identityAlgorithm = [Security.Cryptography.SHA256]::Create()
+        try {
+            $outputHash = [BitConverter]::ToString(
+                $identityAlgorithm.ComputeHash($identityBytes)
+            ).Replace('-', '').Substring(0, 24)
+        }
+        finally {
+            $identityAlgorithm.Dispose()
+        }
+
+        $heldCompilerMutex = [Threading.Mutex]::new(
+            $false,
+            "Global\CodexMqlCompile_$outputHash"
+        )
+        $heldCompilerMutexAcquired = $false
+        $replacedSourceBackup = Join-Path $compileDirectory 'fixture-before-replace.mq5'
+        try {
+            $heldCompilerMutexAcquired = $heldCompilerMutex.WaitOne(0)
+            Assert-True -Condition $heldCompilerMutexAcquired `
+                -Message 'Could not acquire the compiler-output regression mutex.'
+
+            $replacementSource = Join-Path $compileDirectory 'fixture-replacement.tmp'
+            [IO.File]::WriteAllText(
+                $replacementSource,
+                '// Atomically replaced synthetic source.',
+                (New-Object Text.UTF8Encoding($false))
+            )
+            [IO.File]::Replace(
+                $replacementSource,
+                $compileSource,
+                $replacedSourceBackup
+            )
+            Assert-True -Condition (
+                [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileSource) -cne
+                    $sourceIdentityBeforeReplace
+            ) -Message 'Atomic source replacement did not change the source file identity.'
+
+            $aliasBlocked = Invoke-CompilerCase `
+                -SourcePath $compileAliasSource `
+                -MetaEditorPath $metaEditor `
+                -FakeMode 'success' `
+                -TimeoutSeconds 5 `
+                -SyntaxOnly
+            Assert-True -Condition ($aliasBlocked.ExitCode -eq 2) `
+                -Message 'A source replacement or junction alias bypassed the output compilation mutex.'
+            Assert-True -Condition ($aliasBlocked.StandardError -match 'Another compilation is already using') `
+                -Message 'Output mutex contention did not report the competing compilation.'
+        }
+        finally {
+            if ($heldCompilerMutexAcquired) {
+                $heldCompilerMutex.ReleaseMutex()
+            }
+            $heldCompilerMutex.Dispose()
+            if (Test-Path -LiteralPath $replacedSourceBackup -PathType Leaf) {
+                Remove-Item -LiteralPath $replacedSourceBackup -Force
+            }
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $compileAliasDirectory) {
+            [IO.Directory]::Delete($compileAliasDirectory)
+        }
+    }
 
     $compilerChildPidPath = Join-Path $testRoot 'fake-metaeditor-child.pid'
     $compileTimeout = Invoke-CompilerCase `
@@ -606,8 +1419,18 @@ try {
         -PresetPath $preset `
         -ExpertSha256 $expertHash `
         -FakeMode 'pass'
+    $passResultDiagnostic = if ($null -eq $pass.Result) {
+        '<no result JSON>'
+    }
+    else {
+        $pass.Result | ConvertTo-Json -Depth 10 -Compress
+    }
     Assert-True -Condition ($pass.ExitCode -eq 0) `
-        -Message "Synthetic execution exit code was $($pass.ExitCode): $($pass.StandardError)"
+        -Message (
+            "Synthetic execution exit code was $($pass.ExitCode). " +
+            "stderr=$($pass.StandardError) stdout=$($pass.StandardOutput) " +
+            "result=$passResultDiagnostic"
+        )
     Assert-True -Condition ($pass.Result.status -eq 'engine_smoke_passed') `
         -Message "Unexpected synthetic execution status: $($pass.Result.status)"
     Assert-True -Condition ([bool]$pass.Result.process.process_created) `
@@ -633,6 +1456,124 @@ try {
         -Message "Tab-prefixed tester evidence was rejected: $($prefixedPass.StandardError)"
     Assert-True -Condition ($prefixedPass.Result.status -eq 'application_marker_passed') `
         -Message 'Tab-prefixed application marker produced the wrong status.'
+
+    $systemInitializedWithBuild = Invoke-RunnerCase `
+        -Name 'execute-system-initialized-with-build' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'system_initialized_with_build'
+    Assert-True -Condition ($systemInitializedWithBuild.ExitCode -eq 0) `
+        -Message 'A genuine initialization with trailing key/value detail was rejected.'
+    Assert-True -Condition (
+        [bool]$systemInitializedWithBuild.Result.evidence.checks.tester_initialized
+    ) -Message 'A genuine initialization with trailing detail was not recorded.'
+
+    $systemOnInitWithCode = Invoke-RunnerCase `
+        -Name 'execute-system-oninit-failure-with-code' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'system_oninit_failure_with_code'
+    Assert-True -Condition ($systemOnInitWithCode.ExitCode -eq 1) `
+        -Message 'A genuine OnInit failure with trailing code=1 was ignored.'
+    Assert-True -Condition (
+        -not [bool]$systemOnInitWithCode.Result.evidence.checks.on_init_failure_absent
+    ) -Message 'A genuine OnInit failure with trailing detail was not recorded.'
+
+    $systemInitializedOnly = Invoke-RunnerCase `
+        -Name 'execute-system-input-initialized-only' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'system_input_initialized_only'
+    Assert-True -Condition ($systemInitializedOnly.ExitCode -eq 1) `
+        -Message 'A system input echo was accepted as tester initialization evidence.'
+    Assert-True -Condition (
+        -not [bool]$systemInitializedOnly.Result.evidence.checks.tester_initialized
+    ) -Message 'A system input echo was marked as a tester initialization.'
+
+    $systemBoundary = Invoke-RunnerCase `
+        -Name 'execute-system-input-generic-boundary' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'system_input_generic_boundary'
+    Assert-True -Condition ($systemBoundary.ExitCode -eq 0) `
+        -Message 'A system input echo incorrectly closed the tester evidence window.'
+    Assert-True -Condition ($systemBoundary.Result.status -eq 'engine_smoke_passed') `
+        -Message 'A system input echo changed a valid engine result.'
+
+    $systemOnInit = Invoke-RunnerCase `
+        -Name 'execute-system-input-oninit-failure' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'system_input_oninit_failure'
+    Assert-True -Condition ($systemOnInit.ExitCode -eq 0) `
+        -Message 'A system input echo was accepted as an OnInit failure.'
+    Assert-True -Condition (
+        [bool]$systemOnInit.Result.evidence.checks.on_init_failure_absent
+    ) -Message 'A system input echo was marked as an OnInit failure.'
+
+    $applicationInitializedOnly = Invoke-RunnerCase `
+        -Name 'execute-application-initialized-only' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'application_initialized_only'
+    Assert-True -Condition ($applicationInitializedOnly.ExitCode -eq 1) `
+        -Message 'Application-authored initialization text was accepted as tester-system evidence.'
+    Assert-True -Condition (
+        -not [bool]$applicationInitializedOnly.Result.evidence.checks.tester_initialized
+    ) -Message 'Application-authored initialization was marked as a tester initialization.'
+
+    $applicationBoundary = Invoke-RunnerCase `
+        -Name 'execute-application-generic-boundary' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'application_generic_boundary'
+    Assert-True -Condition ($applicationBoundary.ExitCode -eq 0) `
+        -Message 'Application-authored generic test text incorrectly closed the system evidence window.'
+    Assert-True -Condition ($applicationBoundary.Result.status -eq 'engine_smoke_passed') `
+        -Message 'Application-authored generic test text changed a valid engine result.'
+
+    $applicationOnInit = Invoke-RunnerCase `
+        -Name 'execute-application-oninit-failure' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'application_oninit_failure'
+    Assert-True -Condition ($applicationOnInit.ExitCode -eq 0) `
+        -Message 'Application-authored OnInit text was accepted as tester-system failure evidence.'
+    Assert-True -Condition (
+        [bool]$applicationOnInit.Result.evidence.checks.on_init_failure_absent
+    ) -Message 'Application-authored OnInit text was marked as a tester-system failure.'
 
     $forgedPass = Invoke-RunnerCase `
         -Name 'execute-forged-engine-pass' `
@@ -739,8 +1680,18 @@ try {
         -ExpertSha256 $expertHash `
         -FakeMode 'timeout_child' `
         -TimeoutSeconds 10
+    $timeoutResultDiagnostic = if ($null -eq $timeout.Result) {
+        '<no result JSON>'
+    }
+    else {
+        $timeout.Result | ConvertTo-Json -Depth 10 -Compress
+    }
     Assert-True -Condition ($timeout.ExitCode -eq 3) `
-        -Message "Synthetic timeout exit code was $($timeout.ExitCode): $($timeout.StandardError)"
+        -Message (
+            "Synthetic timeout exit code was $($timeout.ExitCode). " +
+            "stderr=$($timeout.StandardError) stdout=$($timeout.StandardOutput) " +
+            "result=$timeoutResultDiagnostic"
+        )
     Assert-True -Condition ($timeout.Result.status -eq 'timed_out') `
         -Message "Unexpected synthetic timeout status: $($timeout.Result.status)"
     Assert-True -Condition ([bool]$timeout.Result.process.timed_out) `

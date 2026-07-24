@@ -54,7 +54,7 @@ $logPrepared = $false
 $mutex = $null
 $mutexHeld = $false
 $compileLaunch = $null
-$compileJobEmpty = $false
+$compileJobEmpty = $true
 
 function Resolve-ExistingFile {
     param(
@@ -273,6 +273,65 @@ function Get-ArtifactState {
     }
 }
 
+function ConvertTo-WindowsCommandLineArgument {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
+
+    if ($Value.Length -eq 0) {
+        return '""'
+    }
+    if ($Value -notmatch '[\s"]') {
+        return $Value
+    }
+
+    $builder = New-Object Text.StringBuilder
+    [void]$builder.Append('"')
+    $backslashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq [char]92) {
+            $backslashes++
+            continue
+        }
+
+        if ($character -eq [char]34) {
+            if ($backslashes -gt 0) {
+                [void]$builder.Append([string]::new([char]92, $backslashes * 2))
+            }
+            [void]$builder.Append('\"')
+        }
+        else {
+            if ($backslashes -gt 0) {
+                [void]$builder.Append([string]::new([char]92, $backslashes))
+            }
+            [void]$builder.Append($character)
+        }
+        $backslashes = 0
+    }
+
+    if ($backslashes -gt 0) {
+        [void]$builder.Append([string]::new([char]92, $backslashes * 2))
+    }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Move-OriginalLogAside {
+    param([Parameter(Mandatory = $true)][string]$LiteralPath)
+
+    $directory = [System.IO.Path]::GetDirectoryName($LiteralPath)
+    $maximumLeafLength = [System.IO.Path]::GetFileName($LiteralPath).Length
+    $backupLeafLength = [Math]::Min(32, $maximumLeafLength)
+    for ($attempt = 0; $attempt -lt 100; $attempt++) {
+        $candidateLeaf = [guid]::NewGuid().ToString('N').Substring(0, $backupLeafLength)
+        $candidate = Join-Path $directory $candidateLeaf
+        if (-not (Test-Path -LiteralPath $candidate)) {
+            [System.IO.File]::Move($LiteralPath, $candidate)
+            return $candidate
+        }
+    }
+
+    throw "Could not allocate a unique adjacent backup path for: $LiteralPath"
+}
+
 function Restore-OriginalLog {
     param(
         [Parameter(Mandatory = $true)][string]$LiteralPath,
@@ -284,15 +343,14 @@ function Restore-OriginalLog {
         try {
             if (Test-Path -LiteralPath $LiteralPath -PathType Leaf) {
                 [System.IO.File]::SetAttributes($LiteralPath, [System.IO.FileAttributes]::Normal)
-                Remove-Item -LiteralPath $LiteralPath -Force
+                [System.IO.File]::Delete($LiteralPath)
             }
 
             if ($Snapshot.Existed) {
-                [System.IO.File]::WriteAllBytes($LiteralPath, $Snapshot.Bytes)
-                [System.IO.File]::SetCreationTimeUtc($LiteralPath, $Snapshot.CreationTimeUtc)
-                [System.IO.File]::SetLastWriteTimeUtc($LiteralPath, $Snapshot.LastWriteTimeUtc)
-                [System.IO.File]::SetLastAccessTimeUtc($LiteralPath, $Snapshot.LastAccessTimeUtc)
-                [System.IO.File]::SetAttributes($LiteralPath, $Snapshot.Attributes)
+                if (-not (Test-Path -LiteralPath $Snapshot.BackupPath -PathType Leaf)) {
+                    throw "The preserved log backup is missing: $($Snapshot.BackupPath)"
+                }
+                [System.IO.File]::Move($Snapshot.BackupPath, $LiteralPath)
             }
             return
         }
@@ -302,7 +360,49 @@ function Restore-OriginalLog {
         }
     }
 
-    throw "Could not restore the original compilation log: $($lastError.Message)"
+    $recovery = if ($Snapshot.Existed) {
+        " The preserved original remains at: $($Snapshot.BackupPath)"
+    }
+    else {
+        ''
+    }
+    throw "Could not restore the original compilation log: $($lastError.Message)$recovery"
+}
+
+function Complete-CompilationLog {
+    param(
+        [Parameter(Mandatory = $true)][string]$LiteralPath,
+        [Parameter(Mandatory = $true)]$Snapshot,
+        [Parameter(Mandatory = $true)][bool]$ProcessTreeEmpty
+    )
+
+    if (-not $ProcessTreeEmpty) {
+        $recovery = if ($Snapshot.Existed) {
+            " The preserved original remains at: $($Snapshot.BackupPath)"
+        }
+        else {
+            ''
+        }
+        throw (
+            'MetaEditor process-tree termination was not verified; ' +
+            "the compilation log was not restored.$recovery"
+        )
+    }
+
+    Restore-OriginalLog -LiteralPath $LiteralPath -Snapshot $Snapshot
+}
+
+function Test-CompilerLaunchCleanupVerified {
+    param([Parameter(Mandatory = $true)][Exception]$Exception)
+
+    $current = $Exception
+    while ($null -ne $current) {
+        if ($current.Data.Contains('Mql5Coding.CleanupVerified')) {
+            return [bool]$current.Data['Mql5Coding.CleanupVerified']
+        }
+        $current = $current.InnerException
+    }
+    return $false
 }
 
 try {
@@ -338,17 +438,25 @@ try {
     $artifactPath = [System.IO.Path]::ChangeExtension($resolvedSource, '.ex5')
     $logPath = [System.IO.Path]::ChangeExtension($resolvedSource, '.log')
 
+    $sourceParentPath = [System.IO.Path]::GetDirectoryName($resolvedSource)
+    $sourceParentIdentity = [Mql5Coding.CompilerProcessJob]::GetDirectoryIdentity(
+        $sourceParentPath
+    )
+    $outputNamespace = (
+        $sourceParentIdentity + '|' +
+        [System.IO.Path]::GetFileName($logPath).ToUpperInvariant()
+    )
     $sha256 = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $sourceHash = [System.BitConverter]::ToString(
-            $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($resolvedSource.ToLowerInvariant()))
+        $outputHash = [System.BitConverter]::ToString(
+            $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($outputNamespace))
         ).Replace('-', '').Substring(0, 24)
     }
     finally {
         $sha256.Dispose()
     }
 
-    $mutex = [System.Threading.Mutex]::new($false, "Local\CodexMqlCompile_$sourceHash")
+    $mutex = [System.Threading.Mutex]::new($false, "Global\CodexMqlCompile_$outputHash")
     try {
         $mutexHeld = $mutex.WaitOne([TimeSpan]::FromSeconds([Math]::Min(30, $TimeoutSeconds)))
     }
@@ -362,40 +470,34 @@ try {
     $artifactSnapshot = Get-ArtifactState -LiteralPath $artifactPath
 
     if (Test-Path -LiteralPath $logPath -PathType Leaf) {
-        $existingLog = Get-Item -LiteralPath $logPath
         $logSnapshot = [pscustomobject]@{
-            Existed           = $true
-            Bytes             = [System.IO.File]::ReadAllBytes($logPath)
-            Attributes        = $existingLog.Attributes
-            CreationTimeUtc   = $existingLog.CreationTimeUtc
-            LastWriteTimeUtc  = $existingLog.LastWriteTimeUtc
-            LastAccessTimeUtc = $existingLog.LastAccessTimeUtc
+            Existed    = $true
+            BackupPath = $null
         }
+        $logSnapshot.BackupPath = Move-OriginalLogAside -LiteralPath $logPath
     }
     else {
         $logSnapshot = [pscustomobject]@{
-            Existed           = $false
-            Bytes             = $null
-            Attributes        = [System.IO.FileAttributes]::Normal
-            CreationTimeUtc   = [datetime]::MinValue
-            LastWriteTimeUtc  = [datetime]::MinValue
-            LastAccessTimeUtc = [datetime]::MinValue
+            Existed    = $false
+            BackupPath = $null
         }
     }
-
     $logPrepared = $true
-    if (Test-Path -LiteralPath $logPath -PathType Leaf) {
-        [System.IO.File]::SetAttributes($logPath, [System.IO.FileAttributes]::Normal)
-        Remove-Item -LiteralPath $logPath -Force
-    }
 
-    $arguments = '/compile:"{0}" /log' -f $resolvedSource
+    $argumentTokens = New-Object 'System.Collections.Generic.List[string]'
+    $argumentTokens.Add("/compile:$resolvedSource")
+    $argumentTokens.Add('/log')
     if (-not [string]::IsNullOrWhiteSpace($resolvedInclude)) {
-        $arguments += ' /include:"{0}"' -f $resolvedInclude
+        $argumentTokens.Add("/include:$resolvedInclude")
     }
     if ($SyntaxOnly) {
-        $arguments += ' /s'
+        $argumentTokens.Add('/s')
     }
+    $arguments = @(
+        $argumentTokens | ForEach-Object {
+            ConvertTo-WindowsCommandLineArgument -Value $_
+        }
+    ) -join ' '
 
     Write-Output "MQL5_COMPILE_SOURCE=$resolvedSource"
     Write-Output "MQL5_METAEDITOR=$resolvedMetaEditor"
@@ -404,11 +506,20 @@ try {
         Write-Output "MQL5_INCLUDE_ROOT=$resolvedInclude"
     }
 
-    $compileLaunch = [Mql5Coding.CompilerProcessJob]::Start(
-        $resolvedMetaEditor,
-        $arguments,
-        (Split-Path -Parent $resolvedMetaEditor)
-    )
+    $compileJobEmpty = $false
+    try {
+        $compileLaunch = [Mql5Coding.CompilerProcessJob]::Start(
+            $resolvedMetaEditor,
+            $arguments,
+            (Split-Path -Parent $resolvedMetaEditor)
+        )
+    }
+    catch {
+        if (Test-CompilerLaunchCleanupVerified -Exception $_.Exception) {
+            $compileJobEmpty = $true
+        }
+        throw
+    }
     Write-Output "MQL5_METAEDITOR_PROCESS_ID=$($compileLaunch.ProcessId)"
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -431,9 +542,30 @@ try {
                 # MetaEditor may still have the log open; retry until the deadline.
             }
         }
+        if ($compileLaunch.IsEmpty()) {
+            $compileJobEmpty = $true
+            break
+        }
         Start-Sleep -Milliseconds 100
     }
     $stopwatch.Stop()
+
+    if ($null -eq $summaryMatch -and $compileJobEmpty -and
+        (Test-Path -LiteralPath $logPath -PathType Leaf)) {
+        try {
+            $logText = Read-SharedText -LiteralPath $logPath
+        }
+        catch {
+            throw "MetaEditor exited but its compilation log could not be read: $($_.Exception.Message)"
+        }
+        $finalEarlyMatches = [regex]::Matches(
+            $logText,
+            '(?im)^\s*Result:\s*(?<errors>\d+)\s+errors?,\s*(?<warnings>\d+)\s+warnings?'
+        )
+        if ($finalEarlyMatches.Count -gt 0) {
+            $summaryMatch = $finalEarlyMatches[$finalEarlyMatches.Count - 1]
+        }
+    }
 
     if ($null -ne $summaryMatch) {
         try {
@@ -470,26 +602,33 @@ try {
     }
 
     if ($null -eq $summaryMatch) {
-        $cleanupFailed = $false
-        try {
-            $compileLaunch.TerminateAndWaitForEmpty(5000)
-            $compileJobEmpty = $true
-        }
-        catch {
-            $cleanupFailed = $true
-            $errorMessage = "MetaEditor timed out and its process could not be terminated: $($_.Exception.Message)"
-        }
-        if (Test-Path -LiteralPath $logPath -PathType Leaf) {
-            try { $logText = Read-SharedText -LiteralPath $logPath } catch { }
-        }
-        if ($cleanupFailed) {
+        if ($compileJobEmpty) {
             $exitCode = $ExitToolError
             $status = 'tool_error'
+            $errorMessage = 'MetaEditor exited without producing a complete Result line.'
         }
         else {
-            $exitCode = $ExitTimeout
-            $status = 'timeout'
-            $errorMessage = "MetaEditor did not produce a complete Result line within $TimeoutSeconds seconds."
+            $cleanupFailed = $false
+            try {
+                $compileLaunch.TerminateAndWaitForEmpty(5000)
+                $compileJobEmpty = $true
+            }
+            catch {
+                $cleanupFailed = $true
+                $errorMessage = "MetaEditor timed out and its process could not be terminated: $($_.Exception.Message)"
+            }
+            if (Test-Path -LiteralPath $logPath -PathType Leaf) {
+                try { $logText = Read-SharedText -LiteralPath $logPath } catch { }
+            }
+            if ($cleanupFailed) {
+                $exitCode = $ExitToolError
+                $status = 'tool_error'
+            }
+            else {
+                $exitCode = $ExitTimeout
+                $status = 'timeout'
+                $errorMessage = "MetaEditor did not produce a complete Result line within $TimeoutSeconds seconds."
+            }
         }
     }
     else {
@@ -565,12 +704,21 @@ finally {
 
     if ($logPrepared -and $null -ne $logPath -and $null -ne $logSnapshot) {
         try {
-            Restore-OriginalLog -LiteralPath $logPath -Snapshot $logSnapshot
+            Complete-CompilationLog `
+                -LiteralPath $logPath `
+                -Snapshot $logSnapshot `
+                -ProcessTreeEmpty $compileJobEmpty
         }
         catch {
             $exitCode = $ExitToolError
             $status = 'tool_error'
-            $errorMessage = $_.Exception.Message
+            $logCompletionError = $_.Exception.Message
+            if ([string]::IsNullOrWhiteSpace($errorMessage)) {
+                $errorMessage = $logCompletionError
+            }
+            else {
+                $errorMessage = "$errorMessage Log handling error: $logCompletionError"
+            }
         }
     }
 

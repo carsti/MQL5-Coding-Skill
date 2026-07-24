@@ -734,14 +734,116 @@ function Open-TerminalImageReadLock {
     }
 }
 
+function Wait-ForNoMatchingTerminalProcesses {
+    param(
+        [Parameter(Mandatory)][string]$ExecutablePath,
+        [Parameter(Mandatory)][string]$ExpectedFileIdentity,
+        [Parameter(Mandatory)]$VerifiedOwnedProcessIdentity,
+        [ValidateRange(0, 60000)][int]$TimeoutMilliseconds = 5000,
+        [ValidateRange(0, 1000)][int]$PollMilliseconds = 100
+    )
+
+    if (
+        $null -eq $VerifiedOwnedProcessIdentity.creation_utc_ticks -or
+        $null -eq $VerifiedOwnedProcessIdentity.session_id -or
+        [string]$VerifiedOwnedProcessIdentity.executable_file_identity -cne
+            $ExpectedFileIdentity
+    ) {
+        throw 'Cannot retry post-exit process discovery without the verified owned process identity.'
+    }
+
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMilliseconds)
+    while ($true) {
+        # Inspection failures remain immediate blockers. Only an exact row for
+        # the already verified owned process is eligible for bounded settling.
+        $matches = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath $ExecutablePath `
+                -ExpectedFileIdentity $ExpectedFileIdentity `
+                -SettlingOwnedIdentity $VerifiedOwnedProcessIdentity
+        )
+        if ($matches.Count -eq 0) {
+            return @()
+        }
+
+        $foreignMatch = @(
+            $matches | Where-Object {
+                if ([bool]$_.identity_unresolved) {
+                    return (
+                        [int]$_.process_id -ne
+                            [int]$VerifiedOwnedProcessIdentity.process_id
+                    )
+                }
+                return (
+                    [int]$_.process_id -ne
+                        [int]$VerifiedOwnedProcessIdentity.process_id -or
+                    $null -eq $_.creation_utc_ticks -or
+                    [long]$_.creation_utc_ticks -ne
+                        [long]$VerifiedOwnedProcessIdentity.creation_utc_ticks -or
+                    $null -eq $_.session_id -or
+                    [int]$_.session_id -ne
+                        [int]$VerifiedOwnedProcessIdentity.session_id -or
+                    [string]$_.executable_file_identity -cne
+                        [string]$VerifiedOwnedProcessIdentity.executable_file_identity
+                )
+            }
+        )
+        if ($foreignMatch.Count -gt 0) {
+            return $matches
+        }
+
+        if ([DateTime]::UtcNow -ge $deadline) {
+            return $matches
+        }
+        if ($PollMilliseconds -gt 0) {
+            Start-Sleep -Milliseconds $PollMilliseconds
+        }
+    }
+}
+
 function Get-MatchingTerminalProcesses {
     param(
         [Parameter(Mandatory)][string]$ExecutablePath,
         [Parameter(Mandatory)][string]$ExpectedFileIdentity,
-        $TrustedSuspendedIdentity
+        $TrustedSuspendedIdentity,
+        $SettlingOwnedIdentity
     )
+    if (
+        $null -ne $TrustedSuspendedIdentity -and
+        $null -ne $SettlingOwnedIdentity
+    ) {
+        throw 'Process discovery cannot use suspended and settling identities together.'
+    }
+
     $wanted = [IO.Path]::GetFullPath($ExecutablePath)
     $wantedLeaf = [IO.Path]::GetFileName($wanted)
+    $suspendedVerifiedPath = $null
+    if ($null -ne $TrustedSuspendedIdentity) {
+        $suspendedVerifiedPath = [IO.Path]::GetFullPath(
+            [string]$TrustedSuspendedIdentity.executable_path
+        )
+        if (
+            [IO.Path]::GetFileName($suspendedVerifiedPath) -ine $wantedLeaf -or
+            [string]$TrustedSuspendedIdentity.executable_file_identity -cne
+                $ExpectedFileIdentity
+        ) {
+            throw 'The trusted suspended process identity does not match the selected terminal image.'
+        }
+    }
+    $settlingVerifiedPath = $null
+    if ($null -ne $SettlingOwnedIdentity) {
+        $settlingVerifiedPath = [IO.Path]::GetFullPath(
+            [string]$SettlingOwnedIdentity.executable_path
+        )
+        if (
+            [IO.Path]::GetFileName($settlingVerifiedPath) -ine $wantedLeaf -or
+            [string]$SettlingOwnedIdentity.executable_file_identity -cne
+                $ExpectedFileIdentity
+        ) {
+            throw 'The settling process identity does not match the selected terminal image.'
+        }
+    }
+
     $matches = New-Object 'System.Collections.Generic.List[object]'
     $unknown = New-Object 'System.Collections.Generic.List[int]'
 
@@ -757,10 +859,125 @@ function Get-MatchingTerminalProcesses {
     foreach ($process in $processes) {
         $processId = [int]$process.ProcessId
         $processName = [string]$process.Name
-        $sameLeafName = $processName.Equals(
-            $wantedLeaf,
-            [StringComparison]::OrdinalIgnoreCase
+        $processNameAvailable = -not [string]::IsNullOrWhiteSpace($processName)
+        $sameLeafName = (
+            $processNameAvailable -and
+            $processName.Equals(
+                $wantedLeaf,
+                [StringComparison]::OrdinalIgnoreCase
+            )
         )
+
+        $creationTicks = $null
+        try {
+            if ($process.CreationDate -is [datetime]) {
+                $creationTicks = [long]$process.CreationDate.ToUniversalTime().Ticks
+            }
+        }
+        catch {
+            $creationTicks = $null
+        }
+        $sessionId = $null
+        try {
+            $observedSessionId = $process.SessionId
+            if ($null -ne $observedSessionId) {
+                $sessionId = [int]$observedSessionId
+            }
+        }
+        catch {
+            $sessionId = $null
+        }
+
+        # The live suspended PID and image were already verified through owned
+        # native handles. CIM may hide fields until that process is resumed.
+        $suspendedProcessIdMatch = (
+            $null -ne $TrustedSuspendedIdentity -and
+            $processId -eq [int]$TrustedSuspendedIdentity.process_id
+        )
+        $suspendedIdentityCompatible = (
+            $suspendedProcessIdMatch -and
+            (
+                -not $processNameAvailable -or
+                $sameLeafName
+            )
+        )
+        $suspendedMatchRecord = if ($suspendedIdentityCompatible) {
+            [pscustomobject][ordered]@{
+                process_id = $processId
+                parent_process_id = [int]$process.ParentProcessId
+                creation_utc_ticks = if ($null -ne $creationTicks) {
+                    $creationTicks
+                }
+                else {
+                    [long]$TrustedSuspendedIdentity.creation_utc_ticks
+                }
+                session_id = if ($null -ne $sessionId) {
+                    $sessionId
+                }
+                else {
+                    [int]$TrustedSuspendedIdentity.session_id
+                }
+                creation_cim_observed = [bool]($null -ne $creationTicks)
+                session_cim_observed = [bool]($null -ne $sessionId)
+                executable_path = $suspendedVerifiedPath
+                executable_file_identity = $ExpectedFileIdentity
+                identity_match = $true
+                path_match = $true
+                identity_unresolved = $false
+            }
+        }
+        else {
+            $null
+        }
+
+        # After verified Job Object emptiness, an owned row can briefly outlive
+        # readable CIM fields. Missing fields may settle; positive mismatches may not.
+        $settlingProcessIdMatch = (
+            $null -ne $SettlingOwnedIdentity -and
+            $processId -eq [int]$SettlingOwnedIdentity.process_id
+        )
+        $settlingIdentityCompatible = (
+            $settlingProcessIdMatch -and
+            (
+                -not $processNameAvailable -or
+                $sameLeafName
+            ) -and
+            (
+                $null -eq $creationTicks -or
+                -not [bool]$SettlingOwnedIdentity.creation_cim_observed -or
+                $creationTicks -eq [long]$SettlingOwnedIdentity.creation_utc_ticks
+            ) -and
+            (
+                $null -eq $sessionId -or
+                -not [bool]$SettlingOwnedIdentity.session_cim_observed -or
+                $sessionId -eq [int]$SettlingOwnedIdentity.session_id
+            )
+        )
+        $settlingIdentityComplete = (
+            $settlingIdentityCompatible -and
+            [bool]$SettlingOwnedIdentity.creation_cim_observed -and
+            [bool]$SettlingOwnedIdentity.session_cim_observed -and
+            $null -ne $creationTicks -and
+            $null -ne $sessionId
+        )
+        $settlingMatchRecord = if ($settlingIdentityCompatible) {
+            [pscustomobject][ordered]@{
+                process_id = $processId
+                parent_process_id = [int]$process.ParentProcessId
+                creation_utc_ticks = $creationTicks
+                session_id = $sessionId
+                creation_cim_observed = [bool]$SettlingOwnedIdentity.creation_cim_observed
+                session_cim_observed = [bool]$SettlingOwnedIdentity.session_cim_observed
+                executable_path = $settlingVerifiedPath
+                executable_file_identity = $ExpectedFileIdentity
+                identity_match = $false
+                path_match = $false
+                identity_unresolved = $true
+            }
+        }
+        else {
+            $null
+        }
 
         try {
             $path = [string]$process.ExecutablePath
@@ -769,25 +986,13 @@ function Get-MatchingTerminalProcesses {
             $path = ''
         }
         if ([string]::IsNullOrWhiteSpace($path)) {
-            $trustedIdentityMatch = (
-                $null -ne $TrustedSuspendedIdentity -and
-                $processId -eq [int]$TrustedSuspendedIdentity.process_id -and
-                [string]$TrustedSuspendedIdentity.executable_file_identity -ceq
-                    $ExpectedFileIdentity
-            )
-            if ($trustedIdentityMatch) {
-                $matches.Add([pscustomobject][ordered]@{
-                    process_id = $processId
-                    parent_process_id = [int]$process.ParentProcessId
-                    creation_utc_ticks = [long]$TrustedSuspendedIdentity.creation_utc_ticks
-                    session_id = [int]$TrustedSuspendedIdentity.session_id
-                    executable_path = [string]$TrustedSuspendedIdentity.executable_path
-                    executable_file_identity = $ExpectedFileIdentity
-                    identity_match = $true
-                    path_match = $true
-                })
+            if ($null -ne $suspendedMatchRecord) {
+                $matches.Add($suspendedMatchRecord)
             }
-            elseif ($sameLeafName) {
+            elseif ($null -ne $settlingMatchRecord) {
+                $matches.Add($settlingMatchRecord)
+            }
+            elseif ($sameLeafName -or $suspendedProcessIdMatch -or $settlingProcessIdMatch) {
                 $unknown.Add($processId)
             }
             continue
@@ -803,7 +1008,46 @@ function Get-MatchingTerminalProcesses {
                 $null -ne $candidate -and
                 $candidate.Equals($wanted, [StringComparison]::OrdinalIgnoreCase)
             )
-            if ($sameLeafName -or $pathMatches) {
+            $suspendedKnownPath = (
+                $null -eq $candidate -or
+                $pathMatches -or
+                (
+                    $null -ne $suspendedVerifiedPath -and
+                    $candidate.Equals(
+                        $suspendedVerifiedPath,
+                        [StringComparison]::OrdinalIgnoreCase
+                    )
+                )
+            )
+            $settlingKnownPath = (
+                $null -eq $candidate -or
+                $pathMatches -or
+                (
+                    $null -ne $settlingVerifiedPath -and
+                    $candidate.Equals(
+                        $settlingVerifiedPath,
+                        [StringComparison]::OrdinalIgnoreCase
+                    )
+                )
+            )
+            if (
+                $null -ne $suspendedMatchRecord -and
+                $suspendedKnownPath
+            ) {
+                $matches.Add($suspendedMatchRecord)
+            }
+            elseif (
+                $null -ne $settlingMatchRecord -and
+                $settlingKnownPath
+            ) {
+                $matches.Add($settlingMatchRecord)
+            }
+            elseif (
+                $sameLeafName -or
+                $pathMatches -or
+                $suspendedProcessIdMatch -or
+                $settlingProcessIdMatch
+            ) {
                 $unknown.Add($processId)
             }
             continue
@@ -817,22 +1061,56 @@ function Get-MatchingTerminalProcesses {
             $ExpectedFileIdentity,
             [StringComparison]::Ordinal
         )
-        if ($pathMatch -or $identityMatch) {
-            $creationTicks = if ($process.CreationDate -is [datetime]) {
-                [long]$process.CreationDate.ToUniversalTime().Ticks
+        if ($suspendedProcessIdMatch) {
+            if (
+                $identityMatch -and
+                $null -ne $suspendedMatchRecord
+            ) {
+                $matches.Add($suspendedMatchRecord)
             }
             else {
-                $null
+                $unknown.Add($processId)
             }
+        }
+        elseif ($settlingProcessIdMatch) {
+            if (
+                -not $identityMatch -or
+                $null -eq $settlingMatchRecord
+            ) {
+                $unknown.Add($processId)
+            }
+            elseif (-not $settlingIdentityComplete) {
+                $matches.Add($settlingMatchRecord)
+            }
+            else {
+                $matches.Add([pscustomobject][ordered]@{
+                    process_id = $processId
+                    parent_process_id = [int]$process.ParentProcessId
+                    creation_utc_ticks = $creationTicks
+                    session_id = $sessionId
+                    creation_cim_observed = $true
+                    session_cim_observed = $true
+                    executable_path = $candidate
+                    executable_file_identity = $candidateIdentity
+                    identity_match = $true
+                    path_match = [bool]$pathMatch
+                    identity_unresolved = $false
+                })
+            }
+        }
+        elseif ($pathMatch -or $identityMatch) {
             $matches.Add([pscustomobject][ordered]@{
                 process_id = $processId
                 parent_process_id = [int]$process.ParentProcessId
                 creation_utc_ticks = $creationTicks
-                session_id = [int]$process.SessionId
+                session_id = $sessionId
+                creation_cim_observed = [bool]($null -ne $creationTicks)
+                session_cim_observed = [bool]($null -ne $sessionId)
                 executable_path = $candidate
                 executable_file_identity = $candidateIdentity
                 identity_match = [bool]$identityMatch
                 path_match = [bool]$pathMatch
+                identity_unresolved = $false
             })
         }
     }
@@ -1434,26 +1712,6 @@ function Get-TextIndex {
         [StringComparison]::OrdinalIgnoreCase
     }
     return $Text.IndexOf($Needle, $StartIndex, $comparison)
-}
-
-function Get-TextLastIndexBefore {
-    param(
-        [AllowEmptyString()][string]$Text,
-        [Parameter(Mandatory)][string]$Needle,
-        [Parameter(Mandatory)][int]$EndExclusive,
-        [switch]$CaseSensitive
-    )
-
-    if ($EndExclusive -le 0 -or $EndExclusive -gt $Text.Length) {
-        return -1
-    }
-    $comparison = if ($CaseSensitive) {
-        [StringComparison]::Ordinal
-    }
-    else {
-        [StringComparison]::OrdinalIgnoreCase
-    }
-    return $Text.LastIndexOf($Needle, $EndExclusive - 1, $EndExclusive, $comparison)
 }
 
 function Protect-JournalLine {
@@ -2287,8 +2545,11 @@ try {
             $observed = @($postStartMatches | ForEach-Object { $_.process_id })
             throw "BLOCKED: Suspended terminal identity was not exactly the owned PID $($process.Id); observed PID(s): $($observed -join ', ')."
         }
-        if ($null -eq $ownedMatches[0].creation_utc_ticks) {
-            throw "BLOCKED: Creation time was unavailable for the owned suspended terminal PID $($process.Id)."
+        if (
+            $null -eq $ownedMatches[0].creation_utc_ticks -or
+            $null -eq $ownedMatches[0].session_id
+        ) {
+            throw "BLOCKED: Creation time or session was unavailable for the owned suspended terminal PID $($process.Id)."
         }
         $result.process.post_start_identity_verified = $true
         $result.process.identity_source = 'pinned_file_identity_and_suspended_cim_cross_check'
@@ -2315,7 +2576,16 @@ try {
             $result.process.exit_code = [int]$process.ExitCode
         }
 
-        $postExitMatches = @(Get-MatchingTerminalProcesses -ExecutablePath $terminal -ExpectedFileIdentity $terminalImageRecord.file_identity)
+        # Win32_Process can briefly retain a terminated row after the owned Job Object is empty.
+        # Retry only at this post-containment boundary; prelaunch isolation checks remain immediate.
+        $postExitMatches = @(
+            Wait-ForNoMatchingTerminalProcesses `
+                -ExecutablePath $terminal `
+                -ExpectedFileIdentity $terminalImageRecord.file_identity `
+                -VerifiedOwnedProcessIdentity $ownedMatches[0] `
+                -TimeoutMilliseconds 5000 `
+                -PollMilliseconds 100
+        )
         if ($postExitMatches.Count -gt 0) {
             $remaining = @($postExitMatches | ForEach-Object { $_.process_id })
             throw "BLOCKED: Bound terminal PID(s) $($remaining -join ', ') remained after the owned process ended. The runner will not stop them."
@@ -2400,7 +2670,6 @@ try {
                 '|(?:\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,3})?\tCore \d+\t)' +
             ')'
         )
-        $testerSystemLinePrefix = '(?m)^' + $testerSystemHeaderPattern + '[ ]*'
         $testerApplicationHeaderPattern = (
             '(?:' +
                 '(?:\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?\t' +
@@ -2419,6 +2688,12 @@ try {
             '[ ]*' +
             $simulatedTimePattern
         )
+        $testerSystemMessagePrefix = (
+            '(?m)^' +
+            $testerSystemHeaderPattern +
+            '(?![ ]*' + $simulatedTimePattern + ')' +
+            '[ ]*'
+        )
 
         $testStartNeedle = (
             $Symbol + ',' + $Period + ': testing of Experts\' +
@@ -2427,7 +2702,7 @@ try {
         )
         $testStartRecord = $testStartNeedle + ' started with inputs:'
         $testStartPattern = (
-            $testerSystemLinePrefix +
+            $testerSystemMessagePrefix +
             [regex]::Escape($testStartRecord) +
             '[ ]*\r?$'
         )
@@ -2436,7 +2711,7 @@ try {
             [Text.RegularExpressions.RegexOptions]::IgnoreCase
         )
         $testPassedPattern = (
-            $testerSystemLinePrefix +
+            $testerSystemMessagePrefix +
             [regex]::Escape("$Symbol,$Period") +
             ':[^\r\n]*Test passed in \d+:\d{2}:\d{2}(?:\.\d+)?[^\r\n]*\r?$'
         )
@@ -2444,8 +2719,46 @@ try {
             $testPassedPattern,
             [Text.RegularExpressions.RegexOptions]::IgnoreCase
         )
-        $genericTestStartNeedle = 'testing of Experts\'
+        $testerInitializedNeedle = 'successfully initialized'
+        $testerInitializedPattern = (
+            $testerSystemMessagePrefix +
+            '(?![^=\r\n]+=[^\r\n]*' +
+                [regex]::Escape($testerInitializedNeedle) + ')' +
+            '[^\r\n]*' + [regex]::Escape($testerInitializedNeedle) +
+            '[^\r\n]*\r?$'
+        )
+        $testerInitializedRegex = New-Object Text.RegularExpressions.Regex(
+            $testerInitializedPattern,
+            [Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
+        $genericTestStartSignal = 'testing of Experts\'
+        $genericTestStartPattern = (
+            $testerSystemMessagePrefix +
+            '(?![^=\r\n]+=[^\r\n]*' +
+                [regex]::Escape($genericTestStartSignal) + ')' +
+            '[^,\r\n]+,[^:\r\n]+:[ ]*testing of Experts\\[^\r\n]+ ' +
+            'from \d{4}\.\d{2}\.\d{2} \d{2}:\d{2} ' +
+            'to \d{4}\.\d{2}\.\d{2} \d{2}:\d{2} ' +
+            'started with inputs:[ ]*\r?$'
+        )
+        $genericTestStartRegex = New-Object Text.RegularExpressions.Regex(
+            $genericTestStartPattern,
+            [Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
         $onInitFailureNeedle = 'tester stopped because OnInit returns non-zero'
+        $onInitFailurePattern = (
+            $testerSystemMessagePrefix +
+            '(?![^=\r\n]+=[^\r\n]*' +
+                [regex]::Escape($onInitFailureNeedle) + ')' +
+            '[^\r\n]*' + [regex]::Escape($onInitFailureNeedle) +
+            '[^\r\n]*\r?$'
+        )
+        $onInitFailureRegex = New-Object Text.RegularExpressions.Regex(
+            $onInitFailurePattern,
+            [Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
+        $testerInitializedMatches = $testerInitializedRegex.Matches($testerText)
+        $genericTestStartMatches = $genericTestStartRegex.Matches($testerText)
         $testCandidates = New-Object 'System.Collections.Generic.List[object]'
         $candidateSearchIndex = 0
         while ($candidateSearchIndex -lt $testerText.Length) {
@@ -2455,22 +2768,31 @@ try {
             }
             $candidateStart = [int]$candidateStartMatch.Index
             $candidateEnd = $candidateStart + [int]$candidateStartMatch.Length
-            $previousGenericStart = Get-TextLastIndexBefore `
-                -Text $testerText `
-                -Needle $genericTestStartNeedle `
-                -EndExclusive $candidateStart
-            $candidateInitialized = Get-TextLastIndexBefore `
-                -Text $testerText `
-                -Needle 'successfully initialized' `
-                -EndExclusive $candidateStart
+            $previousGenericStart = -1
+            foreach ($genericStartMatch in $genericTestStartMatches) {
+                if ([int]$genericStartMatch.Index -ge $candidateStart) {
+                    break
+                }
+                $previousGenericStart = [int]$genericStartMatch.Index
+            }
+            $candidateInitialized = -1
+            foreach ($initializedMatch in $testerInitializedMatches) {
+                if ([int]$initializedMatch.Index -ge $candidateStart) {
+                    break
+                }
+                $candidateInitialized = [int]$initializedMatch.Index
+            }
             $initializationInWindow = (
                 $candidateInitialized -ge 0 -and
                 ($previousGenericStart -lt 0 -or $candidateInitialized -gt $previousGenericStart)
             )
-            $nextGenericStart = Get-TextIndex `
-                -Text $testerText `
-                -Needle $genericTestStartNeedle `
-                -StartIndex $candidateEnd
+            $nextGenericStart = -1
+            foreach ($genericStartMatch in $genericTestStartMatches) {
+                if ([int]$genericStartMatch.Index -ge $candidateEnd) {
+                    $nextGenericStart = [int]$genericStartMatch.Index
+                    break
+                }
+            }
             $candidateWindowEnd = if ($nextGenericStart -ge 0) {
                 $nextGenericStart
             }
@@ -2487,10 +2809,13 @@ try {
             else {
                 -1
             }
-            $candidateOnInitFailure = Get-TextIndex `
-                -Text $testerText `
-                -Needle $onInitFailureNeedle `
-                -StartIndex $candidateEnd
+            $candidateOnInitMatch = $onInitFailureRegex.Match($testerText, $candidateEnd)
+            $candidateOnInitFailure = if ($candidateOnInitMatch.Success) {
+                [int]$candidateOnInitMatch.Index
+            }
+            else {
+                -1
+            }
             $onInitFailureInWindow = (
                 $candidateOnInitFailure -ge 0 -and
                 $candidateOnInitFailure -lt $candidateWindowEnd
@@ -2591,7 +2916,7 @@ try {
             [bool]$selectedCandidate.on_init_failed
         }
         else {
-            Test-ContainsText -Text $testerText -Needle $onInitFailureNeedle
+            $onInitFailureRegex.IsMatch($testerText)
         }
 
         $markerEvidence = New-Object 'System.Collections.Generic.List[object]'

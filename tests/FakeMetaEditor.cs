@@ -33,6 +33,12 @@ internal static class FakeMetaEditor
         string logPath = Path.ChangeExtension(sourcePath, ".log");
         string artifactPath = Path.ChangeExtension(sourcePath, ".ex5");
         string mode = Environment.GetEnvironmentVariable("FAKE_METAEDITOR_MODE") ?? "success";
+        string argumentsPath = Environment.GetEnvironmentVariable("FAKE_METAEDITOR_ARGS_PATH");
+        if (!String.IsNullOrWhiteSpace(argumentsPath))
+            File.WriteAllLines(argumentsPath, args, new UTF8Encoding(false));
+
+        if (mode == "exit_without_result")
+            return 0;
 
         if (mode == "timeout" || mode == "timeout_detached")
         {
