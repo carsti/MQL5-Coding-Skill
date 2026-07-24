@@ -265,6 +265,81 @@ Assert-True -Condition ($referenceText -notmatch '(?i)[A-Z]:\\Users\\') `
 Assert-True -Condition ($compilerText -notmatch '\$sourceDirectory|nearSource') `
     -Message 'Compiler wrapper must not discover executables from the source tree.'
 
+$compilerTokens = $null
+$compilerParseErrors = $null
+$compilerAst = [Management.Automation.Language.Parser]::ParseFile(
+    $compiler,
+    [ref]$compilerTokens,
+    [ref]$compilerParseErrors
+)
+$resolverNode = $compilerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Resolve-MetaEditorExecutable'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $resolverNode) `
+    -Message 'Resolve-MetaEditorExecutable was not found for discovery regression testing.'
+$resolverDefinitionText = $resolverNode.Extent.Text
+$discoveryResult = & {
+    param([Parameter(Mandatory = $true)][string]$DefinitionText)
+
+    . ([scriptblock]::Create($DefinitionText))
+
+    function Get-MetaEditorFromCandidate {
+        param($Candidate)
+        if ([string]$Candidate -ceq 'C:\synthetic-valid') {
+            return 'C:\synthetic-valid\metaeditor64.exe'
+        }
+        return $null
+    }
+    function Get-Process {
+        param($Name, $ErrorAction)
+        return @()
+    }
+    function Get-Command {
+        param($Name, $ErrorAction)
+        return $null
+    }
+    function Get-ItemProperty {
+        param($Path, $ErrorAction)
+        return @([pscustomobject]@{ UnrelatedValue = 'incomplete uninstall entry' })
+    }
+    function Test-Path {
+        param($LiteralPath, $PathType)
+        return [string]$LiteralPath -ceq 'C:\synthetic-program-files'
+    }
+    function Get-ChildItem {
+        param($LiteralPath, [switch]$Directory, $ErrorAction)
+        return @([pscustomobject]@{ FullName = 'C:\synthetic-valid' })
+    }
+
+    $savedMetaEditorExe = $env:METAEDITOR_EXE
+    $savedMetaEditorPath = $env:METAEDITOR_PATH
+    $savedProgramFiles = $env:ProgramFiles
+    $savedProgramFilesX86 = ${env:ProgramFiles(x86)}
+    try {
+        $env:METAEDITOR_EXE = $null
+        $env:METAEDITOR_PATH = $null
+        $env:ProgramFiles = 'C:\synthetic-program-files'
+        ${env:ProgramFiles(x86)} = $null
+        return Resolve-MetaEditorExecutable -RequestedPath $null
+    }
+    finally {
+        $env:METAEDITOR_EXE = $savedMetaEditorExe
+        $env:METAEDITOR_PATH = $savedMetaEditorPath
+        $env:ProgramFiles = $savedProgramFiles
+        ${env:ProgramFiles(x86)} = $savedProgramFilesX86
+    }
+} $resolverDefinitionText
+Assert-True -Condition (
+    [string]$discoveryResult -ceq 'C:\synthetic-valid\metaeditor64.exe'
+) -Message 'MetaEditor auto-discovery stopped at an incomplete uninstall entry.'
+
 try {
     foreach ($directory in @(
             (Join-Path $testRoot 'install'),
@@ -465,6 +540,62 @@ try {
         -Message "Unexpected preflight status: $($preflight.Result.status)"
     Assert-True -Condition (-not [bool]$preflight.Result.process.process_created) `
         -Message 'Preflight unexpectedly created a terminal process.'
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace(
+            [string]$preflight.Result.binding.terminal_image.file_identity
+        )) -Message 'Preflight did not record the pinned terminal executable identity.'
+
+    $aliasDirectory = Join-Path $testRoot 'install-alias'
+    [IO.Directory]::CreateDirectory($aliasDirectory) | Out-Null
+    $aliasTerminal = Join-Path $aliasDirectory 'terminal64.exe'
+    $null = New-Item -ItemType HardLink -Path $aliasTerminal -Target $terminal
+    $aliasConfig = Join-Path $dataPath 'alias-hold.ini'
+    [IO.File]::WriteAllText(
+        $aliasConfig,
+        '',
+        (New-Object Text.UnicodeEncoding($false, $true))
+    )
+    $aliasReady = Join-Path $dataPath 'alias-hold-ready'
+    $aliasStartInfo = New-Object Diagnostics.ProcessStartInfo
+    $aliasStartInfo.FileName = $aliasTerminal
+    $aliasStartInfo.Arguments = Quote-NativeArgument -Value ("/config:$aliasConfig")
+    $aliasStartInfo.UseShellExecute = $false
+    $aliasStartInfo.CreateNoWindow = $true
+    $aliasStartInfo.EnvironmentVariables['FAKE_MT5_MODE'] = 'hold'
+    $aliasStartInfo.EnvironmentVariables['FAKE_MT5_READY_PATH'] = $aliasReady
+    $aliasProcess = New-Object Diagnostics.Process
+    $aliasProcess.StartInfo = $aliasStartInfo
+    $aliasStarted = $false
+    try {
+        $null = $aliasProcess.Start()
+        $aliasStarted = $true
+        $aliasDeadline = [datetime]::UtcNow.AddSeconds(10)
+        while (-not (Test-Path -LiteralPath $aliasReady -PathType Leaf) -and
+            [datetime]::UtcNow -lt $aliasDeadline) {
+            Start-Sleep -Milliseconds 25
+        }
+        Assert-True -Condition (Test-Path -LiteralPath $aliasReady -PathType Leaf) `
+            -Message 'Hard-link terminal fixture did not become ready.'
+
+        $aliasBlocked = Invoke-RunnerCase `
+            -Name 'preflight-hardlink-alias-running' `
+            -Mode PreflightOnly `
+            -TerminalPath $terminal `
+            -TerminalDataPath $dataPath `
+            -ExpertPath $expert `
+            -PresetPath $preset `
+            -ExpertSha256 $expertHash
+        Assert-True -Condition ($aliasBlocked.ExitCode -eq 4) `
+            -Message 'A running hard-link alias of the bound terminal was not blocked.'
+        Assert-True -Condition ($aliasBlocked.Result.status -eq 'blocked') `
+            -Message 'Hard-link alias conflict produced the wrong runner status.'
+    }
+    finally {
+        if ($aliasStarted -and -not $aliasProcess.HasExited) {
+            $aliasProcess.Kill()
+            $null = $aliasProcess.WaitForExit(5000)
+        }
+        $aliasProcess.Dispose()
+    }
 
     $pass = Invoke-RunnerCase `
         -Name 'execute-pass' `

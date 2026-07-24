@@ -93,6 +93,16 @@ internal static class FakeTerminal
         Dictionary<string, string> config = ReadConfig(configPath);
         string mode = Environment.GetEnvironmentVariable("FAKE_MT5_MODE") ?? "pass";
         string marker = Environment.GetEnvironmentVariable("FAKE_MT5_MARKER") ?? "";
+        if (mode == "hold")
+        {
+            string readyPath = Environment.GetEnvironmentVariable("FAKE_MT5_READY_PATH");
+            if (String.IsNullOrWhiteSpace(readyPath))
+                readyPath = Path.Combine(dataPath, "fake-hold-ready");
+            File.WriteAllText(readyPath, Process.GetCurrentProcess().Id.ToString(), Encoding.ASCII);
+            Thread.Sleep(60000);
+            return 0;
+        }
+
         string suffix = Path.GetFileNameWithoutExtension(configPath);
         string terminalLog = Path.Combine(dataPath, "logs", suffix + "-terminal.log");
         string testerLog = Path.Combine(dataPath, "Tester", "logs", suffix + "-tester.log");
