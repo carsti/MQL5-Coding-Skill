@@ -513,6 +513,17 @@ $trustedMatcherProbe = & {
         param($ClassName)
         return $processRecord
     }
+    $identityState = [pscustomobject]@{
+        throw = $false
+        value = 'synthetic-identity'
+    }
+    function Get-FileIdentityFromPath {
+        param($Path)
+        if ($identityState.throw) {
+            throw 'Synthetic file identity lookup failure.'
+        }
+        return [string]$identityState.value
+    }
 
     $suspendedMissingFields = @(
         Get-MatchingTerminalProcesses `
@@ -622,6 +633,79 @@ $trustedMatcherProbe = & {
         $settlingCreationMismatchError = $_.Exception.Message
     }
 
+    $processRecord.Name = 'terminal64.exe'
+    $processRecord.CreationDate = $null
+    $processRecord.SessionId = $null
+    $processRecord.ExecutablePath = 'C:\other\terminal64.exe'
+    $identityState.throw = $true
+    $suspendedWrongPathError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -TrustedSuspendedIdentity $ownedIdentity
+        )
+    }
+    catch {
+        $suspendedWrongPathError = $_.Exception.Message
+    }
+    $settlingWrongPathError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -SettlingOwnedIdentity $ownedIdentity
+        )
+    }
+    catch {
+        $settlingWrongPathError = $_.Exception.Message
+    }
+
+    $processRecord.ExecutablePath = 'C:\synthetic\terminal64.exe'
+    $identityState.throw = $false
+    $identityState.value = 'wrong-identity'
+    $suspendedWrongIdentityError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -TrustedSuspendedIdentity $ownedIdentity
+        )
+    }
+    catch {
+        $suspendedWrongIdentityError = $_.Exception.Message
+    }
+    $settlingWrongIdentityError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -SettlingOwnedIdentity $ownedIdentity
+        )
+    }
+    catch {
+        $settlingWrongIdentityError = $_.Exception.Message
+    }
+
+    $processRecord.ExecutablePath = 'C:\alias\terminal64.exe'
+    $identityState.value = 'synthetic-identity'
+    $suspendedIdentityAlias = @(
+        Get-MatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -TrustedSuspendedIdentity $ownedIdentity
+    )
+    $settlingIdentityAlias = @(
+        Get-MatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -SettlingOwnedIdentity $ownedIdentity
+    )
+
     return [pscustomobject]@{
         suspended_count = $suspendedMissingFields.Count
         suspended_creation_ticks = if ($suspendedMissingFields.Count -gt 0) {
@@ -656,6 +740,18 @@ $trustedMatcherProbe = & {
             $false
         }
         settling_creation_mismatch_error = $settlingCreationMismatchError
+        suspended_wrong_path_error = $suspendedWrongPathError
+        settling_wrong_path_error = $settlingWrongPathError
+        suspended_wrong_identity_error = $suspendedWrongIdentityError
+        settling_wrong_identity_error = $settlingWrongIdentityError
+        suspended_alias_count = $suspendedIdentityAlias.Count
+        settling_alias_count = $settlingIdentityAlias.Count
+        settling_alias_unresolved = if ($settlingIdentityAlias.Count -gt 0) {
+            [bool]$settlingIdentityAlias[0].identity_unresolved
+        }
+        else {
+            $false
+        }
     }
 } $postExitMatcherDefinitionText
 Assert-True -Condition (
@@ -687,6 +783,21 @@ Assert-True -Condition (
     $trustedMatcherProbe.settling_creation_mismatch_error -match
         'identity is unreadable for PID\(s\) 4242'
 ) -Message 'A positive post-exit identity mismatch did not fail closed.'
+foreach ($readableContradictionError in @(
+        $trustedMatcherProbe.suspended_wrong_path_error,
+        $trustedMatcherProbe.settling_wrong_path_error,
+        $trustedMatcherProbe.suspended_wrong_identity_error,
+        $trustedMatcherProbe.settling_wrong_identity_error
+    )) {
+    Assert-True -Condition (
+        $readableContradictionError -match 'identity is unreadable for PID\(s\) 4242'
+    ) -Message 'A readable path or file-identity contradiction did not fail closed.'
+}
+Assert-True -Condition (
+    $trustedMatcherProbe.suspended_alias_count -eq 1 -and
+    $trustedMatcherProbe.settling_alias_count -eq 1 -and
+    $trustedMatcherProbe.settling_alias_unresolved
+) -Message 'An identity-equivalent executable alias was incorrectly rejected.'
 
 Assert-True -Condition ($skillText -notmatch '(?i)[A-Z]:\\Users\\') `
     -Message 'SKILL.md contains a user-specific path.'

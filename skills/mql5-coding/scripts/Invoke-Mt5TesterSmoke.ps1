@@ -823,10 +823,6 @@ function Get-MatchingTerminalProcesses {
             [string]$TrustedSuspendedIdentity.executable_path
         )
         if (
-            -not $suspendedVerifiedPath.Equals(
-                $wanted,
-                [StringComparison]::OrdinalIgnoreCase
-            ) -or
             [IO.Path]::GetFileName($suspendedVerifiedPath) -ine $wantedLeaf -or
             [string]$TrustedSuspendedIdentity.executable_file_identity -cne
                 $ExpectedFileIdentity
@@ -840,10 +836,6 @@ function Get-MatchingTerminalProcesses {
             [string]$SettlingOwnedIdentity.executable_path
         )
         if (
-            -not $settlingVerifiedPath.Equals(
-                $wanted,
-                [StringComparison]::OrdinalIgnoreCase
-            ) -or
             [IO.Path]::GetFileName($settlingVerifiedPath) -ine $wantedLeaf -or
             [string]$SettlingOwnedIdentity.executable_file_identity -cne
                 $ExpectedFileIdentity
@@ -1006,10 +998,38 @@ function Get-MatchingTerminalProcesses {
                 $null -ne $candidate -and
                 $candidate.Equals($wanted, [StringComparison]::OrdinalIgnoreCase)
             )
-            if ($null -ne $suspendedMatchRecord) {
+            $suspendedKnownPath = (
+                $null -eq $candidate -or
+                $pathMatches -or
+                (
+                    $null -ne $suspendedVerifiedPath -and
+                    $candidate.Equals(
+                        $suspendedVerifiedPath,
+                        [StringComparison]::OrdinalIgnoreCase
+                    )
+                )
+            )
+            $settlingKnownPath = (
+                $null -eq $candidate -or
+                $pathMatches -or
+                (
+                    $null -ne $settlingVerifiedPath -and
+                    $candidate.Equals(
+                        $settlingVerifiedPath,
+                        [StringComparison]::OrdinalIgnoreCase
+                    )
+                )
+            )
+            if (
+                $null -ne $suspendedMatchRecord -and
+                $suspendedKnownPath
+            ) {
                 $matches.Add($suspendedMatchRecord)
             }
-            elseif ($null -ne $settlingMatchRecord) {
+            elseif (
+                $null -ne $settlingMatchRecord -and
+                $settlingKnownPath
+            ) {
                 $matches.Add($settlingMatchRecord)
             }
             elseif (
@@ -1031,35 +1051,26 @@ function Get-MatchingTerminalProcesses {
             $ExpectedFileIdentity,
             [StringComparison]::Ordinal
         )
-        if ($pathMatch -or $identityMatch) {
-            if ($suspendedProcessIdMatch) {
-                if ($null -ne $suspendedMatchRecord) {
-                    $matches.Add($suspendedMatchRecord)
-                }
-                else {
-                    $unknown.Add($processId)
-                }
+        if ($suspendedProcessIdMatch) {
+            if (
+                $identityMatch -and
+                $null -ne $suspendedMatchRecord
+            ) {
+                $matches.Add($suspendedMatchRecord)
             }
-            elseif ($settlingProcessIdMatch) {
-                if ($null -eq $settlingMatchRecord) {
-                    $unknown.Add($processId)
-                }
-                elseif (-not $settlingIdentityComplete) {
-                    $matches.Add($settlingMatchRecord)
-                }
-                else {
-                    $matches.Add([pscustomobject][ordered]@{
-                        process_id = $processId
-                        parent_process_id = [int]$process.ParentProcessId
-                        creation_utc_ticks = $creationTicks
-                        session_id = $sessionId
-                        executable_path = $candidate
-                        executable_file_identity = $candidateIdentity
-                        identity_match = [bool]$identityMatch
-                        path_match = [bool]$pathMatch
-                        identity_unresolved = $false
-                    })
-                }
+            else {
+                $unknown.Add($processId)
+            }
+        }
+        elseif ($settlingProcessIdMatch) {
+            if (
+                -not $identityMatch -or
+                $null -eq $settlingMatchRecord
+            ) {
+                $unknown.Add($processId)
+            }
+            elseif (-not $settlingIdentityComplete) {
+                $matches.Add($settlingMatchRecord)
             }
             else {
                 $matches.Add([pscustomobject][ordered]@{
@@ -1069,14 +1080,24 @@ function Get-MatchingTerminalProcesses {
                     session_id = $sessionId
                     executable_path = $candidate
                     executable_file_identity = $candidateIdentity
-                    identity_match = [bool]$identityMatch
+                    identity_match = $true
                     path_match = [bool]$pathMatch
                     identity_unresolved = $false
                 })
             }
         }
-        elseif ($suspendedProcessIdMatch -or $settlingProcessIdMatch) {
-            $unknown.Add($processId)
+        elseif ($pathMatch -or $identityMatch) {
+            $matches.Add([pscustomobject][ordered]@{
+                process_id = $processId
+                parent_process_id = [int]$process.ParentProcessId
+                creation_utc_ticks = $creationTicks
+                session_id = $sessionId
+                executable_path = $candidate
+                executable_file_identity = $candidateIdentity
+                identity_match = [bool]$identityMatch
+                path_match = [bool]$pathMatch
+                identity_unresolved = $false
+            })
         }
     }
 
