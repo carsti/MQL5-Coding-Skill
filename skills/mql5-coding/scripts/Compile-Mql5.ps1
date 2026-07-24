@@ -54,7 +54,7 @@ $logPrepared = $false
 $mutex = $null
 $mutexHeld = $false
 $compileLaunch = $null
-$compileJobEmpty = $false
+$compileJobEmpty = $true
 
 function Resolve-ExistingFile {
     param(
@@ -318,11 +318,8 @@ function Move-OriginalLogAside {
     param([Parameter(Mandatory = $true)][string]$LiteralPath)
 
     $directory = [System.IO.Path]::GetDirectoryName($LiteralPath)
-    $leaf = [System.IO.Path]::GetFileName($LiteralPath)
     for ($attempt = 0; $attempt -lt 100; $attempt++) {
-        $candidate = Join-Path $directory (
-            '.{0}.codex-backup-{1}' -f $leaf, [guid]::NewGuid().ToString('N')
-        )
+        $candidate = Join-Path $directory ([System.IO.Path]::GetRandomFileName())
         if (-not (Test-Path -LiteralPath $candidate)) {
             [System.IO.File]::Move($LiteralPath, $candidate)
             return $candidate
@@ -369,6 +366,29 @@ function Restore-OriginalLog {
     throw "Could not restore the original compilation log: $($lastError.Message)$recovery"
 }
 
+function Complete-CompilationLog {
+    param(
+        [Parameter(Mandatory = $true)][string]$LiteralPath,
+        [Parameter(Mandatory = $true)]$Snapshot,
+        [Parameter(Mandatory = $true)][bool]$ProcessTreeEmpty
+    )
+
+    if (-not $ProcessTreeEmpty) {
+        $recovery = if ($Snapshot.Existed) {
+            " The preserved original remains at: $($Snapshot.BackupPath)"
+        }
+        else {
+            ''
+        }
+        throw (
+            'MetaEditor process-tree termination was not verified; ' +
+            "the compilation log was not restored.$recovery"
+        )
+    }
+
+    Restore-OriginalLog -LiteralPath $LiteralPath -Snapshot $Snapshot
+}
+
 try {
     if (-not [string]::IsNullOrWhiteSpace($nativeTypeLoadError)) {
         throw "The compiler process-isolation helper could not be loaded: $nativeTypeLoadError"
@@ -402,18 +422,25 @@ try {
     $artifactPath = [System.IO.Path]::ChangeExtension($resolvedSource, '.ex5')
     $logPath = [System.IO.Path]::ChangeExtension($resolvedSource, '.log')
 
-    $sourceIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity($resolvedSource)
+    $sourceParentPath = [System.IO.Path]::GetDirectoryName($resolvedSource)
+    $sourceParentIdentity = [Mql5Coding.CompilerProcessJob]::GetDirectoryIdentity(
+        $sourceParentPath
+    )
+    $outputNamespace = (
+        $sourceParentIdentity + '|' +
+        [System.IO.Path]::GetFileName($logPath).ToUpperInvariant()
+    )
     $sha256 = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $sourceHash = [System.BitConverter]::ToString(
-            $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($sourceIdentity))
+        $outputHash = [System.BitConverter]::ToString(
+            $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($outputNamespace))
         ).Replace('-', '').Substring(0, 24)
     }
     finally {
         $sha256.Dispose()
     }
 
-    $mutex = [System.Threading.Mutex]::new($false, "Global\CodexMqlCompile_$sourceHash")
+    $mutex = [System.Threading.Mutex]::new($false, "Global\CodexMqlCompile_$outputHash")
     try {
         $mutexHeld = $mutex.WaitOne([TimeSpan]::FromSeconds([Math]::Min(30, $TimeoutSeconds)))
     }
@@ -468,6 +495,7 @@ try {
         $arguments,
         (Split-Path -Parent $resolvedMetaEditor)
     )
+    $compileJobEmpty = $false
     Write-Output "MQL5_METAEDITOR_PROCESS_ID=$($compileLaunch.ProcessId)"
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -652,12 +680,21 @@ finally {
 
     if ($logPrepared -and $null -ne $logPath -and $null -ne $logSnapshot) {
         try {
-            Restore-OriginalLog -LiteralPath $logPath -Snapshot $logSnapshot
+            Complete-CompilationLog `
+                -LiteralPath $logPath `
+                -Snapshot $logSnapshot `
+                -ProcessTreeEmpty $compileJobEmpty
         }
         catch {
             $exitCode = $ExitToolError
             $status = 'tool_error'
-            $errorMessage = $_.Exception.Message
+            $logCompletionError = $_.Exception.Message
+            if ([string]::IsNullOrWhiteSpace($errorMessage)) {
+                $errorMessage = $logCompletionError
+            }
+            else {
+                $errorMessage = "$errorMessage Log handling error: $logCompletionError"
+            }
         }
     }
 

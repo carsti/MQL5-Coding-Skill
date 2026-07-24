@@ -193,6 +193,34 @@ internal static class FakeTerminal
                 SystemLine("  SelfTestMarker=" + marker),
                 SystemLine(pass));
         }
+        else if (mode == "system_input_initialized_only")
+        {
+            WriteLog(
+                testerLog,
+                CoreSystemLine("  Diagnostic=successfully initialized"),
+                CoreSystemLine(start),
+                CoreSystemLine(pass));
+        }
+        else if (mode == "system_input_generic_boundary")
+        {
+            WriteLog(
+                testerLog,
+                CoreSystemLine("successfully initialized"),
+                CoreSystemLine(start),
+                CoreSystemLine(
+                    "  Diagnostic=SYNTH,H1: testing of Experts\\Other.ex5 " +
+                    "from 2024.01.01 00:00 to 2024.01.02 00:00 started with inputs:"),
+                CoreSystemLine(pass));
+        }
+        else if (mode == "system_input_oninit_failure")
+        {
+            WriteLog(
+                testerLog,
+                CoreSystemLine("successfully initialized"),
+                CoreSystemLine(start),
+                CoreSystemLine("  Diagnostic=tester stopped because OnInit returns non-zero"),
+                CoreSystemLine(pass));
+        }
         else if (mode == "application_initialized_only")
         {
             WriteLog(

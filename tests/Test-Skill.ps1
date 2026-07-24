@@ -304,6 +304,32 @@ $resolverNode = $compilerAst.Find(
 Assert-True -Condition ($null -ne $resolverNode) `
     -Message 'Resolve-MetaEditorExecutable was not found for discovery regression testing.'
 $resolverDefinitionText = $resolverNode.Extent.Text
+$moveLogNode = $compilerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Move-OriginalLogAside'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $moveLogNode) `
+    -Message 'Move-OriginalLogAside was not found for backup-name regression testing.'
+$moveLogDefinitionText = $moveLogNode.Extent.Text
+$completeLogNode = $compilerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Complete-CompilationLog'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $completeLogNode) `
+    -Message 'Complete-CompilationLog was not found for unsafe-cleanup regression testing.'
+$completeLogDefinitionText = $completeLogNode.Extent.Text
 $discoveryResult = & {
     param([Parameter(Mandatory = $true)][string]$DefinitionText)
 
@@ -400,6 +426,55 @@ try {
 
     $compileDirectory = Join-Path $testRoot 'compile'
     [IO.Directory]::CreateDirectory($compileDirectory) | Out-Null
+
+    $backupNameProbe = Join-Path $compileDirectory 'backup-name-probe.log'
+    [IO.File]::WriteAllText($backupNameProbe, 'probe', [Text.Encoding]::ASCII)
+    $boundedBackupPath = & {
+        param($DefinitionText, $ProbePath)
+        . ([scriptblock]::Create($DefinitionText))
+        Move-OriginalLogAside -LiteralPath $ProbePath
+    } $moveLogDefinitionText $backupNameProbe
+    Assert-True -Condition (
+        [IO.Path]::GetFileName([string]$boundedBackupPath).Length -le 16
+    ) -Message 'The adjacent log backup name is not bounded independently of the source filename.'
+    [IO.File]::Move([string]$boundedBackupPath, $backupNameProbe)
+    Remove-Item -LiteralPath $backupNameProbe -Force
+
+    $unsafeGeneratedLog = Join-Path $compileDirectory 'unsafe-generated.log'
+    $unsafePreservedLog = Join-Path $compileDirectory 'unsafe-preserved.tmp'
+    [IO.File]::WriteAllText($unsafeGeneratedLog, 'generated', [Text.Encoding]::ASCII)
+    [IO.File]::WriteAllText($unsafePreservedLog, 'preserved', [Text.Encoding]::ASCII)
+    $unsafeGeneratedHash = (Get-FileHash -LiteralPath $unsafeGeneratedLog -Algorithm SHA256).Hash
+    $unsafePreservedHash = (Get-FileHash -LiteralPath $unsafePreservedLog -Algorithm SHA256).Hash
+    $unsafeRestoreError = $null
+    try {
+        & {
+            param($DefinitionText, $LogPath, $BackupPath)
+            . ([scriptblock]::Create($DefinitionText))
+            Complete-CompilationLog `
+                -LiteralPath $LogPath `
+                -Snapshot ([pscustomobject]@{
+                    Existed = $true
+                    BackupPath = $BackupPath
+                }) `
+                -ProcessTreeEmpty $false
+        } $completeLogDefinitionText $unsafeGeneratedLog $unsafePreservedLog
+    }
+    catch {
+        $unsafeRestoreError = $_.Exception.Message
+    }
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($unsafeRestoreError)) `
+        -Message 'Unverified process-tree cleanup did not block log restoration.'
+    Assert-True -Condition ($unsafeRestoreError.Contains($unsafePreservedLog)) `
+        -Message 'Unsafe log restoration failure did not report the preserved backup path.'
+    Assert-True -Condition (
+        (Get-FileHash -LiteralPath $unsafeGeneratedLog -Algorithm SHA256).Hash -eq
+            $unsafeGeneratedHash -and
+        (Get-FileHash -LiteralPath $unsafePreservedLog -Algorithm SHA256).Hash -eq
+            $unsafePreservedHash
+    ) -Message 'Unsafe cleanup modified a generated log or its preserved original.'
+    Remove-Item -LiteralPath $unsafeGeneratedLog, $unsafePreservedLog -Force
+
     $compileSource = Join-Path $compileDirectory 'fixture.mq5'
     [IO.File]::WriteAllText(
         $compileSource,
@@ -543,14 +618,23 @@ try {
     try {
         $compileAliasSource = Join-Path $compileAliasDirectory 'fixture.mq5'
         $aliasIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileAliasSource)
-        $sourceIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileSource)
-        Assert-True -Condition ($aliasIdentity -ceq $sourceIdentity) `
+        $sourceIdentityBeforeReplace = [Mql5Coding.CompilerProcessJob]::GetFileIdentity(
+            $compileSource
+        )
+        Assert-True -Condition ($aliasIdentity -ceq $sourceIdentityBeforeReplace) `
             -Message 'Junction alias did not resolve to the source file identity.'
 
-        $identityBytes = [Text.Encoding]::UTF8.GetBytes($aliasIdentity)
+        $directoryIdentity = [Mql5Coding.CompilerProcessJob]::GetDirectoryIdentity(
+            $compileDirectory
+        )
+        $outputNamespace = (
+            $directoryIdentity + '|' +
+            [IO.Path]::GetFileName($compileLog).ToUpperInvariant()
+        )
+        $identityBytes = [Text.Encoding]::UTF8.GetBytes($outputNamespace)
         $identityAlgorithm = [Security.Cryptography.SHA256]::Create()
         try {
-            $aliasHash = [BitConverter]::ToString(
+            $outputHash = [BitConverter]::ToString(
                 $identityAlgorithm.ComputeHash($identityBytes)
             ).Replace('-', '').Substring(0, 24)
         }
@@ -560,13 +644,31 @@ try {
 
         $heldCompilerMutex = [Threading.Mutex]::new(
             $false,
-            "Global\CodexMqlCompile_$aliasHash"
+            "Global\CodexMqlCompile_$outputHash"
         )
         $heldCompilerMutexAcquired = $false
+        $replacedSourceBackup = Join-Path $compileDirectory 'fixture-before-replace.mq5'
         try {
             $heldCompilerMutexAcquired = $heldCompilerMutex.WaitOne(0)
             Assert-True -Condition $heldCompilerMutexAcquired `
-                -Message 'Could not acquire the compiler-alias regression mutex.'
+                -Message 'Could not acquire the compiler-output regression mutex.'
+
+            $replacementSource = Join-Path $compileDirectory 'fixture-replacement.tmp'
+            [IO.File]::WriteAllText(
+                $replacementSource,
+                '// Atomically replaced synthetic source.',
+                (New-Object Text.UTF8Encoding($false))
+            )
+            [IO.File]::Replace(
+                $replacementSource,
+                $compileSource,
+                $replacedSourceBackup
+            )
+            Assert-True -Condition (
+                [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileSource) -cne
+                    $sourceIdentityBeforeReplace
+            ) -Message 'Atomic source replacement did not change the source file identity.'
+
             $aliasBlocked = Invoke-CompilerCase `
                 -SourcePath $compileAliasSource `
                 -MetaEditorPath $metaEditor `
@@ -574,15 +676,18 @@ try {
                 -TimeoutSeconds 5 `
                 -SyntaxOnly
             Assert-True -Condition ($aliasBlocked.ExitCode -eq 2) `
-                -Message 'A junction alias bypassed the physical-source compilation mutex.'
+                -Message 'A source replacement or junction alias bypassed the output compilation mutex.'
             Assert-True -Condition ($aliasBlocked.StandardError -match 'Another compilation is already using') `
-                -Message 'Alias mutex contention did not report the competing compilation.'
+                -Message 'Output mutex contention did not report the competing compilation.'
         }
         finally {
             if ($heldCompilerMutexAcquired) {
                 $heldCompilerMutex.ReleaseMutex()
             }
             $heldCompilerMutex.Dispose()
+            if (Test-Path -LiteralPath $replacedSourceBackup -PathType Leaf) {
+                Remove-Item -LiteralPath $replacedSourceBackup -Force
+            }
         }
     }
     finally {
@@ -740,6 +845,50 @@ try {
         -Message "Tab-prefixed tester evidence was rejected: $($prefixedPass.StandardError)"
     Assert-True -Condition ($prefixedPass.Result.status -eq 'application_marker_passed') `
         -Message 'Tab-prefixed application marker produced the wrong status.'
+
+    $systemInitializedOnly = Invoke-RunnerCase `
+        -Name 'execute-system-input-initialized-only' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'system_input_initialized_only'
+    Assert-True -Condition ($systemInitializedOnly.ExitCode -eq 1) `
+        -Message 'A system input echo was accepted as tester initialization evidence.'
+    Assert-True -Condition (
+        -not [bool]$systemInitializedOnly.Result.evidence.checks.tester_initialized
+    ) -Message 'A system input echo was marked as a tester initialization.'
+
+    $systemBoundary = Invoke-RunnerCase `
+        -Name 'execute-system-input-generic-boundary' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'system_input_generic_boundary'
+    Assert-True -Condition ($systemBoundary.ExitCode -eq 0) `
+        -Message 'A system input echo incorrectly closed the tester evidence window.'
+    Assert-True -Condition ($systemBoundary.Result.status -eq 'engine_smoke_passed') `
+        -Message 'A system input echo changed a valid engine result.'
+
+    $systemOnInit = Invoke-RunnerCase `
+        -Name 'execute-system-input-oninit-failure' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'system_input_oninit_failure'
+    Assert-True -Condition ($systemOnInit.ExitCode -eq 0) `
+        -Message 'A system input echo was accepted as an OnInit failure.'
+    Assert-True -Condition (
+        [bool]$systemOnInit.Result.evidence.checks.on_init_failure_absent
+    ) -Message 'A system input echo was marked as an OnInit failure.'
 
     $applicationInitializedOnly = Invoke-RunnerCase `
         -Name 'execute-application-initialized-only' `

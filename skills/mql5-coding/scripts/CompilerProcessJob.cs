@@ -20,6 +20,9 @@ namespace Mql5Coding
         private const int JobObjectExtendedLimitInformationClass = 9;
         private const uint WaitObject0 = 0x00000000;
         private const uint WaitFailed = 0xFFFFFFFF;
+        private const uint ShareReadWriteDelete = 0x00000007;
+        private const uint OpenExisting = 3;
+        private const uint FileFlagBackupSemantics = 0x02000000;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct NativeFileTime
@@ -152,6 +155,20 @@ namespace Mql5Coding
             SafeFileHandle file,
             out ByHandleFileInformation information);
 
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "CreateFileW")]
+        private static extern SafeFileHandle OpenPathHandle(
+            string path,
+            uint desiredAccess,
+            uint shareMode,
+            IntPtr securityAttributes,
+            uint creationDisposition,
+            uint flagsAndAttributes,
+            IntPtr templateFile);
+
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool CreateProcessW(
@@ -210,6 +227,21 @@ namespace Mql5Coding
 
         public int ProcessId { get; private set; }
 
+        private static string ReadFileIdentity(SafeFileHandle handle)
+        {
+            ByHandleFileInformation information;
+            if (!GetFileInformationByHandle(handle, out information))
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "GetFileInformationByHandle failed.");
+
+            return String.Format(
+                "{0:X8}:{1:X8}{2:X8}",
+                information.VolumeSerialNumber,
+                information.FileIndexHigh,
+                information.FileIndexLow);
+        }
+
         public static string GetFileIdentity(string path)
         {
             if (String.IsNullOrWhiteSpace(path))
@@ -221,19 +253,29 @@ namespace Mql5Coding
                 FileAccess.Read,
                 FileShare.ReadWrite | FileShare.Delete))
             {
-                ByHandleFileInformation information;
-                if (!GetFileInformationByHandle(
-                        stream.SafeFileHandle,
-                        out information))
+                return ReadFileIdentity(stream.SafeFileHandle);
+            }
+        }
+
+        public static string GetDirectoryIdentity(string path)
+        {
+            if (String.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("A directory path is required.", "path");
+
+            using (SafeFileHandle handle = OpenPathHandle(
+                path,
+                0,
+                ShareReadWriteDelete,
+                IntPtr.Zero,
+                OpenExisting,
+                FileFlagBackupSemantics,
+                IntPtr.Zero))
+            {
+                if (handle == null || handle.IsInvalid)
                     throw new Win32Exception(
                         Marshal.GetLastWin32Error(),
-                        "GetFileInformationByHandle failed.");
-
-                return String.Format(
-                    "{0:X8}:{1:X8}{2:X8}",
-                    information.VolumeSerialNumber,
-                    information.FileIndexHigh,
-                    information.FileIndexLow);
+                        "Opening the directory identity handle failed.");
+                return ReadFileIdentity(handle);
             }
         }
 
@@ -316,9 +358,24 @@ namespace Mql5Coding
 
                 uint previousSuspendCount = ResumeThread(launch.threadHandle);
                 if (previousSuspendCount == uint.MaxValue)
+                {
+                    int resumeError = Marshal.GetLastWin32Error();
+                    try
+                    {
+                        launch.TerminateAndWaitForEmpty(5000);
+                    }
+                    catch (Exception cleanupError)
+                    {
+                        throw new InvalidOperationException(
+                            "ResumeThread failed and termination of the suspended compiler process could not be verified.",
+                            new AggregateException(
+                                new Win32Exception(resumeError, "ResumeThread failed."),
+                                cleanupError));
+                    }
                     throw new Win32Exception(
-                        Marshal.GetLastWin32Error(),
-                        "ResumeThread failed.");
+                        resumeError,
+                        "ResumeThread failed; the suspended compiler process was terminated.");
+                }
 
                 CompilerProcessJob result = launch;
                 launch = null;
