@@ -297,6 +297,19 @@ $postExitWaitNode = $runnerAst.Find(
 Assert-True -Condition ($null -ne $postExitWaitNode) `
     -Message 'Wait-ForNoMatchingTerminalProcesses was not found for CIM-settling regression testing.'
 $postExitWaitDefinitionText = $postExitWaitNode.Extent.Text
+$postExitMatcherNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Get-MatchingTerminalProcesses'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $postExitMatcherNode) `
+    -Message 'Get-MatchingTerminalProcesses was not found for trusted-identity regression testing.'
+$postExitMatcherDefinitionText = $postExitMatcherNode.Extent.Text
 $postExitWaitProbe = & {
     param([Parameter(Mandatory = $true)][string]$DefinitionText)
 
@@ -313,7 +326,7 @@ $postExitWaitProbe = & {
         sleeps = 0
     }
     function Get-MatchingTerminalProcesses {
-        param($ExecutablePath, $ExpectedFileIdentity)
+        param($ExecutablePath, $ExpectedFileIdentity, $TrustedSuspendedIdentity)
         $state.calls++
         switch ($state.mode) {
             'stale_owned' {
@@ -420,6 +433,141 @@ Assert-True -Condition (
     $postExitWaitProbe.inspection_sleeps -eq 0 -and
     $postExitWaitProbe.inspection_error -match 'BLOCKED: synthetic inspection failure'
 ) -Message 'Post-job-empty process discovery suppressed or retried an inspection failure.'
+
+$trustedMatcherProbe = & {
+    param([Parameter(Mandatory = $true)][string]$DefinitionText)
+
+    . ([scriptblock]::Create($DefinitionText))
+    $creationDate = [DateTime]::SpecifyKind(
+        [DateTime]::ParseExact(
+            '2024-01-01T00:00:00',
+            'yyyy-MM-ddTHH:mm:ss',
+            [Globalization.CultureInfo]::InvariantCulture
+        ),
+        [DateTimeKind]::Utc
+    )
+    $trustedIdentity = [pscustomobject]@{
+        process_id = 4242
+        creation_utc_ticks = [long]$creationDate.Ticks
+        session_id = 3
+        executable_path = 'C:\synthetic\terminal64.exe'
+        executable_file_identity = 'synthetic-identity'
+    }
+    $processRecord = [pscustomobject]@{
+        ProcessId = 4242
+        ParentProcessId = 111
+        Name = 'terminal64.exe'
+        CreationDate = $creationDate
+        SessionId = 3
+        ExecutablePath = $null
+    }
+    function Get-CimInstance {
+        param($ClassName)
+        return $processRecord
+    }
+
+    $exact = @(
+        Get-MatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -TrustedSuspendedIdentity $trustedIdentity
+    )
+
+    $processRecord.CreationDate = $creationDate.AddSeconds(1)
+    $creationMismatchError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -TrustedSuspendedIdentity $trustedIdentity
+        )
+    }
+    catch {
+        $creationMismatchError = $_.Exception.Message
+    }
+
+    $processRecord.CreationDate = $creationDate
+    $noTrustedError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity'
+        )
+    }
+    catch {
+        $noTrustedError = $_.Exception.Message
+    }
+
+    $processRecord.SessionId = 4
+    $sessionMismatchError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -TrustedSuspendedIdentity $trustedIdentity
+        )
+    }
+    catch {
+        $sessionMismatchError = $_.Exception.Message
+    }
+
+    $processRecord.SessionId = $null
+    $missingSessionError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -TrustedSuspendedIdentity $trustedIdentity
+        )
+    }
+    catch {
+        $missingSessionError = $_.Exception.Message
+    }
+
+    $processRecord.SessionId = 3
+    $processRecord.Name = 'other.exe'
+    $nameMismatchError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -TrustedSuspendedIdentity $trustedIdentity
+        )
+    }
+    catch {
+        $nameMismatchError = $_.Exception.Message
+    }
+
+    return [pscustomobject]@{
+        exact_count = $exact.Count
+        exact_pid = if ($exact.Count -gt 0) { [int]$exact[0].process_id } else { -1 }
+        creation_mismatch_error = $creationMismatchError
+        no_trusted_error = $noTrustedError
+        session_mismatch_error = $sessionMismatchError
+        missing_session_error = $missingSessionError
+        name_mismatch_error = $nameMismatchError
+    }
+} $postExitMatcherDefinitionText
+Assert-True -Condition (
+    $trustedMatcherProbe.exact_count -eq 1 -and
+    $trustedMatcherProbe.exact_pid -eq 4242
+) -Message 'The exact verified owned process was not recognized when CIM hid its image.'
+foreach ($blockedIdentityError in @(
+        $trustedMatcherProbe.creation_mismatch_error,
+        $trustedMatcherProbe.no_trusted_error,
+        $trustedMatcherProbe.session_mismatch_error,
+        $trustedMatcherProbe.missing_session_error,
+        $trustedMatcherProbe.name_mismatch_error
+    )) {
+    Assert-True -Condition (
+        $blockedIdentityError -match 'identity is unreadable for PID\(s\) 4242'
+    ) -Message 'An unreadable process row was accepted without an exact verified identity.'
+}
 
 Assert-True -Condition ($skillText -notmatch '(?i)[A-Z]:\\Users\\') `
     -Message 'SKILL.md contains a user-specific path.'
