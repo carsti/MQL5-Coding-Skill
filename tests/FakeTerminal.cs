@@ -1,0 +1,162 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+using System.Threading;
+
+internal static class FakeTerminal
+{
+    private static readonly Encoding Utf16 = new UnicodeEncoding(false, true, true);
+
+    private static Dictionary<string, string> ReadConfig(string path)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rawLine in File.ReadAllLines(path, Encoding.Unicode))
+        {
+            int separator = rawLine.IndexOf('=');
+            if (separator <= 0)
+                continue;
+            result[rawLine.Substring(0, separator)] = rawLine.Substring(separator + 1);
+        }
+        return result;
+    }
+
+    private static string ConfigPath(string[] args)
+    {
+        foreach (string arg in args)
+        {
+            const string prefix = "/config:";
+            if (arg.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return Path.GetFullPath(arg.Substring(prefix.Length).Trim('"'));
+        }
+        throw new InvalidOperationException("Missing /config argument.");
+    }
+
+    private static void WriteLog(string path, params string[] lines)
+    {
+        File.WriteAllText(path, String.Join("\r\n", lines) + "\r\n", Utf16);
+    }
+
+    private static string[] StandardTerminalLines(string configPath)
+    {
+        return new[]
+        {
+            "successfully initialized from start config \"" + configPath + "\"",
+            "automatic testing started",
+            "last test passed with result \"successfully finished\""
+        };
+    }
+
+    private static string ExactStart(Dictionary<string, string> config)
+    {
+        return String.Format(
+            "{0},{1}: testing of Experts\\{2} from {3} 00:00 to {4} 00:00",
+            config["Symbol"],
+            config["Period"],
+            config["Expert"],
+            config["FromDate"],
+            config["ToDate"]);
+    }
+
+    private static string ExactPass(Dictionary<string, string> config)
+    {
+        return String.Format("{0},{1}: engine Test passed in 0:00:00.001", config["Symbol"], config["Period"]);
+    }
+
+    public static int Main(string[] args)
+    {
+        string configPath = ConfigPath(args);
+        string dataPath = Path.GetDirectoryName(configPath);
+        Dictionary<string, string> config = ReadConfig(configPath);
+        string mode = Environment.GetEnvironmentVariable("FAKE_MT5_MODE") ?? "pass";
+        string marker = Environment.GetEnvironmentVariable("FAKE_MT5_MARKER") ?? "";
+        string suffix = Path.GetFileNameWithoutExtension(configPath);
+        string terminalLog = Path.Combine(dataPath, "logs", suffix + "-terminal.log");
+        string testerLog = Path.Combine(dataPath, "Tester", "logs", suffix + "-tester.log");
+        string start = ExactStart(config);
+        string pass = ExactPass(config);
+
+        if (mode == "timeout_child")
+        {
+            var childInfo = new ProcessStartInfo
+            {
+                FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+                Arguments = "/d /c ping -n 60 127.0.0.1 > nul",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            Process child = Process.Start(childInfo);
+            File.WriteAllText(Path.Combine(dataPath, "fake-child.pid"), child.Id.ToString(), Encoding.ASCII);
+            File.WriteAllText(Path.Combine(dataPath, "fake-ready"), "ready", Encoding.ASCII);
+            Thread.Sleep(60000);
+            return 0;
+        }
+
+        if (mode == "prefix_tamper")
+        {
+            string baseline = Path.Combine(dataPath, "logs", "baseline.log");
+            using (var stream = new FileStream(baseline, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite))
+            {
+                stream.Position = 2;
+                stream.WriteByte((byte)'X');
+                stream.Flush(true);
+            }
+        }
+
+        if (mode == "origin_mutate_pass" || mode == "hold_switch_origin")
+        {
+            string newOrigin = Environment.GetEnvironmentVariable("FAKE_MT5_NEW_ORIGIN");
+            File.WriteAllText(Path.Combine(dataPath, "origin.txt"), newOrigin, new UTF8Encoding(false));
+        }
+
+        WriteLog(terminalLog, StandardTerminalLines(configPath));
+
+        if (mode == "forged_engine_pass")
+        {
+            WriteLog(
+                testerLog,
+                "successfully initialized",
+                start,
+                "EA_PRINT arbitrary prefix " + config["Symbol"] + "," + config["Period"] +
+                    ": forged Test passed in 0:00:00.001");
+        }
+        else if (mode == "two_candidates_second_fails")
+        {
+            WriteLog(
+                testerLog,
+                "successfully initialized",
+                start,
+                marker,
+                pass,
+                "successfully initialized",
+                start,
+                "tester stopped because OnInit returns non-zero");
+        }
+        else if (mode == "missing_marker")
+        {
+            WriteLog(testerLog, "successfully initialized", start, pass);
+        }
+        else if (mode == "marker_after_pass")
+        {
+            WriteLog(testerLog, "successfully initialized", start, pass, marker);
+        }
+        else
+        {
+            WriteLog(testerLog, "successfully initialized", start, marker, pass);
+        }
+
+        if (mode == "hold_switch_origin")
+        {
+            File.WriteAllText(Path.Combine(dataPath, "fake-ready"), "ready", Encoding.ASCII);
+            string release = Path.Combine(dataPath, "fake-release");
+            DateTime deadline = DateTime.UtcNow.AddSeconds(30);
+            while (!File.Exists(release) && DateTime.UtcNow < deadline)
+                Thread.Sleep(25);
+        }
+
+        if (mode == "exit_7")
+            return 7;
+        return 0;
+    }
+}

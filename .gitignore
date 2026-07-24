@@ -1,0 +1,6 @@
+*.log
+*.ex4
+*.ex5
+test-results/
+__pycache__/
+*.pyc

@@ -1,0 +1,2745 @@
+#Requires -Version 5.1
+
+param(
+    $ExpertPath,
+    $ExpectedExpertSha256,
+    $Symbol,
+    $Period,
+    $FromDate,
+    $ToDate,
+    $Model,
+    $SetPath,
+    [switch]$UseExpertDefaults,
+    $TerminalPath,
+    $TerminalDataPath,
+    $OutputDirectory,
+    $TimeoutSeconds = '300',
+    $MaxJournalAppendBytes = '16777216',
+    $Deposit,
+    $Currency,
+    $Leverage,
+    $ExecutionMode,
+
+    [string[]]$ExpectedLogMarker = @(),
+    $ExpectedLogMarkerFile,
+
+    [switch]$AcknowledgeSavedAccountRisk,
+
+    [switch]$Execute,
+
+    [switch]$PreflightOnly
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$nativeTypeLoadError = $null
+try {
+    if (-not ('Mql5Coding.JobProcessLaunch' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+using Microsoft.Win32.SafeHandles;
+
+namespace Mql5Coding
+{
+    public sealed class JobProcessLaunch : IDisposable
+    {
+        private const uint CreateSuspendedFlag = 0x00000004;
+        private const uint CreateNoWindow = 0x08000000;
+        private const uint StartfUseShowWindow = 0x00000001;
+        private const short SwHide = 0;
+        private const uint JobObjectLimitKillOnJobClose = 0x00002000;
+        private const int JobObjectBasicAccountingInformationClass = 1;
+        private const int JobObjectExtendedLimitInformationClass = 9;
+        private const uint WaitObject0 = 0x00000000;
+        private const uint WaitFailed = 0xFFFFFFFF;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct IoCounters
+        {
+            public ulong ReadOperationCount;
+            public ulong WriteOperationCount;
+            public ulong OtherOperationCount;
+            public ulong ReadTransferCount;
+            public ulong WriteTransferCount;
+            public ulong OtherTransferCount;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JobObjectBasicLimitInformation
+        {
+            public long PerProcessUserTimeLimit;
+            public long PerJobUserTimeLimit;
+            public uint LimitFlags;
+            public UIntPtr MinimumWorkingSetSize;
+            public UIntPtr MaximumWorkingSetSize;
+            public uint ActiveProcessLimit;
+            public UIntPtr Affinity;
+            public uint PriorityClass;
+            public uint SchedulingClass;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JobObjectExtendedLimitInformation
+        {
+            public JobObjectBasicLimitInformation BasicLimitInformation;
+            public IoCounters IoInfo;
+            public UIntPtr ProcessMemoryLimit;
+            public UIntPtr JobMemoryLimit;
+            public UIntPtr PeakProcessMemoryUsed;
+            public UIntPtr PeakJobMemoryUsed;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JobObjectBasicAccounting
+        {
+            public long TotalUserTime;
+            public long TotalKernelTime;
+            public long ThisPeriodTotalUserTime;
+            public long ThisPeriodTotalKernelTime;
+            public uint TotalPageFaultCount;
+            public uint TotalProcesses;
+            public uint ActiveProcesses;
+            public uint TotalTerminatedProcesses;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct StartupInfo
+        {
+            public uint cb;
+            public string lpReserved;
+            public string lpDesktop;
+            public string lpTitle;
+            public uint dwX;
+            public uint dwY;
+            public uint dwXSize;
+            public uint dwYSize;
+            public uint dwXCountChars;
+            public uint dwYCountChars;
+            public uint dwFillAttribute;
+            public uint dwFlags;
+            public short wShowWindow;
+            public short cbReserved2;
+            public IntPtr lpReserved2;
+            public IntPtr hStdInput;
+            public IntPtr hStdOutput;
+            public IntPtr hStdError;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ProcessInformation
+        {
+            public IntPtr hProcess;
+            public IntPtr hThread;
+            public uint dwProcessId;
+            public uint dwThreadId;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern SafeWaitHandle CreateJobObject(
+            IntPtr jobAttributes,
+            string name);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetInformationJobObject(
+            SafeWaitHandle job,
+            int informationClass,
+            ref JobObjectExtendedLimitInformation information,
+            uint informationLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool QueryInformationJobObject(
+            SafeWaitHandle job,
+            int informationClass,
+            out JobObjectBasicAccounting information,
+            uint informationLength,
+            out uint returnLength);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CreateProcessW(
+            string applicationName,
+            StringBuilder commandLine,
+            IntPtr processAttributes,
+            IntPtr threadAttributes,
+            [MarshalAs(UnmanagedType.Bool)] bool inheritHandles,
+            uint creationFlags,
+            IntPtr environment,
+            string currentDirectory,
+            ref StartupInfo startupInfo,
+            out ProcessInformation processInformation);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool AssignProcessToJobObject(
+            SafeWaitHandle job,
+            SafeWaitHandle process);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint ResumeThread(SafeWaitHandle thread);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool TerminateJobObject(
+            SafeWaitHandle job,
+            uint exitCode);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool TerminateProcess(
+            SafeWaitHandle process,
+            uint exitCode);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint WaitForSingleObject(
+            SafeWaitHandle handle,
+            uint milliseconds);
+
+        private SafeWaitHandle jobHandle;
+        private SafeWaitHandle processHandle;
+        private SafeWaitHandle threadHandle;
+        private bool resumed;
+
+        private JobProcessLaunch(
+            SafeWaitHandle job,
+            SafeWaitHandle process,
+            SafeWaitHandle thread,
+            int processId)
+        {
+            jobHandle = job;
+            processHandle = process;
+            threadHandle = thread;
+            ProcessId = processId;
+        }
+
+        public int ProcessId { get; private set; }
+
+        public static JobProcessLaunch CreateSuspended(
+            string applicationPath,
+            string configurationPath,
+            string currentDirectory)
+        {
+            SafeWaitHandle job = null;
+            SafeWaitHandle process = null;
+            SafeWaitHandle thread = null;
+            try
+            {
+                job = CreateJobObject(IntPtr.Zero, null);
+                if (job == null || job.IsInvalid)
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "CreateJobObject failed.");
+
+                JobObjectExtendedLimitInformation limits =
+                    new JobObjectExtendedLimitInformation();
+                limits.BasicLimitInformation.LimitFlags =
+                    JobObjectLimitKillOnJobClose;
+                if (!SetInformationJobObject(
+                        job,
+                        JobObjectExtendedLimitInformationClass,
+                        ref limits,
+                        unchecked((uint)Marshal.SizeOf(typeof(JobObjectExtendedLimitInformation)))))
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "SetInformationJobObject failed.");
+
+                StartupInfo startup = new StartupInfo();
+                startup.cb = unchecked((uint)Marshal.SizeOf(typeof(StartupInfo)));
+                startup.dwFlags = StartfUseShowWindow;
+                startup.wShowWindow = SwHide;
+                ProcessInformation created;
+                StringBuilder commandLine = new StringBuilder(
+                    "\"" + applicationPath + "\" /config:\"" + configurationPath + "\"");
+                if (!CreateProcessW(
+                        applicationPath,
+                        commandLine,
+                        IntPtr.Zero,
+                        IntPtr.Zero,
+                        false,
+                        CreateSuspendedFlag | CreateNoWindow,
+                        IntPtr.Zero,
+                        currentDirectory,
+                        ref startup,
+                        out created))
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "CreateProcessW failed.");
+
+                process = new SafeWaitHandle(created.hProcess, true);
+                thread = new SafeWaitHandle(created.hThread, true);
+                if (!AssignProcessToJobObject(job, process))
+                {
+                    int assignmentError = Marshal.GetLastWin32Error();
+                    bool terminationRequested = TerminateProcess(process, 0xDEAD);
+                    int terminationError = terminationRequested
+                        ? 0
+                        : Marshal.GetLastWin32Error();
+                    uint waitResult = WaitForSingleObject(process, 5000);
+                    int waitError = waitResult == WaitFailed
+                        ? Marshal.GetLastWin32Error()
+                        : 0;
+                    bool terminationConfirmed = waitResult == WaitObject0;
+
+                    Exception failure;
+                    if (terminationConfirmed)
+                    {
+                        failure = new Win32Exception(
+                            assignmentError,
+                            "AssignProcessToJobObject failed; the suspended process was confirmed terminated before its primary thread ran.");
+                    }
+                    else
+                    {
+                        failure = new InvalidOperationException(
+                            "AssignProcessToJobObject failed and termination of the suspended process could not be verified. " +
+                            "TerminateProcess succeeded=" + terminationRequested +
+                            ", termination error=" + terminationError +
+                            ", wait result=0x" + waitResult.ToString("X8") +
+                            ", wait error=" + waitError + ".",
+                            new Win32Exception(
+                                assignmentError,
+                                "AssignProcessToJobObject failed."));
+                    }
+
+                    failure.Data["Mql5Coding.ProcessCreated"] = true;
+                    failure.Data["Mql5Coding.ProcessId"] =
+                        unchecked((int)created.dwProcessId);
+                    failure.Data["Mql5Coding.SuspendedTerminationConfirmed"] =
+                        terminationConfirmed;
+                    failure.Data["Mql5Coding.TerminateProcessSucceeded"] =
+                        terminationRequested;
+                    failure.Data["Mql5Coding.TerminateProcessError"] =
+                        terminationError;
+                    failure.Data["Mql5Coding.WaitResult"] = waitResult;
+                    failure.Data["Mql5Coding.WaitError"] = waitError;
+                    throw failure;
+                }
+
+                JobProcessLaunch launch = new JobProcessLaunch(
+                    job,
+                    process,
+                    thread,
+                    unchecked((int)created.dwProcessId));
+                job = null;
+                process = null;
+                thread = null;
+                return launch;
+            }
+            finally
+            {
+                if (thread != null)
+                    thread.Dispose();
+                if (process != null)
+                    process.Dispose();
+                if (job != null)
+                    job.Dispose();
+            }
+        }
+
+        public void Resume()
+        {
+            if (resumed)
+                throw new InvalidOperationException("The suspended process was already resumed.");
+            uint previousSuspendCount = ResumeThread(threadHandle);
+            if (previousSuspendCount == uint.MaxValue)
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "ResumeThread failed.");
+            resumed = true;
+        }
+
+        public void TerminateAndWaitForEmpty(int timeoutMilliseconds)
+        {
+            if (jobHandle == null || jobHandle.IsInvalid || jobHandle.IsClosed)
+                throw new InvalidOperationException("The process job handle is unavailable.");
+            if (!TerminateJobObject(jobHandle, 0xDEAD))
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "TerminateJobObject failed.");
+
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            while (true)
+            {
+                JobObjectBasicAccounting accounting;
+                uint returned;
+                if (!QueryInformationJobObject(
+                        jobHandle,
+                        JobObjectBasicAccountingInformationClass,
+                        out accounting,
+                        unchecked((uint)Marshal.SizeOf(typeof(JobObjectBasicAccounting))),
+                        out returned))
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "QueryInformationJobObject failed.");
+                if (accounting.ActiveProcesses == 0)
+                    return;
+                if (stopwatch.ElapsedMilliseconds >= timeoutMilliseconds)
+                    throw new TimeoutException(
+                        "The owned Windows Job Object did not become empty after termination.");
+                Thread.Sleep(25);
+            }
+        }
+
+        public void Dispose()
+        {
+            if (jobHandle != null)
+            {
+                jobHandle.Dispose();
+                jobHandle = null;
+            }
+            if (threadHandle != null)
+            {
+                threadHandle.Dispose();
+                threadHandle = null;
+            }
+            if (processHandle != null)
+            {
+                processHandle.Dispose();
+                processHandle = null;
+            }
+        }
+    }
+}
+'@
+    }
+}
+catch {
+    $nativeTypeLoadError = $_.Exception.Message
+}
+
+function ConvertTo-Hex {
+    param([Parameter(Mandatory)][byte[]]$Bytes)
+    return ([BitConverter]::ToString($Bytes) -replace '-', '').ToLowerInvariant()
+}
+
+function Get-BytesSha256 {
+    param([Parameter(Mandatory)][byte[]]$Bytes)
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ConvertTo-Hex -Bytes $algorithm.ComputeHash($Bytes)
+    }
+    finally {
+        $algorithm.Dispose()
+    }
+}
+
+function Get-TextSha256 {
+    param([Parameter(Mandatory)][string]$Text)
+    return Get-BytesSha256 -Bytes ([Text.Encoding]::UTF8.GetBytes($Text))
+}
+
+function Get-FileSha256 {
+    param([Parameter(Mandatory)][string]$Path)
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Assert-SafeIniValue {
+    param(
+        [Parameter(Mandatory)][string]$Value,
+        [Parameter(Mandatory)][string]$Name,
+        [int]$MaximumLength = 260
+    )
+    if ([string]::IsNullOrWhiteSpace($Value) -or $Value.Length -gt $MaximumLength -or
+        $Value -match '[\x00-\x1f\x7f=]') {
+        throw "$Name contains unsupported characters or exceeds $MaximumLength characters."
+    }
+}
+
+function Resolve-ExistingFile {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Name
+    )
+    if (-not [IO.Path]::IsPathRooted($Path)) {
+        throw "$Name must be an absolute path."
+    }
+    $resolved = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
+    if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
+        throw "$Name is not a file: $resolved"
+    }
+    return [IO.Path]::GetFullPath($resolved)
+}
+
+function Assert-ExpectedApplicationMarker {
+    param(
+        [Parameter(Mandatory)][string]$Marker,
+        [Parameter(Mandatory)][string]$SourceName
+    )
+
+    if ($Marker -cnotmatch '\AMQL5_CODING_PASS:[0-9A-Fa-f]{32,64}(?::[A-Za-z0-9_.-]{1,64})?\z') {
+        throw (
+            "$SourceName must use the case-sensitive pass protocol " +
+            "'MQL5_CODING_PASS:<32-64 hex nonce>[:optional-label]'."
+        )
+    }
+}
+
+function ConvertFrom-TerminalOriginText {
+    param(
+        [Parameter(Mandatory)][string]$Text,
+        [Parameter(Mandatory)][string]$SourcePath
+    )
+
+    $origin = $Text.Trim()
+    if ([string]::IsNullOrWhiteSpace($origin) -or
+        $origin -match '[\r\n]' -or
+        -not [IO.Path]::IsPathRooted($origin)) {
+        throw "Terminal origin file must contain exactly one absolute install-directory path: $SourcePath"
+    }
+    return [IO.Path]::GetFullPath($origin)
+}
+
+function Read-TerminalOrigin {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $originInfo = Get-Item -LiteralPath $Path -ErrorAction Stop
+    if ([long]$originInfo.Length -le 0 -or [long]$originInfo.Length -gt 32768) {
+        throw "Terminal origin file must contain 1-32768 bytes: $Path"
+    }
+    return ConvertFrom-TerminalOriginText `
+        -Text ([IO.File]::ReadAllText($Path)) `
+        -SourcePath $Path
+}
+
+function Resolve-TerminalBinding {
+    param(
+        [string]$RequestedTerminalPath,
+        [string]$RequestedDataPath
+    )
+
+    $terminal = $null
+    $data = $null
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedTerminalPath)) {
+        $terminal = Resolve-ExistingFile -Path $RequestedTerminalPath -Name 'TerminalPath'
+        if ([IO.Path]::GetFileName($terminal) -ine 'terminal64.exe') {
+            throw "TerminalPath must identify terminal64.exe: $terminal"
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedDataPath)) {
+        if (-not [IO.Path]::IsPathRooted($RequestedDataPath)) {
+            throw 'TerminalDataPath must be an absolute path.'
+        }
+        $data = (Resolve-Path -LiteralPath $RequestedDataPath -ErrorAction Stop).Path
+        foreach ($required in @('origin.txt', 'MQL5', 'Tester', 'logs')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $data $required))) {
+                throw "TerminalDataPath lacks required entry '$required': $data"
+            }
+        }
+    }
+
+    if ($null -ne $data) {
+        $origin = Read-TerminalOrigin -Path (Join-Path $data 'origin.txt')
+        $originTerminal = Join-Path $origin 'terminal64.exe'
+        if ($null -eq $terminal) {
+            $terminal = Resolve-ExistingFile -Path $originTerminal -Name 'terminal64.exe from origin.txt'
+        }
+        elseif (-not ([IO.Path]::GetFullPath((Split-Path -Parent $terminal)).TrimEnd('\', '/')).Equals(
+                $origin.TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase)) {
+            throw "TerminalDataPath belongs to '$origin', not to '$terminal'."
+        }
+    }
+
+    $terminalDataRoot = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'MetaQuotes\Terminal'
+    if ($null -eq $data) {
+        if (-not (Test-Path -LiteralPath $terminalDataRoot -PathType Container)) {
+            throw "MetaTrader terminal data root does not exist: $terminalDataRoot"
+        }
+
+        $matches = New-Object 'System.Collections.Generic.List[string]'
+        foreach ($directory in Get-ChildItem -LiteralPath $terminalDataRoot -Directory) {
+            $originPath = Join-Path $directory.FullName 'origin.txt'
+            if (-not (Test-Path -LiteralPath $originPath -PathType Leaf)) {
+                continue
+            }
+            try {
+                $origin = Read-TerminalOrigin -Path $originPath
+            }
+            catch {
+                continue
+            }
+
+            if ($null -eq $terminal) {
+                $candidate = Join-Path $origin 'terminal64.exe'
+                if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                    $matches.Add($directory.FullName)
+                }
+            }
+            else {
+                $terminalInstall = [IO.Path]::GetFullPath((Split-Path -Parent $terminal)).TrimEnd('\', '/')
+                if ($origin.TrimEnd('\', '/').Equals($terminalInstall, [StringComparison]::OrdinalIgnoreCase)) {
+                    $matches.Add($directory.FullName)
+                }
+            }
+        }
+
+        if ($matches.Count -eq 0) {
+            throw 'No terminal data directory with a matching origin.txt was found.'
+        }
+        if ($matches.Count -gt 1) {
+            throw "Terminal data discovery is ambiguous: $($matches -join '; ')"
+        }
+        $data = [IO.Path]::GetFullPath($matches[0])
+        if ($null -eq $terminal) {
+            $origin = Read-TerminalOrigin -Path (Join-Path $data 'origin.txt')
+            $terminal = Resolve-ExistingFile -Path (Join-Path $origin 'terminal64.exe') -Name 'discovered terminal64.exe'
+        }
+    }
+
+    return [pscustomobject][ordered]@{
+        terminal_path = [IO.Path]::GetFullPath($terminal)
+        terminal_data_path = [IO.Path]::GetFullPath($data)
+    }
+}
+
+function Get-MatchingTerminalProcesses {
+    param(
+        [Parameter(Mandatory)][string]$ExecutablePath,
+        $TrustedSuspendedIdentity
+    )
+    $wanted = [IO.Path]::GetFullPath($ExecutablePath)
+    $matches = New-Object 'System.Collections.Generic.List[object]'
+    $unknown = New-Object 'System.Collections.Generic.List[int]'
+
+    try {
+        $processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='terminal64.exe'")
+    }
+    catch {
+        throw "BLOCKED: Cannot safely inspect running terminal64.exe processes: $($_.Exception.Message)"
+    }
+
+    foreach ($process in $processes) {
+        $path = [string]$process.ExecutablePath
+        if ([string]::IsNullOrWhiteSpace($path)) {
+            if (
+                $null -ne $TrustedSuspendedIdentity -and
+                [int]$process.ProcessId -eq [int]$TrustedSuspendedIdentity.process_id
+            ) {
+                $matches.Add([pscustomobject][ordered]@{
+                    process_id = [int]$process.ProcessId
+                    parent_process_id = [int]$process.ParentProcessId
+                    creation_utc_ticks = [long]$TrustedSuspendedIdentity.creation_utc_ticks
+                    session_id = [int]$TrustedSuspendedIdentity.session_id
+                    executable_path = $wanted
+                })
+                continue
+            }
+            $unknown.Add([int]$process.ProcessId)
+            continue
+        }
+        try {
+            $candidate = [IO.Path]::GetFullPath($path)
+        }
+        catch {
+            $unknown.Add([int]$process.ProcessId)
+            continue
+        }
+        if ($candidate.Equals($wanted, [StringComparison]::OrdinalIgnoreCase)) {
+            $creationTicks = if ($process.CreationDate -is [datetime]) {
+                [long]$process.CreationDate.ToUniversalTime().Ticks
+            }
+            else {
+                $null
+            }
+            $matches.Add([pscustomobject][ordered]@{
+                process_id = [int]$process.ProcessId
+                parent_process_id = [int]$process.ParentProcessId
+                creation_utc_ticks = $creationTicks
+                session_id = [int]$process.SessionId
+                executable_path = $candidate
+            })
+        }
+    }
+
+    if ($unknown.Count -gt 0) {
+        throw "BLOCKED: Running terminal64.exe process path is unreadable for PID(s) $($unknown -join ', '); refusing an unsafe launch."
+    }
+    return $matches.ToArray()
+}
+
+function Open-DataDirectoryLock {
+    param(
+        [Parameter(Mandatory)][string]$TerminalDataPath,
+        [Parameter(Mandatory)][string]$RunId
+    )
+    # Keep the lock inside the bound data directory. Textual path hashes can be
+    # bypassed by reaching the same directory through a junction or symlink.
+    $lockPath = Join-Path $TerminalDataPath '.mql5-coding-smoke.data-lock'
+    try {
+        $stream = New-Object IO.FileStream(
+            $lockPath,
+            [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::ReadWrite,
+            [IO.FileShare]::None,
+            4096,
+            [IO.FileOptions]::DeleteOnClose
+        )
+    }
+    catch [IO.IOException] {
+        throw (
+            'BLOCKED: Another MQL5 Coding smoke run owns the terminal data lock, ' +
+            "or a stale lock remains after an abnormal shutdown. Do not remove it unless no matching run is active: $lockPath"
+        )
+    }
+
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($RunId)
+        $stream.SetLength(0)
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush()
+        return [pscustomobject]@{ path = $lockPath; stream = $stream }
+    }
+    catch {
+        $stream.Dispose()
+        throw
+    }
+}
+
+function Open-NewOutputDirectoryClaim {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$RunId
+    )
+
+    if (Test-Path -LiteralPath $Path) {
+        throw "OutputDirectory must not already exist: $Path"
+    }
+    $parent = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+        throw "OutputDirectory parent does not exist: $parent"
+    }
+
+    [IO.Directory]::CreateDirectory($Path) | Out-Null
+    $claimPath = Join-Path $Path '.mql5-coding-smoke.claim'
+    $ownerPath = Join-Path $Path '.mql5-coding-smoke.owner'
+    $stream = $null
+    try {
+        $stream = New-Object IO.FileStream(
+            $claimPath,
+            [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::ReadWrite,
+            [IO.FileShare]::None,
+            4096,
+            [IO.FileOptions]::DeleteOnClose
+        )
+        $entries = @(Get-ChildItem -LiteralPath $Path -Force)
+        if ($entries.Count -ne 1 -or
+            -not ([IO.Path]::GetFullPath($entries[0].FullName)).Equals(
+                [IO.Path]::GetFullPath($claimPath),
+                [StringComparison]::OrdinalIgnoreCase
+            )) {
+            throw "OutputDirectory was populated before exclusive ownership was established: $Path"
+        }
+
+        $bytes = [Text.Encoding]::UTF8.GetBytes($RunId)
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
+        $ownerText = $RunId + "`n"
+        Write-NewTextFile -Text $ownerText -Path $ownerPath -Encoding (New-Object Text.UTF8Encoding($false))
+        return [pscustomobject]@{
+            path = $claimPath
+            stream = $stream
+            owner_path = $ownerPath
+            owner_sha256 = Get-TextSha256 -Text $ownerText
+        }
+    }
+    catch {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+        throw "OutputDirectory could not be claimed exclusively: $Path. $($_.Exception.Message)"
+    }
+}
+
+function Copy-NewHashBoundFile {
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$Destination,
+        [Parameter(Mandatory)][string]$Kind,
+        [Parameter(Mandatory)]$Tracker
+    )
+    if (Test-Path -LiteralPath $Destination) {
+        throw "Refusing to overwrite an existing $Kind staging path: $Destination"
+    }
+    $parent = Split-Path -Parent $Destination
+    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+        [IO.Directory]::CreateDirectory($parent) | Out-Null
+    }
+    $input = $null
+    $output = $null
+    $record = $null
+    try {
+        $input = [IO.File]::Open($Source, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        $output = [IO.File]::Open($Destination, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        $record = [pscustomobject][ordered]@{
+            kind = $Kind
+            source_path = $Source
+            destination_path = $Destination
+            byte_length = [long]0
+            sha256 = $null
+            verified = $false
+        }
+        $Tracker.Add($record)
+        $input.CopyTo($output)
+        $output.Flush($true)
+        $output.Dispose()
+        $output = $null
+        $input.Dispose()
+        $input = $null
+
+        $sourceHash = Get-FileSha256 -Path $Source
+        $destinationHash = Get-FileSha256 -Path $Destination
+        if ($sourceHash -cne $destinationHash) {
+            throw "$Kind staging hash mismatch: $Destination"
+        }
+        $destinationInfo = Get-Item -LiteralPath $Destination
+        $record.byte_length = [long]$destinationInfo.Length
+        $record.sha256 = $destinationHash
+        $record.verified = $true
+        return $record
+    }
+    finally {
+        if ($null -ne $output) {
+            $output.Dispose()
+        }
+        if ($null -ne $input) {
+            $input.Dispose()
+        }
+    }
+}
+
+function Get-StreamSha256 {
+    param([Parameter(Mandatory)][IO.Stream]$Stream)
+
+    $Stream.Position = 0
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ConvertTo-Hex -Bytes $algorithm.ComputeHash($Stream)
+    }
+    finally {
+        $algorithm.Dispose()
+        $Stream.Position = 0
+    }
+}
+
+function Open-TerminalOriginReadLock {
+    param(
+        [Parameter(Mandatory)][string]$TerminalDataPath,
+        [Parameter(Mandatory)][string]$TerminalPath,
+        [Parameter(Mandatory)]$Tracker
+    )
+
+    $originPath = Join-Path $TerminalDataPath 'origin.txt'
+    $stream = $null
+    try {
+        $stream = [IO.File]::Open(
+            $originPath,
+            [IO.FileMode]::Open,
+            [IO.FileAccess]::Read,
+            [IO.FileShare]::Read
+        )
+        if ([long]$stream.Length -le 0 -or [long]$stream.Length -gt 32768) {
+            throw "Terminal origin file must contain 1-32768 bytes: $originPath"
+        }
+
+        $strictUtf8 = New-Object Text.UTF8Encoding($false, $true)
+        $reader = New-Object IO.StreamReader($stream, $strictUtf8, $true, 1024, $true)
+        try {
+            $originText = $reader.ReadToEnd()
+        }
+        finally {
+            $reader.Dispose()
+        }
+        $origin = ConvertFrom-TerminalOriginText -Text $originText -SourcePath $originPath
+        $terminalInstall = [IO.Path]::GetFullPath((Split-Path -Parent $TerminalPath)).TrimEnd('\', '/')
+        if (-not $origin.TrimEnd('\', '/').Equals(
+                $terminalInstall,
+                [StringComparison]::OrdinalIgnoreCase
+            )) {
+            throw "Terminal data origin changed or does not belong to '$TerminalPath': $originPath"
+        }
+
+        $stream.Position = 0
+        $record = [pscustomobject][ordered]@{
+            kind = 'terminal origin binding'
+            destination_path = $originPath
+            install_path = $origin
+            byte_length = [long]$stream.Length
+            sha256 = Get-StreamSha256 -Stream $stream
+            verified = $true
+        }
+        $Tracker.Add([pscustomobject][ordered]@{
+            record = $record
+            stream = $stream
+        })
+        $stream = $null
+        return $record
+    }
+    finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+    }
+}
+
+function Open-StagingReadLocks {
+    param(
+        [Parameter(Mandatory)]$Records,
+        [Parameter(Mandatory)]$Tracker
+    )
+
+    foreach ($record in $Records) {
+        if ($null -eq $record.PSObject.Properties['verified'] -or -not [bool]$record.verified) {
+            throw "Cannot lock an unverified $($record.kind) staging copy: $($record.destination_path)"
+        }
+        $stream = [IO.File]::Open(
+            [string]$record.destination_path,
+            [IO.FileMode]::Open,
+            [IO.FileAccess]::Read,
+            [IO.FileShare]::Read
+        )
+        $entry = [pscustomobject][ordered]@{
+            record = $record
+            stream = $stream
+        }
+        $Tracker.Add($entry)
+        $hash = Get-StreamSha256 -Stream $stream
+        if ([long]$stream.Length -ne [long]$record.byte_length -or $hash -cne [string]$record.sha256) {
+            throw "$($record.kind) staging bytes changed before the read lock was established: $($record.destination_path)"
+        }
+    }
+}
+
+function Open-VerifiedArtifactReadLock {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Kind,
+        [Parameter(Mandatory)]$Tracker
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Cannot lock a missing $Kind artifact: $Path"
+    }
+    $info = Get-Item -LiteralPath $Path
+    $record = [pscustomobject][ordered]@{
+        kind = $Kind
+        destination_path = $Path
+        byte_length = [long]$info.Length
+        sha256 = Get-FileSha256 -Path $Path
+        verified = $true
+    }
+    Open-StagingReadLocks -Records @($record) -Tracker $Tracker
+    return $record
+}
+
+function Get-PinnedStagingIntegrityFailures {
+    param([Parameter(Mandatory)]$Locks)
+
+    $failures = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($entry in $Locks) {
+        $record = $entry.record
+        $stream = $entry.stream
+        try {
+            $hash = Get-StreamSha256 -Stream $stream
+            if ([long]$stream.Length -ne [long]$record.byte_length -or $hash -cne [string]$record.sha256) {
+                $failures.Add("$($record.kind) staging bytes changed while its read lock was held: $($record.destination_path)")
+            }
+        }
+        catch {
+            $failures.Add("Could not verify locked $($record.kind) staging bytes '$($record.destination_path)': $($_.Exception.Message)")
+        }
+    }
+    return $failures.ToArray()
+}
+
+function Get-StreamPrefixSha256 {
+    param(
+        [Parameter(Mandatory)][IO.Stream]$Stream,
+        [Parameter(Mandatory)][long]$Length
+    )
+
+    if ($Length -lt 0 -or $Length -gt [long]$Stream.Length) {
+        throw "Cannot hash $Length bytes from a stream of length $($Stream.Length)."
+    }
+    $Stream.Position = 0
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    $buffer = New-Object byte[] 1048576
+    $remaining = $Length
+    try {
+        while ($remaining -gt 0) {
+            $requested = [int][Math]::Min([long]$buffer.Length, $remaining)
+            $read = $Stream.Read($buffer, 0, $requested)
+            if ($read -le 0) {
+                throw "Stream ended before the requested $Length-byte prefix could be hashed."
+            }
+            $null = $algorithm.TransformBlock($buffer, 0, $read, $buffer, 0)
+            $remaining -= $read
+        }
+        $empty = New-Object byte[] 0
+        $null = $algorithm.TransformFinalBlock($empty, 0, 0)
+        return ConvertTo-Hex -Bytes $algorithm.Hash
+    }
+    finally {
+        $algorithm.Dispose()
+        $Stream.Position = 0
+    }
+}
+
+function Get-StagingIntegrityFailures {
+    param([Parameter(Mandatory)]$Records)
+    $failures = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($record in $Records) {
+        $path = [string]$record.destination_path
+        if ($null -eq $record.PSObject.Properties['verified'] -or -not [bool]$record.verified) {
+            $failures.Add("$($record.kind) staging copy was not fully verified: $path")
+            continue
+        }
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            $failures.Add("$($record.kind) staging file is missing: $path")
+            continue
+        }
+        try {
+            $info = Get-Item -LiteralPath $path
+            $hash = Get-FileSha256 -Path $path
+            if ([long]$info.Length -ne [long]$record.byte_length -or $hash -cne [string]$record.sha256) {
+                $failures.Add("$($record.kind) staging bytes changed: $path")
+            }
+        }
+        catch {
+            $failures.Add("Could not verify $($record.kind) staging bytes '$path': $($_.Exception.Message)")
+        }
+    }
+    return $failures.ToArray()
+}
+
+function Get-JournalSnapshot {
+    param([Parameter(Mandatory)][string]$RootPath)
+    $snapshot = @{}
+    if (-not (Test-Path -LiteralPath $RootPath -PathType Container)) {
+        return $snapshot
+    }
+    foreach ($file in Get-ChildItem -LiteralPath $RootPath -File -Filter '*.log') {
+        $stream = [IO.File]::Open(
+            $file.FullName,
+            [IO.FileMode]::Open,
+            [IO.FileAccess]::Read,
+            [IO.FileShare]::ReadWrite
+        )
+        try {
+            $byteLength = [long]$stream.Length
+            $prefixHash = Get-StreamPrefixSha256 -Stream $stream -Length $byteLength
+        }
+        finally {
+            $stream.Dispose()
+        }
+        $snapshot[$file.FullName.ToLowerInvariant()] = [pscustomobject]@{
+            path = $file.FullName
+            byte_length = $byteLength
+            prefix_sha256 = $prefixHash
+        }
+    }
+    return $snapshot
+}
+
+function Read-ExactBytes {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][long]$Offset,
+        [Parameter(Mandatory)][int]$Length
+    )
+    $bytes = New-Object byte[] $Length
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+    try {
+        $null = $stream.Seek($Offset, [IO.SeekOrigin]::Begin)
+        $readTotal = 0
+        while ($readTotal -lt $Length) {
+            $read = $stream.Read($bytes, $readTotal, $Length - $readTotal)
+            if ($read -le 0) {
+                throw "Journal ended while reading appended bytes: $Path"
+            }
+            $readTotal += $read
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+    return $bytes
+}
+
+function Read-ExactBytesFromStream {
+    param(
+        [Parameter(Mandatory)][IO.Stream]$Stream,
+        [Parameter(Mandatory)][long]$Offset,
+        [Parameter(Mandatory)][int]$Length,
+        [Parameter(Mandatory)][string]$Path
+    )
+
+    $bytes = New-Object byte[] $Length
+    $null = $Stream.Seek($Offset, [IO.SeekOrigin]::Begin)
+    $readTotal = 0
+    while ($readTotal -lt $Length) {
+        $read = $Stream.Read($bytes, $readTotal, $Length - $readTotal)
+        if ($read -le 0) {
+            throw "Journal ended while reading appended bytes: $Path"
+        }
+        $readTotal += $read
+    }
+    return $bytes
+}
+
+function Read-JournalDelta {
+    param(
+        [Parameter(Mandatory)][hashtable]$Before,
+        [Parameter(Mandatory)][string]$RootPath,
+        [Parameter(Mandatory)][string]$LogicalName,
+        [Parameter(Mandatory)][int]$MaximumBytes
+    )
+    $after = Get-JournalSnapshot -RootPath $RootPath
+    $plans = New-Object 'System.Collections.Generic.List[object]'
+    $total = [long]0
+
+    foreach ($beforeKey in $Before.Keys) {
+        if (-not $after.ContainsKey($beforeKey)) {
+            throw "$LogicalName journal disappeared during the run: $($Before[$beforeKey].path)"
+        }
+    }
+
+    foreach ($entry in @($after.Values | Sort-Object path)) {
+        $key = ([string]$entry.path).ToLowerInvariant()
+        $offset = [long]0
+        $beforePrefixHash = $null
+        if ($Before.ContainsKey($key)) {
+            $offset = [long]$Before[$key].byte_length
+            $beforePrefixHash = [string]$Before[$key].prefix_sha256
+        }
+        if ([long]$entry.byte_length -lt $offset) {
+            throw "$LogicalName journal was truncated during the run: $($entry.path)"
+        }
+        $length = [long]$entry.byte_length - $offset
+        if ($length -le 0) {
+            if ($offset -gt 0 -and [string]$entry.prefix_sha256 -cne $beforePrefixHash) {
+                throw "$LogicalName journal bytes were replaced or modified during the run: $($entry.path)"
+            }
+            continue
+        }
+        $total += $length
+        $plans.Add([pscustomobject]@{
+            path = $entry.path
+            offset = $offset
+            byte_length = $length
+            before_prefix_sha256 = $beforePrefixHash
+            after_byte_length = [long]$entry.byte_length
+            after_sha256 = [string]$entry.prefix_sha256
+        })
+    }
+
+    if ($total -gt $MaximumBytes) {
+        return [pscustomobject][ordered]@{
+            logical_name = $LogicalName
+            root_path = $RootPath
+            appended_byte_length = $total
+            limit_exceeded = $true
+            records = @()
+            text = ''
+        }
+    }
+
+    $records = New-Object 'System.Collections.Generic.List[object]'
+    $textParts = New-Object 'System.Collections.Generic.List[string]'
+    $unicode = New-Object Text.UnicodeEncoding($false, $true, $true)
+    foreach ($plan in $plans) {
+        if ([long]$plan.byte_length -gt [int]::MaxValue) {
+            throw "$LogicalName appended segment is too large to inspect safely: $($plan.path)"
+        }
+        $stream = [IO.File]::Open(
+            [string]$plan.path,
+            [IO.FileMode]::Open,
+            [IO.FileAccess]::Read,
+            [IO.FileShare]::Read
+        )
+        try {
+            if ([long]$stream.Length -ne [long]$plan.after_byte_length) {
+                throw "$LogicalName journal changed after its post-run snapshot: $($plan.path)"
+            }
+            $afterHash = Get-StreamPrefixSha256 -Stream $stream -Length ([long]$plan.after_byte_length)
+            if ($afterHash -cne [string]$plan.after_sha256) {
+                throw "$LogicalName journal bytes changed after its post-run snapshot: $($plan.path)"
+            }
+            if ([long]$plan.offset -gt 0) {
+                $prefixHash = Get-StreamPrefixSha256 -Stream $stream -Length ([long]$plan.offset)
+                if ($prefixHash -cne [string]$plan.before_prefix_sha256) {
+                    throw "$LogicalName journal prefix was replaced or modified during the run: $($plan.path)"
+                }
+            }
+            $bytes = Read-ExactBytesFromStream `
+                -Stream $stream `
+                -Offset ([long]$plan.offset) `
+                -Length ([int]$plan.byte_length) `
+                -Path ([string]$plan.path)
+        }
+        finally {
+            $stream.Dispose()
+        }
+        $start = 0
+        if ([long]$plan.offset -eq 0 -and $bytes.Length -ge 2 -and $bytes[0] -eq 0xff -and $bytes[1] -eq 0xfe) {
+            $start = 2
+        }
+        if ((($bytes.Length - $start) % 2) -ne 0) {
+            throw "$LogicalName appended UTF-16LE journal segment has an odd byte length: $($plan.path)"
+        }
+        $decoded = $unicode.GetString($bytes, $start, $bytes.Length - $start)
+        $textParts.Add($decoded)
+
+        $algorithm = [Security.Cryptography.SHA256]::Create()
+        try {
+            $hash = ConvertTo-Hex -Bytes $algorithm.ComputeHash($bytes)
+        }
+        finally {
+            $algorithm.Dispose()
+        }
+        $records.Add([pscustomobject][ordered]@{
+            path = [string]$plan.path
+            source_offset = [long]$plan.offset
+            byte_length = [long]$plan.byte_length
+            sha256 = $hash
+        })
+    }
+
+    return [pscustomobject][ordered]@{
+        logical_name = $LogicalName
+        root_path = $RootPath
+        appended_byte_length = $total
+        limit_exceeded = $false
+        records = $records.ToArray()
+        text = ($textParts -join "`r`n")
+    }
+}
+
+function Test-ContainsText {
+    param(
+        [AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory)][string]$Needle,
+        [switch]$CaseSensitive
+    )
+    $comparison = if ($CaseSensitive) {
+        [StringComparison]::Ordinal
+    }
+    else {
+        [StringComparison]::OrdinalIgnoreCase
+    }
+    return $Text.IndexOf($Needle, $comparison) -ge 0
+}
+
+function Get-TextIndex {
+    param(
+        [AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory)][string]$Needle,
+        [int]$StartIndex = 0,
+        [switch]$CaseSensitive
+    )
+
+    if ($StartIndex -lt 0 -or $StartIndex -gt $Text.Length) {
+        return -1
+    }
+    $comparison = if ($CaseSensitive) {
+        [StringComparison]::Ordinal
+    }
+    else {
+        [StringComparison]::OrdinalIgnoreCase
+    }
+    return $Text.IndexOf($Needle, $StartIndex, $comparison)
+}
+
+function Get-TextLastIndexBefore {
+    param(
+        [AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory)][string]$Needle,
+        [Parameter(Mandatory)][int]$EndExclusive,
+        [switch]$CaseSensitive
+    )
+
+    if ($EndExclusive -le 0 -or $EndExclusive -gt $Text.Length) {
+        return -1
+    }
+    $comparison = if ($CaseSensitive) {
+        [StringComparison]::Ordinal
+    }
+    else {
+        [StringComparison]::OrdinalIgnoreCase
+    }
+    return $Text.LastIndexOf($Needle, $EndExclusive - 1, $EndExclusive, $comparison)
+}
+
+function Protect-JournalLine {
+    param(
+        [Parameter(Mandatory)][string]$Line,
+        [string[]]$SensitiveValues = @()
+    )
+    $redacted = $Line
+    $orderedSensitiveValues = @(
+        $SensitiveValues |
+            Where-Object { -not [string]::IsNullOrEmpty($_) } |
+            Sort-Object { $_.Length } -Descending
+    )
+    if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+        $redacted = [regex]::Replace(
+            $redacted,
+            [regex]::Escape($env:USERPROFILE),
+            '<USERPROFILE>',
+            [Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
+    }
+    $redacted = [regex]::Replace($redacted, '(?<![0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])', '<IP>')
+    $redacted = [regex]::Replace(
+        $redacted,
+        '(?i)\b(account|login)\s*[:=]?\s*[0-9]{5,}\b',
+        '$1 <REDACTED>'
+    )
+    $redacted = [regex]::Replace(
+        $redacted,
+        '(?i)\b(balance|equity|profit)\s+[-+]?[0-9]+(?:\.[0-9]+)?',
+        '$1 <REDACTED>'
+    )
+    $redacted = [regex]::Replace(
+        $redacted,
+        '(?i)\b(community|username|user)\s*[:=]\s*\S+',
+        '$1=<REDACTED>'
+    )
+    $redacted = [regex]::Replace(
+        $redacted,
+        '(?i)\bAuthorization\b.*$',
+        'Authorization=<REDACTED>'
+    )
+    $redacted = [regex]::Replace(
+        $redacted,
+        '(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+',
+        'Bearer <REDACTED>'
+    )
+    $redacted = [regex]::Replace(
+        $redacted,
+        '(?i)(?<![A-Za-z0-9_])(?:--?)?(password|passwd|pwd|access[_-]?token|refresh[_-]?token|token|api[_ -]?key|client[_-]?secret|secret|authorization|auth)\b["'']?(?:\s*[:=]\s*|\s+)(?:"[^"\r\n]*"|''[^''\r\n]*''|[^\s,;]+)',
+        '$1=<REDACTED>'
+    )
+    $redacted = [regex]::Replace(
+        $redacted,
+        '(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b',
+        '<EMAIL>'
+    )
+    $redacted = [regex]::Replace($redacted, '(?<![A-Za-z0-9])[0-9]{7,}(?![A-Za-z0-9])', '<NUMBER>')
+    foreach ($sensitiveValue in $orderedSensitiveValues) {
+        $redacted = $redacted.Replace($sensitiveValue, '')
+    }
+    foreach ($sensitiveValue in $orderedSensitiveValues) {
+        if ($redacted.Contains($sensitiveValue)) {
+            return ''
+        }
+    }
+    return $redacted
+}
+
+function Select-JournalEvidence {
+    param(
+        [AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory)][string[]]$Patterns,
+        [string[]]$SensitiveValues = @()
+    )
+    $selected = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($line in ($Text -split '\r?\n')) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+        $matched = $false
+        foreach ($pattern in $Patterns) {
+            if ($line -match $pattern) {
+                $matched = $true
+                break
+            }
+        }
+        if ($matched) {
+            $safe = Protect-JournalLine -Line $line -SensitiveValues $SensitiveValues
+            if (-not [string]::IsNullOrWhiteSpace($safe) -and -not $selected.Contains($safe)) {
+                $selected.Add($safe)
+            }
+        }
+        if ($selected.Count -ge 60) {
+            break
+        }
+    }
+    return $selected.ToArray()
+}
+
+function Get-SpawnedProcessIdentity {
+    param(
+        [Parameter(Mandatory)][Diagnostics.Process]$Process,
+        [Parameter(Mandatory)][string]$ExecutablePath
+    )
+
+    try {
+        $creationUtcTicks = [long]$Process.StartTime.ToUniversalTime().Ticks
+        $sessionId = [int]$Process.SessionId
+    }
+    catch {
+        throw "Cannot capture the spawned process identity for PID $($Process.Id): $($_.Exception.Message)"
+    }
+    return [pscustomobject][ordered]@{
+        process_id = [int]$Process.Id
+        parent_process_id = [int]$PID
+        creation_utc_ticks = $creationUtcTicks
+        session_id = $sessionId
+        executable_path = [IO.Path]::GetFullPath($ExecutablePath)
+    }
+}
+
+function Write-NewTextFile {
+    param(
+        [Parameter(Mandatory)][string]$Text,
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][Text.Encoding]$Encoding
+    )
+
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $preamble = $Encoding.GetPreamble()
+        if ($preamble.Length -gt 0) {
+            $stream.Write($preamble, 0, $preamble.Length)
+        }
+        $bytes = $Encoding.GetBytes($Text)
+        if ($bytes.Length -gt 0) {
+            $stream.Write($bytes, 0, $bytes.Length)
+        }
+        $stream.Flush($true)
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
+function Write-JsonFile {
+    param(
+        [Parameter(Mandatory)]$Value,
+        [Parameter(Mandatory)][string]$Path
+    )
+    $json = $Value | ConvertTo-Json -Depth 12
+    $utf8 = New-Object Text.UTF8Encoding($false)
+    Write-NewTextFile -Text ($json + "`n") -Path $Path -Encoding $utf8
+}
+
+$runId = '{0}-{1}' -f ([datetime]::UtcNow.ToString('yyyyMMddTHHmmssZ')), ([guid]::NewGuid().ToString('N').Substring(0, 12))
+$startedUtc = [datetimeoffset]::UtcNow
+$errors = New-Object 'System.Collections.Generic.List[string]'
+$warnings = New-Object 'System.Collections.Generic.List[string]'
+$cleanupRemoved = New-Object 'System.Collections.Generic.List[string]'
+$cleanupPreserved = New-Object 'System.Collections.Generic.List[string]'
+$cleanupErrors = New-Object 'System.Collections.Generic.List[string]'
+$hashBoundStaging = New-Object 'System.Collections.Generic.List[object]'
+$outputArtifactIntegrityRecords = New-Object 'System.Collections.Generic.List[object]'
+$stagingReadLocks = New-Object 'System.Collections.Generic.List[object]'
+$generatedOwnedPaths = New-Object 'System.Collections.Generic.List[string]'
+$createdDirectories = New-Object 'System.Collections.Generic.List[string]'
+$lock = $null
+$outputClaim = $null
+$process = $null
+$jobLaunch = $null
+$ownedProcessTreeTerminationVerified = $true
+$stagingReadLocksReleased = $true
+$stagingReadLockAcquisitionCompleted = $false
+$unsafePostLaunchIsolation = $false
+$outputCreated = $false
+$resultPath = $null
+$resultWritten = $false
+$exitCode = 2
+
+$result = [ordered]@{
+    schema_version = 2
+    run_id = $runId
+    status = 'preparing'
+    primary_status_before_cleanup = $null
+    started_utc = $startedUtc.ToString("yyyy-MM-ddTHH:mm:ss.fffffff'Z'")
+    ended_utc = $null
+    duration_milliseconds = 0
+    preflight_only = [bool]$PreflightOnly
+    execute_requested = [bool]$Execute
+    inputs = [ordered]@{
+        expert_path = $ExpertPath
+        expected_expert_sha256 = if ([string]::IsNullOrWhiteSpace($ExpectedExpertSha256)) { $null } else { $ExpectedExpertSha256 }
+        set_path = if ([string]::IsNullOrWhiteSpace($SetPath)) { $null } else { $SetPath }
+        use_expert_defaults = [bool]$UseExpertDefaults
+        symbol = $Symbol
+        period = $Period
+        from_date = $FromDate
+        to_date = $ToDate
+        model = $Model
+        deposit = $Deposit
+        currency = $Currency
+        leverage = $Leverage
+        execution_mode = $ExecutionMode
+        timeout_seconds = $TimeoutSeconds
+        max_journal_append_bytes = $MaxJournalAppendBytes
+        expected_log_marker_count = @($ExpectedLogMarker).Count
+        expected_log_marker_file = if ([string]::IsNullOrWhiteSpace($ExpectedLogMarkerFile)) { $null } else { $ExpectedLogMarkerFile }
+        expected_log_marker_file_sha256 = $null
+        expected_log_marker_sha256 = @()
+        expected_log_marker_aggregate_sha256 = $null
+    }
+    binding = $null
+    safety = [ordered]@{
+        strategy_tester_requested = [bool]$Execute
+        saved_account_risk_acknowledged = [bool]$AcknowledgeSavedAccountRisk
+        saved_terminal_state_isolation_verified = $false
+        optimization = $false
+        visual_mode = $false
+        use_local_agents = $true
+        use_remote_agents = $false
+        use_cloud_agents = $false
+        live_trading_disabled_in_startup_config = $true
+        startup_config_effects_chm_verified = $false
+        strict_offline_terminal = $false
+        process_job_containment = $true
+        staging_read_locks = $true
+        output_artifact_read_locks = $true
+        terminal_process_checks_point_in_time = $true
+        execution_staging_auto_cleanup = $false
+        preflight_staging_auto_cleanup = $false
+        untrusted_code_sandbox = $false
+        notice = 'The generated startup file requests local-only testing, disabled live trading, and terminal shutdown, but the effects of those startup keys are not verified in the installed MQL5 CHM. MT5 may initialize its saved broker account before the Strategy Tester starts. This runner does not attach the EA to a chart or call a live-order API, but it is not a security sandbox for untrusted EX5 code. The terminal is created suspended, assigned to a kill-on-close Windows Job Object, and resumed only after identity checks. Terminal-process discovery is point-in-time and cannot prevent a separately launched terminal from starting and exiting between checks.'
+    }
+    artifacts = [ordered]@{}
+    process = [ordered]@{
+        execution_attempted = $false
+        process_created = $false
+        process_id = $null
+        resumed = $false
+        suspended_launch_cleanup = $null
+        exit_code = $null
+        timed_out = $false
+        job_containment_established = $false
+        job_empty_verified = $false
+        post_start_identity_verified = $false
+        identity_source = $null
+        post_exit_no_matching_terminal = $false
+        post_exit_no_potential_descendants = $false
+        potential_descendant_process_ids = @()
+    }
+    evidence = [ordered]@{}
+    errors = $errors
+    warnings = $warnings
+    cleanup = [ordered]@{
+        execution_staging_preserved = $false
+        preflight_staging_preserved = $false
+        removed = $cleanupRemoved
+        preserved = $cleanupPreserved
+        errors = $cleanupErrors
+    }
+}
+
+try {
+    if ($null -ne $nativeTypeLoadError) {
+        throw "Native process helper could not be loaded: $nativeTypeLoadError"
+    }
+    if ($args.Count -gt 0) {
+        throw "Unrecognized command-line argument count: $($args.Count)."
+    }
+    if ([bool]$Execute -eq [bool]$PreflightOnly) {
+        throw 'Select exactly one mode: -Execute for a real tester run, or -PreflightOnly for validation without launching MT5.'
+    }
+    $hasSetPath = -not [string]::IsNullOrWhiteSpace([string]$SetPath)
+    if ($hasSetPath -eq [bool]$UseExpertDefaults) {
+        throw 'Select exactly one EA input source: -SetPath for an explicit .set preset, or -UseExpertDefaults after explicitly accepting the compiled EA defaults.'
+    }
+    if ([bool]$Execute -and -not [bool]$AcknowledgeSavedAccountRisk) {
+        throw '-Execute requires -AcknowledgeSavedAccountRisk after the user explicitly confirms that MT5 may initialize its saved broker account and terminal state.'
+    }
+    if ([bool]$PreflightOnly -and [bool]$AcknowledgeSavedAccountRisk) {
+        throw '-AcknowledgeSavedAccountRisk is valid only with -Execute.'
+    }
+
+    foreach ($required in @(
+            [pscustomobject]@{ name = 'ExpertPath'; value = $ExpertPath },
+            [pscustomobject]@{ name = 'Symbol'; value = $Symbol },
+            [pscustomobject]@{ name = 'Period'; value = $Period },
+            [pscustomobject]@{ name = 'FromDate'; value = $FromDate },
+            [pscustomobject]@{ name = 'ToDate'; value = $ToDate },
+            [pscustomobject]@{ name = 'Model'; value = $Model },
+            [pscustomobject]@{ name = 'Deposit'; value = $Deposit },
+            [pscustomobject]@{ name = 'Currency'; value = $Currency },
+            [pscustomobject]@{ name = 'Leverage'; value = $Leverage },
+            [pscustomobject]@{ name = 'ExecutionMode'; value = $ExecutionMode },
+            [pscustomobject]@{ name = 'OutputDirectory'; value = $OutputDirectory }
+        )) {
+        if ($null -eq $required.value -or [string]::IsNullOrWhiteSpace([string]$required.value)) {
+            throw "$($required.name) is required."
+        }
+    }
+
+    $modelValue = 0
+    if (-not [int]::TryParse([string]$Model, [Globalization.NumberStyles]::Integer, [Globalization.CultureInfo]::InvariantCulture, [ref]$modelValue) -or
+        $modelValue -lt 0 -or $modelValue -gt 4) {
+        throw 'Model must be an integer from 0 through 4.'
+    }
+    $timeoutValue = 0
+    if (-not [int]::TryParse([string]$TimeoutSeconds, [Globalization.NumberStyles]::Integer, [Globalization.CultureInfo]::InvariantCulture, [ref]$timeoutValue) -or
+        $timeoutValue -lt 10 -or $timeoutValue -gt 86400) {
+        throw 'TimeoutSeconds must be an integer from 10 through 86400.'
+    }
+    $journalLimitValue = 0
+    if (-not [int]::TryParse([string]$MaxJournalAppendBytes, [Globalization.NumberStyles]::Integer, [Globalization.CultureInfo]::InvariantCulture, [ref]$journalLimitValue) -or
+        $journalLimitValue -lt 1048576 -or $journalLimitValue -gt 268435456) {
+        throw 'MaxJournalAppendBytes must be an integer from 1048576 through 268435456.'
+    }
+    $depositText = [string]$Deposit
+    $depositValue = [decimal]::Zero
+    if ($depositText -cnotmatch '\A[0-9]+(?:\.[0-9]+)?\z' -or
+        -not [decimal]::TryParse($depositText, [Globalization.NumberStyles]::AllowDecimalPoint, [Globalization.CultureInfo]::InvariantCulture, [ref]$depositValue) -or
+        $depositValue -lt 1 -or $depositValue -gt 1000000000) {
+        throw "Deposit must use invariant digits with an optional '.' fractional part and be from 1 through 1000000000."
+    }
+    $leverageValue = 0
+    if (-not [int]::TryParse([string]$Leverage, [Globalization.NumberStyles]::Integer, [Globalization.CultureInfo]::InvariantCulture, [ref]$leverageValue) -or
+        $leverageValue -lt 1 -or $leverageValue -gt 5000) {
+        throw 'Leverage must be an integer from 1 through 5000.'
+    }
+    $executionModeValue = 0
+    if (-not [int]::TryParse([string]$ExecutionMode, [Globalization.NumberStyles]::Integer, [Globalization.CultureInfo]::InvariantCulture, [ref]$executionModeValue) -or
+        $executionModeValue -lt -1 -or $executionModeValue -gt 10000) {
+        throw 'ExecutionMode must be an integer from -1 through 10000.'
+    }
+    Assert-SafeIniValue -Value ([string]$Currency) -Name 'Currency' -MaximumLength 8
+    if ([string]$Currency -cnotmatch '\A[A-Z]{3,8}\z') {
+        throw 'Currency must contain 3-8 uppercase letters.'
+    }
+
+    $Model = $modelValue
+    $TimeoutSeconds = $timeoutValue
+    $MaxJournalAppendBytes = $journalLimitValue
+    $Deposit = $depositValue
+    $Leverage = $leverageValue
+    $ExecutionMode = $executionModeValue
+    $Currency = [string]$Currency
+    $result.inputs.model = $Model
+    $result.inputs.deposit = $Deposit
+    $result.inputs.currency = $Currency
+    $result.inputs.leverage = $Leverage
+    $result.inputs.execution_mode = $ExecutionMode
+    $result.inputs.timeout_seconds = $TimeoutSeconds
+    $result.inputs.max_journal_append_bytes = $MaxJournalAppendBytes
+
+    $expectedExpertHash = $null
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedExpertSha256)) {
+        if ([string]$ExpectedExpertSha256 -cnotmatch '\A[0-9A-Fa-f]{64}\z') {
+            throw 'ExpectedExpertSha256 must contain exactly 64 hexadecimal characters.'
+        }
+        $expectedExpertHash = ([string]$ExpectedExpertSha256).ToLowerInvariant()
+        $result.inputs.expected_expert_sha256 = $expectedExpertHash
+    }
+
+    Assert-SafeIniValue -Value $Symbol -Name 'Symbol' -MaximumLength 64
+    if ($Symbol -match '[\\/]') {
+        throw 'Symbol cannot contain a path separator.'
+    }
+    Assert-SafeIniValue -Value $Period -Name 'Period' -MaximumLength 16
+    if ($Period -cnotmatch '\A[A-Za-z0-9_]+\z') {
+        throw 'Period must contain only letters, numbers, or underscores.'
+    }
+
+    $from = [datetime]::MinValue
+    $to = [datetime]::MinValue
+    $culture = [Globalization.CultureInfo]::InvariantCulture
+    if (-not [datetime]::TryParseExact($FromDate, 'yyyy.MM.dd', $culture, [Globalization.DateTimeStyles]::None, [ref]$from)) {
+        throw "FromDate is not a valid date: $FromDate"
+    }
+    if (-not [datetime]::TryParseExact($ToDate, 'yyyy.MM.dd', $culture, [Globalization.DateTimeStyles]::None, [ref]$to)) {
+        throw "ToDate is not a valid date: $ToDate"
+    }
+    if ($to -le $from) {
+        throw 'ToDate must be later than FromDate.'
+    }
+
+    $markers = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($marker in @($ExpectedLogMarker)) {
+        Assert-ExpectedApplicationMarker -Marker $marker -SourceName 'Each ExpectedLogMarker'
+        if (-not $markers.Contains($marker)) {
+            $markers.Add($marker)
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedLogMarkerFile)) {
+        $markerFile = Resolve-ExistingFile -Path $ExpectedLogMarkerFile -Name 'ExpectedLogMarkerFile'
+        $markerFileStream = [IO.File]::Open(
+            $markerFile,
+            [IO.FileMode]::Open,
+            [IO.FileAccess]::Read,
+            [IO.FileShare]::Read
+        )
+        try {
+            if ($markerFileStream.Length -gt 65536) {
+                throw 'ExpectedLogMarkerFile cannot exceed 65536 bytes.'
+            }
+            $markerFileBytes = New-Object byte[] ([int]$markerFileStream.Length)
+            $markerFileBytesRead = 0
+            while ($markerFileBytesRead -lt $markerFileBytes.Length) {
+                $read = $markerFileStream.Read(
+                    $markerFileBytes,
+                    $markerFileBytesRead,
+                    $markerFileBytes.Length - $markerFileBytesRead
+                )
+                if ($read -le 0) {
+                    throw 'ExpectedLogMarkerFile ended before its declared byte length was read.'
+                }
+                $markerFileBytesRead += $read
+            }
+        }
+        finally {
+            $markerFileStream.Dispose()
+        }
+        $strictUtf8 = New-Object Text.UTF8Encoding($false, $true)
+        $markerFileOffset = 0
+        if ($markerFileBytes.Length -ge 3 -and
+            $markerFileBytes[0] -eq 0xef -and
+            $markerFileBytes[1] -eq 0xbb -and
+            $markerFileBytes[2] -eq 0xbf) {
+            $markerFileOffset = 3
+        }
+        $markerFileText = $strictUtf8.GetString(
+            $markerFileBytes,
+            $markerFileOffset,
+            $markerFileBytes.Length - $markerFileOffset
+        )
+        foreach ($marker in ($markerFileText -split '\r\n|\n|\r')) {
+            if ([string]::IsNullOrWhiteSpace($marker)) {
+                continue
+            }
+            Assert-ExpectedApplicationMarker `
+                -Marker $marker `
+                -SourceName 'Each non-empty ExpectedLogMarkerFile line'
+            if (-not $markers.Contains($marker)) {
+                $markers.Add($marker)
+            }
+        }
+        if ($markers.Count -eq 0) {
+            throw 'ExpectedLogMarkerFile contains no non-empty markers.'
+        }
+        $result.inputs.expected_log_marker_file = $markerFile
+        $result.inputs.expected_log_marker_file_sha256 = Get-BytesSha256 -Bytes $markerFileBytes
+    }
+    if ($markers.Count -gt 64) {
+        throw 'No more than 64 unique expected log markers are allowed.'
+    }
+    $markerCharacterCount = 0
+    foreach ($marker in $markers) {
+        $markerCharacterCount += $marker.Length
+    }
+    if ($markerCharacterCount -gt 8192) {
+        throw 'Expected log markers cannot exceed 8192 aggregate characters.'
+    }
+    $markerHashes = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($marker in $markers) {
+        $markerHashes.Add((Get-TextSha256 -Text $marker))
+    }
+    $result.inputs.expected_log_marker_count = $markers.Count
+    $result.inputs.expected_log_marker_sha256 = $markerHashes.ToArray()
+    if ($markerHashes.Count -gt 0) {
+        $aggregateMaterial = "mql5-coding-markers-v1`n" + (@($markerHashes | Sort-Object) -join "`n")
+        $result.inputs.expected_log_marker_aggregate_sha256 = Get-TextSha256 -Text $aggregateMaterial
+    }
+
+    $expert = Resolve-ExistingFile -Path $ExpertPath -Name 'ExpertPath'
+    if ([IO.Path]::GetExtension($expert) -ine '.ex5') {
+        throw "ExpertPath must identify a compiled .ex5 file: $expert"
+    }
+    if ((Get-Item -LiteralPath $expert).Length -le 0) {
+        throw "ExpertPath is empty: $expert"
+    }
+
+    $preset = $null
+    $presetInfo = $null
+    $presetHash = $null
+    if (-not [string]::IsNullOrWhiteSpace($SetPath)) {
+        $preset = Resolve-ExistingFile -Path $SetPath -Name 'SetPath'
+        if ([IO.Path]::GetExtension($preset) -ine '.set') {
+            throw "SetPath must identify a .set file: $preset"
+        }
+        $presetInfo = Get-Item -LiteralPath $preset
+        $presetHash = Get-FileSha256 -Path $preset
+    }
+
+    if (-not [IO.Path]::IsPathRooted($OutputDirectory)) {
+        throw 'OutputDirectory must be an absolute path.'
+    }
+    $output = [IO.Path]::GetFullPath($OutputDirectory)
+    if (Test-Path -LiteralPath $output) {
+        throw "OutputDirectory must not already exist: $output"
+    }
+    $outputParent = Split-Path -Parent $output
+    if (-not (Test-Path -LiteralPath $outputParent -PathType Container)) {
+        throw "OutputDirectory parent does not exist: $outputParent"
+    }
+    $outputClaim = Open-NewOutputDirectoryClaim -Path $output -RunId $runId
+    $outputCreated = $true
+    $resultPath = Join-Path $output 'smoke-result.json'
+
+    $binding = Resolve-TerminalBinding -RequestedTerminalPath $TerminalPath -RequestedDataPath $TerminalDataPath
+    $terminal = [string]$binding.terminal_path
+    $data = [string]$binding.terminal_data_path
+    $mql5 = Join-Path $data 'MQL5'
+    $expertsRoot = Join-Path $mql5 'Experts'
+    $profilesRoot = Join-Path $mql5 'Profiles\Tester'
+    $terminalLogRoot = Join-Path $data 'logs'
+    $testerLogRoot = Join-Path $data 'Tester\logs'
+    foreach ($requiredDirectory in @($expertsRoot, $profilesRoot, $terminalLogRoot, $testerLogRoot)) {
+        if (-not (Test-Path -LiteralPath $requiredDirectory -PathType Container)) {
+            throw "Required MT5 directory is missing: $requiredDirectory"
+        }
+    }
+
+    $result.binding = [ordered]@{
+        terminal_path = $terminal
+        terminal_data_path = $data
+        output_directory = $output
+        terminal_origin = $null
+    }
+
+    $lock = Open-DataDirectoryLock -TerminalDataPath $data -RunId $runId
+    $stagingReadLocksReleased = $false
+    $originRecord = Open-TerminalOriginReadLock `
+        -TerminalDataPath $data `
+        -TerminalPath $terminal `
+        -Tracker $stagingReadLocks
+    $result.binding.terminal_origin = [ordered]@{
+        path = $originRecord.destination_path
+        install_path = $originRecord.install_path
+        byte_length = [long]$originRecord.byte_length
+        sha256 = $originRecord.sha256
+        read_lock_acquired = $true
+    }
+    $conflicts = @(Get-MatchingTerminalProcesses -ExecutablePath $terminal)
+    if ($conflicts.Count -gt 0) {
+        $pids = @($conflicts | ForEach-Object { $_.process_id })
+        throw "BLOCKED: The bound MT5 terminal is already running (PID(s) $($pids -join ', ')). Close it before an isolated smoke run; the runner will not stop it."
+    }
+
+    $expertHash = Get-FileSha256 -Path $expert
+    if ($null -ne $expectedExpertHash -and $expertHash -cne $expectedExpertHash) {
+        throw "ExpertPath SHA-256 does not match ExpectedExpertSha256: $expert"
+    }
+    $expertInfo = Get-Item -LiteralPath $expert
+    $expertLeaf = [IO.Path]::GetFileName($expert)
+    Assert-SafeIniValue -Value $expertLeaf -Name 'Expert file name' -MaximumLength 128
+    $expertStageRoot = Join-Path $expertsRoot 'CodexSmoke'
+    $expertStageDirectory = Join-Path $expertStageRoot $runId
+    $expertStage = Join-Path $expertStageDirectory $expertLeaf
+    $expertRelative = "CodexSmoke\$runId\$expertLeaf"
+    Assert-SafeIniValue -Value $expertRelative -Name 'Expert relative path' -MaximumLength 220
+
+    $presetLeaf = $null
+    $presetStage = $null
+    if ($null -ne $preset) {
+        $presetLeaf = "CodexSmoke-$runId.set"
+        $presetStage = Join-Path $profilesRoot $presetLeaf
+    }
+
+    $configStage = Join-Path $data "CodexSmoke-$runId.ini"
+    $reportLeaf = "CodexSmokeReport-$runId.htm"
+    $reportStage = Join-Path $data $reportLeaf
+    $reportCompanionStages = @(
+        foreach ($suffix in @('.png', '-hst.png', '-mfemae.png', '-holding.png')) {
+            Join-Path $data ("CodexSmokeReport-$runId$suffix")
+        }
+    )
+    $allMt5StagePaths = @($expertStage, $configStage, $reportStage) + @($reportCompanionStages)
+    if ($null -ne $presetStage) {
+        $allMt5StagePaths += $presetStage
+    }
+    foreach ($path in $allMt5StagePaths) {
+        if ($path.Length -gt 259) {
+            throw "Owned MT5 staging path exceeds 259 characters: $path"
+        }
+        if (Test-Path -LiteralPath $path) {
+            throw "Refusing to reuse an existing owned staging path: $path"
+        }
+    }
+
+    $configLines = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($line in @(
+            '[Common]',
+            'NewsEnable=0',
+            'CertInstall=0',
+            '',
+            '[Experts]',
+            'AllowLiveTrading=0',
+            'AllowDllImport=0',
+            'Enabled=0',
+            'Account=0',
+            'Profile=0',
+            '',
+            '[Tester]',
+            "Expert=$($expertRelative.Replace('/', '\'))"
+        )) {
+        $configLines.Add($line)
+    }
+    if ($null -ne $presetLeaf) {
+        $configLines.Add("ExpertParameters=$presetLeaf")
+    }
+    foreach ($line in @(
+            "Symbol=$Symbol",
+            "Period=$Period",
+            "Model=$Model",
+            "ExecutionMode=$ExecutionMode",
+            'Optimization=0',
+            'OptimizationCriterion=0',
+            "FromDate=$FromDate",
+            "ToDate=$ToDate",
+            'ForwardMode=0',
+            "Report=$reportLeaf",
+            'ReplaceReport=0',
+            'ShutdownTerminal=1',
+            ('Deposit=' + $Deposit.ToString([Globalization.CultureInfo]::InvariantCulture)),
+            "Currency=$Currency",
+            "Leverage=$Leverage",
+            'ProfitInPips=0',
+            'UseLocal=1',
+            'UseRemote=0',
+            'UseCloud=0',
+            'Visual=0',
+            ''
+        )) {
+        $configLines.Add($line)
+    }
+    if ($null -eq $presetLeaf) {
+        $configLines.Add('[TesterInputs]')
+        $configLines.Add('')
+    }
+    $configContent = ($configLines -join "`r`n")
+    $canonicalConfig = Join-Path $output 'tester-start.ini'
+    $utf16 = New-Object Text.UnicodeEncoding($false, $true)
+    Write-NewTextFile -Text $configContent -Path $canonicalConfig -Encoding $utf16
+    $canonicalConfigInfo = Get-Item -LiteralPath $canonicalConfig
+    $canonicalConfigHash = Get-FileSha256 -Path $canonicalConfig
+
+    $result.artifacts = [ordered]@{
+        output_owner = [ordered]@{
+            path = $outputClaim.owner_path
+            byte_length = [long](Get-Item -LiteralPath $outputClaim.owner_path).Length
+            sha256 = $outputClaim.owner_sha256
+        }
+        expert = [ordered]@{
+            source_path = $expert
+            relative_tester_path = $expertRelative.Replace('/', '\')
+            byte_length = [long]$expertInfo.Length
+            sha256 = $expertHash
+            staged_copy_required = $true
+            staged_copy = $null
+            executed_copy = $null
+        }
+        preset = if ($null -eq $preset) {
+            $null
+        }
+        else {
+            [ordered]@{
+                source_path = $preset
+                byte_length = [long]$presetInfo.Length
+                sha256 = $presetHash
+                staged_copy = $null
+                executed_copy = $null
+            }
+        }
+        canonical_config = [ordered]@{
+            path = $canonicalConfig
+            byte_length = [long]$canonicalConfigInfo.Length
+            sha256 = $canonicalConfigHash
+            encoding = 'utf-16le-bom'
+            newline = 'crlf'
+            staged_copy = $null
+            executed_copy = $null
+        }
+        report = $null
+        staging_integrity = [ordered]@{
+            read_locks_acquired = $false
+            prelaunch_verified = $false
+            postrun_verified = $null
+        }
+    }
+    $outputArtifactIntegrityRecords.Add([pscustomobject][ordered]@{
+        kind = 'output owner'
+        destination_path = $outputClaim.owner_path
+        byte_length = [long](Get-Item -LiteralPath $outputClaim.owner_path).Length
+        sha256 = $outputClaim.owner_sha256
+        verified = $true
+    })
+    $outputArtifactIntegrityRecords.Add([pscustomobject][ordered]@{
+        kind = 'canonical startup config'
+        destination_path = $canonicalConfig
+        byte_length = [long]$canonicalConfigInfo.Length
+        sha256 = $canonicalConfigHash
+        verified = $true
+    })
+
+    $rootExisted = Test-Path -LiteralPath $expertStageRoot -PathType Container
+    $directoryExisted = Test-Path -LiteralPath (Split-Path -Parent $expertStage) -PathType Container
+    if (-not $rootExisted) {
+        $createdDirectories.Add($expertStageRoot)
+    }
+    if (-not $directoryExisted) {
+        $createdDirectories.Add((Split-Path -Parent $expertStage))
+    }
+    $stageRecord = Copy-NewHashBoundFile -Source $expert -Destination $expertStage -Kind 'expert' -Tracker $hashBoundStaging
+    if ($stageRecord.sha256 -cne $expertHash -or [long]$stageRecord.byte_length -ne [long]$expertInfo.Length) {
+        throw 'Expert source bytes changed while the hash-bound staging copy was prepared.'
+    }
+    $result.artifacts.expert.staged_copy = [ordered]@{
+        path = $stageRecord.destination_path
+        byte_length = [long]$stageRecord.byte_length
+        sha256 = $stageRecord.sha256
+    }
+    if ($Execute) {
+        $result.artifacts.expert.executed_copy = $result.artifacts.expert.staged_copy
+    }
+    if ($null -ne $presetStage) {
+        $presetRecord = Copy-NewHashBoundFile -Source $preset -Destination $presetStage -Kind 'preset' -Tracker $hashBoundStaging
+        if ($presetRecord.sha256 -cne $presetHash -or [long]$presetRecord.byte_length -ne [long]$presetInfo.Length) {
+            throw 'Preset source bytes changed while the hash-bound staging copy was prepared.'
+        }
+        $result.artifacts.preset.staged_copy = [ordered]@{
+            path = $presetRecord.destination_path
+            byte_length = [long]$presetRecord.byte_length
+            sha256 = $presetRecord.sha256
+        }
+        if ($Execute) {
+            $result.artifacts.preset.executed_copy = $result.artifacts.preset.staged_copy
+        }
+    }
+    $configRecord = Copy-NewHashBoundFile -Source $canonicalConfig -Destination $configStage -Kind 'startup config' -Tracker $hashBoundStaging
+    if ($configRecord.sha256 -cne $canonicalConfigHash -or [long]$configRecord.byte_length -ne [long]$canonicalConfigInfo.Length) {
+        throw 'Canonical startup config bytes changed while the staging copy was prepared.'
+    }
+    $result.artifacts.canonical_config.staged_copy = [ordered]@{
+        path = $configRecord.destination_path
+        byte_length = [long]$configRecord.byte_length
+        sha256 = $configRecord.sha256
+    }
+    if ($Execute) {
+        $result.artifacts.canonical_config.executed_copy = $result.artifacts.canonical_config.staged_copy
+    }
+
+    $stagingReadLocksReleased = $false
+    $integrityRecordsToLock = @($hashBoundStaging.ToArray()) + @($outputArtifactIntegrityRecords.ToArray())
+    Open-StagingReadLocks -Records $integrityRecordsToLock -Tracker $stagingReadLocks
+    $stagingReadLockAcquisitionCompleted = $true
+    $result.artifacts.staging_integrity.read_locks_acquired = $true
+    $prelaunchIntegrityFailures = @(Get-PinnedStagingIntegrityFailures -Locks $stagingReadLocks)
+    if ($prelaunchIntegrityFailures.Count -gt 0) {
+        throw "Staged input integrity failed before launch: $($prelaunchIntegrityFailures -join ' ')"
+    }
+    $result.artifacts.staging_integrity.prelaunch_verified = $true
+
+    $beforeTerminal = Get-JournalSnapshot -RootPath $terminalLogRoot
+    $beforeTester = Get-JournalSnapshot -RootPath $testerLogRoot
+
+    if ($PreflightOnly) {
+        $preflightFinalConflicts = @(Get-MatchingTerminalProcesses -ExecutablePath $terminal)
+        if ($preflightFinalConflicts.Count -gt 0) {
+            $pids = @($preflightFinalConflicts | ForEach-Object { $_.process_id })
+            throw "BLOCKED: The bound MT5 terminal started during preflight (PID(s) $($pids -join ', ')); preflight readiness is no longer valid."
+        }
+        $result.status = 'preflight_passed'
+        $warnings.Add('PreflightOnly was used: staging paths, bytes, journal readability, and process-isolation preconditions were verified at the final check, but no MT5 process was started by the runner and no Strategy Tester behavior was validated.')
+        $exitCode = 0
+    }
+    else {
+        $generatedOwnedPaths.Add($reportStage)
+        foreach ($path in $reportCompanionStages) {
+            $generatedOwnedPaths.Add($path)
+        }
+
+        $conflicts = @(Get-MatchingTerminalProcesses -ExecutablePath $terminal)
+        if ($conflicts.Count -gt 0) {
+            $pids = @($conflicts | ForEach-Object { $_.process_id })
+            throw "BLOCKED: The bound MT5 terminal started during preflight (PID(s) $($pids -join ', ')); refusing to continue."
+        }
+
+        $result.process.execution_attempted = $true
+        $jobLaunch = [Mql5Coding.JobProcessLaunch]::CreateSuspended(
+            $terminal,
+            $configStage,
+            (Split-Path -Parent $terminal)
+        )
+        $ownedProcessTreeTerminationVerified = $false
+        $result.process.process_created = $true
+        $result.process.process_id = [int]$jobLaunch.ProcessId
+        $result.process.job_containment_established = $true
+        $process = [Diagnostics.Process]::GetProcessById([int]$jobLaunch.ProcessId)
+        $spawnedProcessIdentity = Get-SpawnedProcessIdentity -Process $process -ExecutablePath $terminal
+
+        $postStartMatches = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath $terminal `
+                -TrustedSuspendedIdentity $spawnedProcessIdentity
+        )
+        $ownedMatches = @($postStartMatches | Where-Object { [int]$_.process_id -eq [int]$process.Id })
+        if ($postStartMatches.Count -ne 1 -or $ownedMatches.Count -ne 1) {
+            $observed = @($postStartMatches | ForEach-Object { $_.process_id })
+            throw "BLOCKED: Suspended terminal identity was not exactly the owned PID $($process.Id); observed PID(s): $($observed -join ', ')."
+        }
+        if ($null -eq $ownedMatches[0].creation_utc_ticks) {
+            throw "BLOCKED: Creation time was unavailable for the owned suspended terminal PID $($process.Id)."
+        }
+        $result.process.post_start_identity_verified = $true
+        $result.process.identity_source = 'suspended_cim_cross_checked'
+
+        $jobLaunch.Resume()
+        $result.process.resumed = $true
+
+        $completed = $process.WaitForExit($TimeoutSeconds * 1000)
+        if (-not $completed) {
+            $result.process.timed_out = $true
+            $ownedProcessTreeTerminationVerified = $false
+            $jobLaunch.TerminateAndWaitForEmpty(5000)
+            $ownedProcessTreeTerminationVerified = $true
+        }
+        else {
+            $result.process.exit_code = [int]$process.ExitCode
+            $ownedProcessTreeTerminationVerified = $false
+            $jobLaunch.TerminateAndWaitForEmpty(5000)
+            $ownedProcessTreeTerminationVerified = $true
+        }
+        $result.process.job_empty_verified = $true
+        $result.process.post_exit_no_potential_descendants = $true
+        if ($process.HasExited) {
+            $result.process.exit_code = [int]$process.ExitCode
+        }
+
+        $postExitMatches = @(Get-MatchingTerminalProcesses -ExecutablePath $terminal)
+        if ($postExitMatches.Count -gt 0) {
+            $remaining = @($postExitMatches | ForEach-Object { $_.process_id })
+            throw "BLOCKED: Bound terminal PID(s) $($remaining -join ', ') remained after the owned process ended. The runner will not stop them."
+        }
+        $result.process.post_exit_no_matching_terminal = $true
+
+        $postrunIntegrityFailures = @(Get-PinnedStagingIntegrityFailures -Locks $stagingReadLocks)
+        $postrunIntegrityValid = $postrunIntegrityFailures.Count -eq 0
+        $result.artifacts.staging_integrity.postrun_verified = $postrunIntegrityValid
+        foreach ($failure in $postrunIntegrityFailures) {
+            $errors.Add($failure)
+        }
+
+        $terminalDelta = Read-JournalDelta -Before $beforeTerminal -RootPath $terminalLogRoot -LogicalName 'terminal' -MaximumBytes $MaxJournalAppendBytes
+        $testerDelta = Read-JournalDelta -Before $beforeTester -RootPath $testerLogRoot -LogicalName 'tester' -MaximumBytes $MaxJournalAppendBytes
+
+        $terminalText = [string]$terminalDelta.text
+        $testerText = [string]$testerDelta.text
+        $configLaunchNeedle = "successfully initialized from start config `"$configStage`""
+        $configIndex = Get-TextIndex -Text $terminalText -Needle $configLaunchNeedle
+        $genericConfigLaunchNeedle = 'successfully initialized from start config'
+        $nextConfigIndex = if ($configIndex -ge 0) {
+            Get-TextIndex `
+                -Text $terminalText `
+                -Needle $genericConfigLaunchNeedle `
+                -StartIndex ($configIndex + $configLaunchNeedle.Length)
+        }
+        else {
+            -1
+        }
+        $terminalWindowEnd = if ($nextConfigIndex -ge 0) {
+            $nextConfigIndex
+        }
+        else {
+            $terminalText.Length
+        }
+        $automaticStartedIndex = if ($configIndex -ge 0) {
+            $foundAutomaticStart = Get-TextIndex `
+                -Text $terminalText `
+                -Needle 'automatic testing started' `
+                -StartIndex ($configIndex + $configLaunchNeedle.Length)
+            if ($foundAutomaticStart -ge 0 -and $foundAutomaticStart -lt $terminalWindowEnd) {
+                $foundAutomaticStart
+            }
+            else {
+                -1
+            }
+        }
+        else {
+            -1
+        }
+        $terminalSuccessNeedle = 'last test passed with result "successfully finished"'
+        $terminalSucceededIndex = if ($automaticStartedIndex -ge 0) {
+            $foundTerminalSuccess = Get-TextIndex `
+                -Text $terminalText `
+                -Needle $terminalSuccessNeedle `
+                -StartIndex ($automaticStartedIndex + 'automatic testing started'.Length)
+            if ($foundTerminalSuccess -ge 0 -and $foundTerminalSuccess -lt $terminalWindowEnd) {
+                $foundTerminalSuccess
+            }
+            else {
+                -1
+            }
+        }
+        else {
+            -1
+        }
+        $configCorrelated = $configIndex -ge 0
+        $automaticStarted = $automaticStartedIndex -ge 0
+        $terminalSucceeded = $terminalSucceededIndex -ge 0
+        $terminalSequenceOrdered = (
+            $configIndex -ge 0 -and
+            $automaticStartedIndex -gt $configIndex -and
+            $terminalSucceededIndex -gt $automaticStartedIndex
+        )
+        $testStartNeedle = "$Symbol,$Period`: testing of Experts\$($expertRelative.Replace('/', '\')) from $FromDate 00:00 to $ToDate 00:00"
+        $testStartPattern = '(?<!\S)' + [regex]::Escape($testStartNeedle)
+        $testStartRegex = New-Object Text.RegularExpressions.Regex(
+            $testStartPattern,
+            [Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
+        $testPassedPattern = '(?<!\S)' + [regex]::Escape("$Symbol,$Period") + ': .*Test passed in '
+        $testPassedRegex = New-Object Text.RegularExpressions.Regex(
+            $testPassedPattern,
+            [Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
+        $genericTestStartNeedle = 'testing of Experts\'
+        $onInitFailureNeedle = 'tester stopped because OnInit returns non-zero'
+        $testCandidates = New-Object 'System.Collections.Generic.List[object]'
+        $candidateSearchIndex = 0
+        while ($candidateSearchIndex -lt $testerText.Length) {
+            $candidateStartMatch = $testStartRegex.Match($testerText, $candidateSearchIndex)
+            if (-not $candidateStartMatch.Success) {
+                break
+            }
+            $candidateStart = [int]$candidateStartMatch.Index
+            $candidateEnd = $candidateStart + [int]$candidateStartMatch.Length
+            $previousGenericStart = Get-TextLastIndexBefore `
+                -Text $testerText `
+                -Needle $genericTestStartNeedle `
+                -EndExclusive $candidateStart
+            $candidateInitialized = Get-TextLastIndexBefore `
+                -Text $testerText `
+                -Needle 'successfully initialized' `
+                -EndExclusive $candidateStart
+            $initializationInWindow = (
+                $candidateInitialized -ge 0 -and
+                ($previousGenericStart -lt 0 -or $candidateInitialized -gt $previousGenericStart)
+            )
+            $nextGenericStart = Get-TextIndex `
+                -Text $testerText `
+                -Needle $genericTestStartNeedle `
+                -StartIndex $candidateEnd
+            $candidateWindowEnd = if ($nextGenericStart -ge 0) {
+                $nextGenericStart
+            }
+            else {
+                $testerText.Length
+            }
+            $candidatePassMatch = $testPassedRegex.Match($testerText, $candidateEnd)
+            $candidatePassIndex = if (
+                $candidatePassMatch.Success -and
+                [int]$candidatePassMatch.Index -lt $candidateWindowEnd
+            ) {
+                [int]$candidatePassMatch.Index
+            }
+            else {
+                -1
+            }
+            $candidateOnInitFailure = Get-TextIndex `
+                -Text $testerText `
+                -Needle $onInitFailureNeedle `
+                -StartIndex $candidateEnd
+            $onInitFailureInWindow = (
+                $candidateOnInitFailure -ge 0 -and
+                $candidateOnInitFailure -lt $candidateWindowEnd
+            )
+            $candidateMarkerIndices = New-Object 'System.Collections.Generic.List[int]'
+            $allCandidateMarkersMatched = $true
+            foreach ($candidateMarker in $markers) {
+                $candidateMarkerIndex = Get-TextIndex `
+                    -Text $testerText `
+                    -Needle $candidateMarker `
+                    -StartIndex $candidateEnd `
+                    -CaseSensitive
+                $candidateMarkerMatched = (
+                    $candidateMarkerIndex -ge 0 -and
+                    $candidatePassIndex -gt $candidateMarkerIndex
+                )
+                if (-not $candidateMarkerMatched) {
+                    $allCandidateMarkersMatched = $false
+                    $candidateMarkerIndices.Add(-1)
+                }
+                else {
+                    $candidateMarkerIndices.Add([int]$candidateMarkerIndex)
+                }
+            }
+            $sequenceValid = (
+                $initializationInWindow -and
+                $candidatePassIndex -gt $candidateStart
+            )
+            $testCandidates.Add([pscustomobject][ordered]@{
+                start_index = [int]$candidateStart
+                end_index = [int]$candidateEnd
+                window_end_index = [int]$candidateWindowEnd
+                initialized_index = [int]$candidateInitialized
+                pass_index = [int]$candidatePassIndex
+                on_init_failed = [bool]$onInitFailureInWindow
+                sequence_valid = [bool]$sequenceValid
+                core_valid = [bool]($sequenceValid -and -not $onInitFailureInWindow)
+                all_markers_matched = [bool]$allCandidateMarkersMatched
+                marker_indices = $candidateMarkerIndices.ToArray()
+            })
+            $candidateSearchIndex = $candidateStart + 1
+        }
+
+        $selectedCandidate = $null
+        foreach ($candidate in $testCandidates) {
+            if ([bool]$candidate.core_valid -and [bool]$candidate.all_markers_matched) {
+                $selectedCandidate = $candidate
+                break
+            }
+        }
+        if ($null -eq $selectedCandidate) {
+            foreach ($candidate in $testCandidates) {
+                if ([bool]$candidate.core_valid) {
+                    $selectedCandidate = $candidate
+                    break
+                }
+            }
+        }
+        if ($null -eq $selectedCandidate -and $testCandidates.Count -gt 0) {
+            $selectedCandidate = $testCandidates[0]
+        }
+
+        $expertCorrelated = $testCandidates.Count -gt 0
+        $initializedIndex = if ($null -ne $selectedCandidate) {
+            [int]$selectedCandidate.initialized_index
+        }
+        else {
+            -1
+        }
+        $testStartIndex = if ($null -ne $selectedCandidate) {
+            [int]$selectedCandidate.start_index
+        }
+        else {
+            -1
+        }
+        $testPassedIndex = if ($null -ne $selectedCandidate) {
+            [int]$selectedCandidate.pass_index
+        }
+        else {
+            -1
+        }
+        $initialized = $initializedIndex -ge 0
+        $testPassed = $testPassedIndex -ge 0
+        $testerSequenceOrdered = (
+            $null -ne $selectedCandidate -and
+            [bool]$selectedCandidate.sequence_valid
+        )
+        $onInitFailed = if ($null -ne $selectedCandidate) {
+            [bool]$selectedCandidate.on_init_failed
+        }
+        else {
+            Test-ContainsText -Text $testerText -Needle $onInitFailureNeedle
+        }
+
+        $markerEvidence = New-Object 'System.Collections.Generic.List[object]'
+        $missingMarkerHashes = New-Object 'System.Collections.Generic.List[string]'
+        for ($markerIndex = 0; $markerIndex -lt $markers.Count; $markerIndex++) {
+            $markerHash = $markerHashes[$markerIndex]
+            $markerMatched = (
+                $null -ne $selectedCandidate -and
+                $markerIndex -lt @($selectedCandidate.marker_indices).Count -and
+                [int]$selectedCandidate.marker_indices[$markerIndex] -ge 0
+            )
+            $markerEvidence.Add([pscustomobject][ordered]@{
+                sha256 = $markerHash
+                matched = $markerMatched
+            })
+            if (-not $markerMatched) {
+                $missingMarkerHashes.Add($markerHash)
+            }
+        }
+
+        $terminalEvidence = Select-JournalEvidence -Text $terminalText -Patterns @(
+            'successfully initialized from start config',
+            'Terminal\s+launched with',
+            'automatic testing started',
+            'last test passed with result',
+            'Terminal\s+exit with code'
+        ) -SensitiveValues $markers.ToArray()
+        $testerEvidence = Select-JournalEvidence -Text $testerText -Patterns @(
+            'testing of Experts\\',
+            'successfully initialized',
+            'Test passed in ',
+            'OnInit returns non-zero',
+            '(?i)\b(error|failed|cannot load|stopped because)\b'
+        ) -SensitiveValues $markers.ToArray()
+
+        $result.evidence = [ordered]@{
+            terminal_journal = [ordered]@{
+                appended_byte_length = [long]$terminalDelta.appended_byte_length
+                limit_exceeded = [bool]$terminalDelta.limit_exceeded
+                segments = @($terminalDelta.records)
+                excerpts = $terminalEvidence
+            }
+            tester_journal = [ordered]@{
+                appended_byte_length = [long]$testerDelta.appended_byte_length
+                limit_exceeded = [bool]$testerDelta.limit_exceeded
+                segments = @($testerDelta.records)
+                excerpts = $testerEvidence
+            }
+            expected_markers = [ordered]@{
+                aggregate_sha256 = $result.inputs.expected_log_marker_aggregate_sha256
+                entries = $markerEvidence.ToArray()
+                missing_sha256 = $missingMarkerHashes.ToArray()
+            }
+            checks = [ordered]@{
+                exact_config_launch = $configCorrelated
+                automatic_testing_started = $automaticStarted
+                terminal_evidence_ordered = $terminalSequenceOrdered
+                exact_expert_symbol_period_dates = $expertCorrelated
+                exact_test_candidate_count = $testCandidates.Count
+                exact_test_window_selected = ($null -ne $selectedCandidate)
+                tester_initialized = $initialized
+                tester_engine_passed = $testPassed
+                tester_evidence_ordered = $testerSequenceOrdered
+                terminal_result_successfully_finished = $terminalSucceeded
+                on_init_failure_absent = (-not $onInitFailed)
+                expected_markers_supplied = ($markers.Count -gt 0)
+                expected_markers_matched = ($markers.Count -gt 0 -and $missingMarkerHashes.Count -eq 0)
+                missing_marker_count = $missingMarkerHashes.Count
+                staged_inputs_unchanged = $postrunIntegrityValid
+            }
+        }
+
+        if (Test-Path -LiteralPath $reportStage -PathType Leaf) {
+            $reportInfo = Get-Item -LiteralPath $reportStage
+            if ($reportInfo.Length -gt 0) {
+                $finalReport = Join-Path $output $reportLeaf
+                [IO.File]::Copy($reportStage, $finalReport, $false)
+                $finalReportRecord = Open-VerifiedArtifactReadLock `
+                    -Path $finalReport `
+                    -Kind 'output report' `
+                    -Tracker $stagingReadLocks
+                $reportCompanions = New-Object 'System.Collections.Generic.List[object]'
+                foreach ($companionStage in $reportCompanionStages) {
+                    if (-not (Test-Path -LiteralPath $companionStage -PathType Leaf)) {
+                        continue
+                    }
+                    $companionInfo = Get-Item -LiteralPath $companionStage
+                    if ($companionInfo.Length -le 0) {
+                        continue
+                    }
+                    $companionFinal = Join-Path $output ([IO.Path]::GetFileName($companionStage))
+                    [IO.File]::Copy($companionStage, $companionFinal, $false)
+                    $companionRecord = Open-VerifiedArtifactReadLock `
+                        -Path $companionFinal `
+                        -Kind 'output report companion' `
+                        -Tracker $stagingReadLocks
+                    $reportCompanions.Add([pscustomobject][ordered]@{
+                        path = $companionFinal
+                        byte_length = [long]$companionRecord.byte_length
+                        sha256 = $companionRecord.sha256
+                    })
+                }
+                $result.artifacts.report = [ordered]@{
+                    path = $finalReport
+                    byte_length = [long]$finalReportRecord.byte_length
+                    sha256 = $finalReportRecord.sha256
+                    companions = $reportCompanions.ToArray()
+                    required_for_pass = $false
+                }
+            }
+            else {
+                $warnings.Add('MT5 created an empty report; journal evidence remains authoritative for this smoke result.')
+            }
+        }
+        else {
+            $warnings.Add('MT5 did not create a report; report existence is optional and was not used as a pass condition.')
+        }
+
+        $journalLimitExceeded = [bool]$terminalDelta.limit_exceeded -or [bool]$testerDelta.limit_exceeded
+        if ([bool]$terminalDelta.limit_exceeded) {
+            $errors.Add("Terminal journal append exceeded the $MaxJournalAppendBytes-byte inspection limit.")
+        }
+        if ([bool]$testerDelta.limit_exceeded) {
+            $errors.Add("Tester journal append exceeded the $MaxJournalAppendBytes-byte inspection limit.")
+        }
+        if ([bool]$result.process.timed_out) {
+            $errors.Add("Strategy Tester exceeded the $TimeoutSeconds-second timeout.")
+        }
+
+        if (-not $postrunIntegrityValid -or $journalLimitExceeded) {
+            $result.status = 'tooling_error'
+            $exitCode = 2
+        }
+        elseif ([bool]$result.process.timed_out) {
+            $result.status = 'timed_out'
+            $exitCode = 3
+        }
+        else {
+            if ($null -eq $result.process.exit_code -or [int]$result.process.exit_code -ne 0) {
+                $errors.Add("Spawned MT5 process did not exit cleanly (exit code $($result.process.exit_code)).")
+            }
+            if (-not $configCorrelated) {
+                $errors.Add('Terminal journal did not correlate the exact staged startup config.')
+            }
+            if (-not $automaticStarted) {
+                $errors.Add('Terminal journal did not show automatic testing started.')
+            }
+            if (-not $terminalSequenceOrdered) {
+                $errors.Add('Terminal journal did not show staged-config initialization, automatic test start, and successful finish in that order.')
+            }
+            if (-not $expertCorrelated) {
+                $errors.Add('Tester journal did not correlate the exact expert, symbol, period, and dates.')
+            }
+            if (-not $initialized) {
+                $errors.Add('Tester journal did not show successful agent initialization.')
+            }
+            if (-not $testPassed) {
+                $errors.Add('Tester journal did not show a correlated engine Test passed result.')
+            }
+            if (-not $testerSequenceOrdered) {
+                $errors.Add('Tester journal did not show initialization, the exact test start, and the correlated engine pass in that order.')
+            }
+            if (-not $terminalSucceeded) {
+                $errors.Add('Terminal journal result was not exactly "successfully finished".')
+            }
+            if ($onInitFailed) {
+                $errors.Add('Tester stopped because OnInit returned a non-zero code.')
+            }
+            if ($missingMarkerHashes.Count -gt 0) {
+                $errors.Add("$($missingMarkerHashes.Count) caller-supplied expected log marker(s) were not found.")
+            }
+
+            if ($errors.Count -eq 0) {
+                if ($markers.Count -gt 0) {
+                    $result.status = 'application_marker_passed'
+                }
+                else {
+                    $result.status = 'engine_smoke_passed'
+                    $warnings.Add('No expected application marker was supplied. This proves only correlated Strategy Tester engine completion, not strategy correctness or full-date execution.')
+                }
+                $exitCode = 0
+            }
+            else {
+                $result.status = 'tester_failed'
+                $exitCode = 1
+            }
+        }
+    }
+}
+catch {
+    $launchFailure = $_.Exception
+    while ($null -ne $launchFailure) {
+        if ($launchFailure.Data.Contains('Mql5Coding.ProcessCreated')) {
+            $result.process.process_created = [bool]$launchFailure.Data['Mql5Coding.ProcessCreated']
+            $result.process.process_id = [int]$launchFailure.Data['Mql5Coding.ProcessId']
+            $suspendedTerminationConfirmed = [bool]$launchFailure.Data['Mql5Coding.SuspendedTerminationConfirmed']
+            $result.process.suspended_launch_cleanup = [ordered]@{
+                termination_confirmed = $suspendedTerminationConfirmed
+                terminate_process_succeeded = [bool]$launchFailure.Data['Mql5Coding.TerminateProcessSucceeded']
+                terminate_process_error = [int]$launchFailure.Data['Mql5Coding.TerminateProcessError']
+                wait_result = [long]$launchFailure.Data['Mql5Coding.WaitResult']
+                wait_error = [int]$launchFailure.Data['Mql5Coding.WaitError']
+            }
+            $ownedProcessTreeTerminationVerified = $suspendedTerminationConfirmed
+            if (-not $suspendedTerminationConfirmed) {
+                $unsafePostLaunchIsolation = $true
+            }
+            break
+        }
+        $launchFailure = $launchFailure.InnerException
+    }
+
+    $message = $_.Exception.Message
+    $isBlockedMessage = $message.StartsWith('BLOCKED:', [StringComparison]::Ordinal)
+    if ($isBlockedMessage -and -not [bool]$result.process.execution_attempted) {
+        $result.status = 'blocked'
+        $errors.Add($message.Substring('BLOCKED:'.Length).Trim())
+        $exitCode = 4
+    }
+    else {
+        $result.status = 'tooling_error'
+        if ($isBlockedMessage) {
+            $unsafePostLaunchIsolation = $true
+            $errors.Add(
+                'Post-launch isolation failure: ' +
+                $message.Substring('BLOCKED:'.Length).Trim()
+            )
+        }
+        else {
+            $errors.Add($message)
+        }
+        $exitCode = 2
+    }
+}
+finally {
+    if ($null -ne $jobLaunch) {
+        try {
+            if (-not $ownedProcessTreeTerminationVerified) {
+                $jobLaunch.TerminateAndWaitForEmpty(5000)
+                $ownedProcessTreeTerminationVerified = $true
+                $result.process.job_empty_verified = $true
+                $result.process.post_exit_no_potential_descendants = $true
+            }
+        }
+        catch {
+            $ownedProcessTreeTerminationVerified = $false
+            $cleanupErrors.Add("Could not empty the owned Windows Job Object: $($_.Exception.Message)")
+        }
+    }
+
+    if ($null -ne $process) {
+        try {
+            $process.Dispose()
+        }
+        catch {
+            $cleanupErrors.Add("Could not dispose the terminal process handle: $($_.Exception.Message)")
+        }
+    }
+    if ($null -ne $jobLaunch) {
+        try {
+            $jobLaunch.Dispose()
+        }
+        catch {
+            $cleanupErrors.Add("Could not dispose the Windows Job Object handles: $($_.Exception.Message)")
+        }
+    }
+
+    if ($stagingReadLocks.Count -gt 0) {
+        if ([bool]$Execute) {
+            $finalIntegrityFailures = @(Get-PinnedStagingIntegrityFailures -Locks $stagingReadLocks)
+            if ($finalIntegrityFailures.Count -gt 0) {
+                if ($null -ne $result.artifacts -and
+                    $null -ne $result.artifacts.PSObject.Properties['staging_integrity']) {
+                    $result.artifacts.staging_integrity.postrun_verified = $false
+                }
+                foreach ($failure in $finalIntegrityFailures) {
+                    $cleanupErrors.Add("Final artifact integrity verification failed: $failure")
+                }
+            }
+        }
+        $lockReleaseFailed = $false
+        for ($index = $stagingReadLocks.Count - 1; $index -ge 0; $index--) {
+            try {
+                $stagingReadLocks[$index].stream.Dispose()
+            }
+            catch {
+                $lockReleaseFailed = $true
+                $cleanupErrors.Add(
+                    "Could not release the $($stagingReadLocks[$index].record.kind) integrity read lock: $($_.Exception.Message)"
+                )
+            }
+        }
+        $stagingReadLocksReleased = $stagingReadLockAcquisitionCompleted -and -not $lockReleaseFailed
+    }
+
+    $stagingArtifactsExist = (
+        $hashBoundStaging.Count -gt 0 -or
+        $generatedOwnedPaths.Count -gt 0 -or
+        $createdDirectories.Count -gt 0
+    )
+    $executionStagingPreservationRequired = [bool]$Execute -and $stagingArtifactsExist
+    $preflightStagingPreservationRequired = [bool]$PreflightOnly -and $stagingArtifactsExist
+    $result.cleanup.execution_staging_preserved = $executionStagingPreservationRequired
+    $result.cleanup.preflight_staging_preserved = $preflightStagingPreservationRequired
+    $conservativeExecutionPreservation = (
+        $executionStagingPreservationRequired -and
+        $ownedProcessTreeTerminationVerified -and
+        $stagingReadLocksReleased -and
+        -not $unsafePostLaunchIsolation
+    )
+    $conservativePreflightPreservation = (
+        $preflightStagingPreservationRequired -and
+        $stagingReadLocksReleased -and
+        -not [bool]$result.process.execution_attempted
+    )
+    $preservationReason = if ($conservativeExecutionPreservation) {
+        'execution staging is retained because automatic pathname deletion is disabled'
+    }
+    elseif ($conservativePreflightPreservation) {
+        'preflight staging is retained because automatic pathname deletion is disabled'
+    }
+    else {
+        'process isolation or staging-lock release was not verified'
+    }
+    foreach ($record in $hashBoundStaging) {
+        $path = [string]$record.destination_path
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $cleanupPreserved.Add("$($record.kind): $preservationReason; preserved: $path")
+        }
+    }
+    foreach ($path in $generatedOwnedPaths) {
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $cleanupPreserved.Add("generated report artifact: $preservationReason; preserved: $path")
+        }
+    }
+    foreach ($directory in $createdDirectories) {
+        if (Test-Path -LiteralPath $directory -PathType Container) {
+            $cleanupPreserved.Add("staging directory: $preservationReason; preserved: $directory")
+        }
+    }
+    if ($stagingArtifactsExist -and ($conservativeExecutionPreservation -or $conservativePreflightPreservation)) {
+        $warnings.Add(
+            'Staging was preserved because automatic deletion by pathname is disabled to avoid deleting a replaced file. Remove the recorded unique paths only after independently verifying their identities and that no related process remains.'
+        )
+    }
+    elseif ($stagingArtifactsExist) {
+        $cleanupErrors.Add('Staging was preserved because process isolation or staging-lock release could not be verified.')
+    }
+
+    if ($null -ne $lock) {
+        try {
+            $lock.stream.Dispose()
+        }
+        catch {
+            $cleanupErrors.Add("Could not release the terminal data lock: $($_.Exception.Message)")
+        }
+    }
+
+    if ($null -ne $outputClaim) {
+        try {
+            $outputClaim.stream.Dispose()
+        }
+        catch {
+            $cleanupErrors.Add("Could not release the output-directory claim '$($outputClaim.path)': $($_.Exception.Message)")
+        }
+    }
+
+    if ($cleanupErrors.Count -gt 0) {
+        if ($result.status -ne 'tooling_error') {
+            $result.primary_status_before_cleanup = $result.status
+        }
+        $result.status = 'tooling_error'
+        $errors.Add('Owned staging cleanup failed; inspect cleanup.errors. Any primary outcome is recorded in primary_status_before_cleanup.')
+        $exitCode = 2
+    }
+
+    $endedUtc = [datetimeoffset]::UtcNow
+    $result.ended_utc = $endedUtc.ToString("yyyy-MM-ddTHH:mm:ss.fffffff'Z'")
+    $result.duration_milliseconds = [long]($endedUtc - $startedUtc).TotalMilliseconds
+
+    if ($outputCreated -and $null -ne $resultPath) {
+        try {
+            Write-JsonFile -Value $result -Path $resultPath
+            $resultWritten = $true
+        }
+        catch {
+            [Console]::Error.WriteLine(
+                (Protect-JournalLine -Line "Could not write smoke result '$resultPath': $($_.Exception.Message)")
+            )
+            $exitCode = 2
+        }
+    }
+    elseif ($errors.Count -gt 0) {
+        [Console]::Error.WriteLine(
+            (Protect-JournalLine -Line "MQL5 tester smoke $($result.status): $($errors[$errors.Count - 1])")
+        )
+    }
+
+}
+
+if ($resultWritten) {
+    Write-Output $resultPath
+}
+exit $exitCode

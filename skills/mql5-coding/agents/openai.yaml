@@ -1,0 +1,11 @@
+interface:
+  display_name: "MQL5 Coding"
+  short_description: "Build, review, test, and debug MT5 MQL5 code"
+  default_prompt: "Use $mql5-coding to build, review, compile, test, or debug MetaTrader 5 MQL5 code, checking the installed MQL5 CHM first for API and language facts."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "mql5-chm"
+      description: "Installed MQL5 CHM server for primary API and language facts"
+policy:
+  allow_implicit_invocation: true

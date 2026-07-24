@@ -1,0 +1,72 @@
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+using System.Threading;
+
+internal static class FakeMetaEditor
+{
+    private static string SourcePath(string[] args)
+    {
+        foreach (string arg in args)
+        {
+            const string prefix = "/compile:";
+            if (arg.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return Path.GetFullPath(arg.Substring(prefix.Length).Trim('"'));
+        }
+        throw new InvalidOperationException("Missing /compile argument.");
+    }
+
+    private static bool HasArgument(string[] args, string expected)
+    {
+        foreach (string arg in args)
+        {
+            if (String.Equals(arg, expected, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    public static int Main(string[] args)
+    {
+        string sourcePath = SourcePath(args);
+        string logPath = Path.ChangeExtension(sourcePath, ".log");
+        string artifactPath = Path.ChangeExtension(sourcePath, ".ex5");
+        string mode = Environment.GetEnvironmentVariable("FAKE_METAEDITOR_MODE") ?? "success";
+
+        if (mode == "timeout" || mode == "timeout_detached")
+        {
+            var childInfo = new ProcessStartInfo
+            {
+                FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+                Arguments = "/d /c ping -n 60 127.0.0.1 > nul",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            Process child = Process.Start(childInfo);
+            string childPidPath = Environment.GetEnvironmentVariable("FAKE_METAEDITOR_CHILD_PID_PATH");
+            if (!String.IsNullOrWhiteSpace(childPidPath))
+                File.WriteAllText(childPidPath, child.Id.ToString(), Encoding.ASCII);
+            if (mode == "timeout_detached")
+                return 0;
+            Thread.Sleep(60000);
+            return 0;
+        }
+
+        int errors = mode == "errors" ? 1 : 0;
+        int warnings = mode == "warnings" ? 1 : 0;
+        bool syntaxOnly = HasArgument(args, "/s");
+        if (errors == 0 && !syntaxOnly && mode != "no_artifact" && mode != "stale_artifact")
+        {
+            File.WriteAllBytes(artifactPath, Encoding.ASCII.GetBytes("synthetic ex5"));
+            File.SetLastWriteTimeUtc(artifactPath, DateTime.UtcNow);
+        }
+
+        string result = String.Format(
+            "Result: {0} errors, {1} warnings",
+            errors,
+            warnings);
+        File.WriteAllText(logPath, result + Environment.NewLine, new UTF8Encoding(false));
+        return 0;
+    }
+}
