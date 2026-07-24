@@ -1176,8 +1176,18 @@ try {
         -PresetPath $preset `
         -ExpertSha256 $expertHash `
         -FakeMode 'pass'
+    $passResultDiagnostic = if ($null -eq $pass.Result) {
+        '<no result JSON>'
+    }
+    else {
+        $pass.Result | ConvertTo-Json -Depth 10 -Compress
+    }
     Assert-True -Condition ($pass.ExitCode -eq 0) `
-        -Message "Synthetic execution exit code was $($pass.ExitCode): $($pass.StandardError)"
+        -Message (
+            "Synthetic execution exit code was $($pass.ExitCode). " +
+            "stderr=$($pass.StandardError) stdout=$($pass.StandardOutput) " +
+            "result=$passResultDiagnostic"
+        )
     Assert-True -Condition ($pass.Result.status -eq 'engine_smoke_passed') `
         -Message "Unexpected synthetic execution status: $($pass.Result.status)"
     Assert-True -Condition ([bool]$pass.Result.process.process_created) `
