@@ -544,35 +544,17 @@ $trustedMatcherProbe = & {
         $noTrustedError = $_.Exception.Message
     }
 
-    $processRecord.CreationDate = $creationDate.AddSeconds(1)
-    $suspendedCreationMismatchError = $null
-    try {
-        $ignored = @(
-            Get-MatchingTerminalProcesses `
-                -ExecutablePath 'C:\synthetic\terminal64.exe' `
-                -ExpectedFileIdentity 'synthetic-identity' `
-                -TrustedSuspendedIdentity $ownedIdentity
-        )
-    }
-    catch {
-        $suspendedCreationMismatchError = $_.Exception.Message
-    }
+    $processRecord.CreationDate = $creationDate.AddMilliseconds(250)
+    $processRecord.SessionId = 4
+    $suspendedObservedFields = @(
+        Get-MatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -TrustedSuspendedIdentity $ownedIdentity
+    )
+    $settlingIdentity = $suspendedObservedFields[0]
 
     $processRecord.CreationDate = $null
-    $processRecord.SessionId = 4
-    $suspendedSessionMismatchError = $null
-    try {
-        $ignored = @(
-            Get-MatchingTerminalProcesses `
-                -ExecutablePath 'C:\synthetic\terminal64.exe' `
-                -ExpectedFileIdentity 'synthetic-identity' `
-                -TrustedSuspendedIdentity $ownedIdentity
-        )
-    }
-    catch {
-        $suspendedSessionMismatchError = $_.Exception.Message
-    }
-
     $processRecord.SessionId = $null
     $processRecord.Name = 'other.exe'
     $suspendedNameMismatchError = $null
@@ -596,18 +578,20 @@ $trustedMatcherProbe = & {
                 -ExecutablePath 'C:\synthetic\terminal64.exe' `
                 -ExpectedFileIdentity 'synthetic-identity' `
                 -TrustedSuspendedIdentity $ownedIdentity `
-                -SettlingOwnedIdentity $ownedIdentity
+                -SettlingOwnedIdentity $settlingIdentity
         )
     }
     catch {
         $mixedModeError = $_.Exception.Message
     }
 
+    $processRecord.CreationDate = $null
+    $processRecord.SessionId = $null
     $settlingMissingFields = @(
         Get-MatchingTerminalProcesses `
             -ExecutablePath 'C:\synthetic\terminal64.exe' `
             -ExpectedFileIdentity 'synthetic-identity' `
-            -SettlingOwnedIdentity $ownedIdentity
+            -SettlingOwnedIdentity $settlingIdentity
     )
 
     $processRecord.Name = $null
@@ -615,7 +599,7 @@ $trustedMatcherProbe = & {
         Get-MatchingTerminalProcesses `
             -ExecutablePath 'C:\synthetic\terminal64.exe' `
             -ExpectedFileIdentity 'synthetic-identity' `
-            -SettlingOwnedIdentity $ownedIdentity
+            -SettlingOwnedIdentity $settlingIdentity
     )
 
     $processRecord.Name = 'terminal64.exe'
@@ -626,7 +610,7 @@ $trustedMatcherProbe = & {
             Get-MatchingTerminalProcesses `
                 -ExecutablePath 'C:\synthetic\terminal64.exe' `
                 -ExpectedFileIdentity 'synthetic-identity' `
-                -SettlingOwnedIdentity $ownedIdentity
+                -SettlingOwnedIdentity $settlingIdentity
         )
     }
     catch {
@@ -656,7 +640,7 @@ $trustedMatcherProbe = & {
             Get-MatchingTerminalProcesses `
                 -ExecutablePath 'C:\synthetic\terminal64.exe' `
                 -ExpectedFileIdentity 'synthetic-identity' `
-                -SettlingOwnedIdentity $ownedIdentity
+                -SettlingOwnedIdentity $settlingIdentity
         )
     }
     catch {
@@ -684,7 +668,7 @@ $trustedMatcherProbe = & {
             Get-MatchingTerminalProcesses `
                 -ExecutablePath 'C:\synthetic\terminal64.exe' `
                 -ExpectedFileIdentity 'synthetic-identity' `
-                -SettlingOwnedIdentity $ownedIdentity
+                -SettlingOwnedIdentity $settlingIdentity
         )
     }
     catch {
@@ -703,7 +687,7 @@ $trustedMatcherProbe = & {
         Get-MatchingTerminalProcesses `
             -ExecutablePath 'C:\synthetic\terminal64.exe' `
             -ExpectedFileIdentity 'synthetic-identity' `
-            -SettlingOwnedIdentity $ownedIdentity
+            -SettlingOwnedIdentity $settlingIdentity
     )
 
     return [pscustomobject]@{
@@ -721,8 +705,31 @@ $trustedMatcherProbe = & {
             -1
         }
         no_trusted_error = $noTrustedError
-        suspended_creation_mismatch_error = $suspendedCreationMismatchError
-        suspended_session_mismatch_error = $suspendedSessionMismatchError
+        suspended_observed_count = $suspendedObservedFields.Count
+        suspended_observed_creation_ticks = if ($suspendedObservedFields.Count -gt 0) {
+            [long]$suspendedObservedFields[0].creation_utc_ticks
+        }
+        else {
+            0
+        }
+        suspended_observed_session = if ($suspendedObservedFields.Count -gt 0) {
+            [int]$suspendedObservedFields[0].session_id
+        }
+        else {
+            -1
+        }
+        suspended_observed_creation_flag = if ($suspendedObservedFields.Count -gt 0) {
+            [bool]$suspendedObservedFields[0].creation_cim_observed
+        }
+        else {
+            $false
+        }
+        suspended_observed_session_flag = if ($suspendedObservedFields.Count -gt 0) {
+            [bool]$suspendedObservedFields[0].session_cim_observed
+        }
+        else {
+            $false
+        }
         suspended_name_mismatch_error = $suspendedNameMismatchError
         mixed_mode_error = $mixedModeError
         settling_missing_count = $settlingMissingFields.Count
@@ -759,15 +766,21 @@ Assert-True -Condition (
     $trustedMatcherProbe.suspended_creation_ticks -eq [long]638396640000000000 -and
     $trustedMatcherProbe.suspended_session -eq 3
 ) -Message 'The native suspended-process proof did not fill missing CIM fields.'
+Assert-True -Condition (
+    $trustedMatcherProbe.suspended_observed_count -eq 1 -and
+    $trustedMatcherProbe.suspended_observed_creation_ticks -eq
+        [long]638396640002500000 -and
+    $trustedMatcherProbe.suspended_observed_session -eq 4 -and
+    $trustedMatcherProbe.suspended_observed_creation_flag -and
+    $trustedMatcherProbe.suspended_observed_session_flag
+) -Message 'Observed CIM values were not preserved as the post-exit identity baseline.'
 foreach ($blockedSuspendedError in @(
         $trustedMatcherProbe.no_trusted_error,
-        $trustedMatcherProbe.suspended_creation_mismatch_error,
-        $trustedMatcherProbe.suspended_session_mismatch_error,
         $trustedMatcherProbe.suspended_name_mismatch_error
     )) {
     Assert-True -Condition (
         $blockedSuspendedError -match 'identity is unreadable for PID\(s\) 4242'
-    ) -Message 'A contradictory suspended-process observation did not fail closed.'
+    ) -Message 'An untrusted or contradictory suspended-process observation did not fail closed.'
 }
 Assert-True -Condition (
     $trustedMatcherProbe.mixed_mode_error -match

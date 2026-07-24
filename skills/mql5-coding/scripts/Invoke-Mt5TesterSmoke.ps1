@@ -899,22 +899,26 @@ function Get-MatchingTerminalProcesses {
             (
                 -not $processNameAvailable -or
                 $sameLeafName
-            ) -and
-            (
-                $null -eq $creationTicks -or
-                $creationTicks -eq [long]$TrustedSuspendedIdentity.creation_utc_ticks
-            ) -and
-            (
-                $null -eq $sessionId -or
-                $sessionId -eq [int]$TrustedSuspendedIdentity.session_id
             )
         )
         $suspendedMatchRecord = if ($suspendedIdentityCompatible) {
             [pscustomobject][ordered]@{
                 process_id = $processId
                 parent_process_id = [int]$process.ParentProcessId
-                creation_utc_ticks = [long]$TrustedSuspendedIdentity.creation_utc_ticks
-                session_id = [int]$TrustedSuspendedIdentity.session_id
+                creation_utc_ticks = if ($null -ne $creationTicks) {
+                    $creationTicks
+                }
+                else {
+                    [long]$TrustedSuspendedIdentity.creation_utc_ticks
+                }
+                session_id = if ($null -ne $sessionId) {
+                    $sessionId
+                }
+                else {
+                    [int]$TrustedSuspendedIdentity.session_id
+                }
+                creation_cim_observed = [bool]($null -ne $creationTicks)
+                session_cim_observed = [bool]($null -ne $sessionId)
                 executable_path = $suspendedVerifiedPath
                 executable_file_identity = $ExpectedFileIdentity
                 identity_match = $true
@@ -940,15 +944,19 @@ function Get-MatchingTerminalProcesses {
             ) -and
             (
                 $null -eq $creationTicks -or
+                -not [bool]$SettlingOwnedIdentity.creation_cim_observed -or
                 $creationTicks -eq [long]$SettlingOwnedIdentity.creation_utc_ticks
             ) -and
             (
                 $null -eq $sessionId -or
+                -not [bool]$SettlingOwnedIdentity.session_cim_observed -or
                 $sessionId -eq [int]$SettlingOwnedIdentity.session_id
             )
         )
         $settlingIdentityComplete = (
             $settlingIdentityCompatible -and
+            [bool]$SettlingOwnedIdentity.creation_cim_observed -and
+            [bool]$SettlingOwnedIdentity.session_cim_observed -and
             $null -ne $creationTicks -and
             $null -ne $sessionId
         )
@@ -958,6 +966,8 @@ function Get-MatchingTerminalProcesses {
                 parent_process_id = [int]$process.ParentProcessId
                 creation_utc_ticks = $creationTicks
                 session_id = $sessionId
+                creation_cim_observed = [bool]$SettlingOwnedIdentity.creation_cim_observed
+                session_cim_observed = [bool]$SettlingOwnedIdentity.session_cim_observed
                 executable_path = $settlingVerifiedPath
                 executable_file_identity = $ExpectedFileIdentity
                 identity_match = $false
@@ -1078,6 +1088,8 @@ function Get-MatchingTerminalProcesses {
                     parent_process_id = [int]$process.ParentProcessId
                     creation_utc_ticks = $creationTicks
                     session_id = $sessionId
+                    creation_cim_observed = $true
+                    session_cim_observed = $true
                     executable_path = $candidate
                     executable_file_identity = $candidateIdentity
                     identity_match = $true
@@ -1092,6 +1104,8 @@ function Get-MatchingTerminalProcesses {
                 parent_process_id = [int]$process.ParentProcessId
                 creation_utc_ticks = $creationTicks
                 session_id = $sessionId
+                creation_cim_observed = [bool]($null -ne $creationTicks)
+                session_cim_observed = [bool]($null -ne $sessionId)
                 executable_path = $candidate
                 executable_file_identity = $candidateIdentity
                 identity_match = [bool]$identityMatch
