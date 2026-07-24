@@ -2189,13 +2189,23 @@ try {
             $automaticStartedIndex -gt $configIndex -and
             $terminalSucceededIndex -gt $automaticStartedIndex
         )
+        $testerMessageLinePrefix = '(?m)^(?:(?:[^\r\n\t]*\t){1,8})?[ \t]*'
+
         $testStartNeedle = "$Symbol,$Period`: testing of Experts\$($expertRelative.Replace('/', '\')) from $FromDate 00:00 to $ToDate 00:00"
-        $testStartPattern = '(?<!\S)' + [regex]::Escape($testStartNeedle)
+        $testStartPattern = (
+            $testerMessageLinePrefix +
+            [regex]::Escape($testStartNeedle) +
+            '[ \t]*\r?$'
+        )
         $testStartRegex = New-Object Text.RegularExpressions.Regex(
             $testStartPattern,
             [Text.RegularExpressions.RegexOptions]::IgnoreCase
         )
-        $testPassedPattern = '(?<!\S)' + [regex]::Escape("$Symbol,$Period") + ': .*Test passed in '
+        $testPassedPattern = (
+            $testerMessageLinePrefix +
+            [regex]::Escape("$Symbol,$Period") +
+            ':[^\r\n]*Test passed in [^\r\n]*\r?$'
+        )
         $testPassedRegex = New-Object Text.RegularExpressions.Regex(
             $testPassedPattern,
             [Text.RegularExpressions.RegexOptions]::IgnoreCase
@@ -2254,14 +2264,35 @@ try {
             $candidateMarkerIndices = New-Object 'System.Collections.Generic.List[int]'
             $allCandidateMarkersMatched = $true
             foreach ($candidateMarker in $markers) {
-                $candidateMarkerIndex = Get-TextIndex `
-                    -Text $testerText `
-                    -Needle $candidateMarker `
-                    -StartIndex $candidateEnd `
-                    -CaseSensitive
+                $candidateMarkerPattern = (
+                    '(?<![A-Za-z0-9_.:-])' +
+                    [regex]::Escape($candidateMarker) +
+                    '(?![A-Za-z0-9_.:-])'
+                )
+                $candidateMarkerRegex = New-Object Text.RegularExpressions.Regex(
+                    $candidateMarkerPattern,
+                    [Text.RegularExpressions.RegexOptions]::CultureInvariant
+                )
+                $candidateMarkerMatch = $candidateMarkerRegex.Match(
+                    $testerText,
+                    $candidateEnd
+                )
+                $candidateMarkerIndex = if ($candidateMarkerMatch.Success) {
+                    [int]$candidateMarkerMatch.Index
+                }
+                else {
+                    -1
+                }
+                $candidateMarkerEnd = if ($candidateMarkerMatch.Success) {
+                    [int]$candidateMarkerMatch.Index + [int]$candidateMarkerMatch.Length
+                }
+                else {
+                    -1
+                }
                 $candidateMarkerMatched = (
                     $candidateMarkerIndex -ge 0 -and
-                    $candidatePassIndex -gt $candidateMarkerIndex
+                    $candidateMarkerEnd -le $candidatePassIndex -and
+                    $candidateMarkerEnd -le $candidateWindowEnd
                 )
                 if (-not $candidateMarkerMatched) {
                     $allCandidateMarkersMatched = $false
@@ -2290,26 +2321,14 @@ try {
             $candidateSearchIndex = $candidateStart + 1
         }
 
-        $selectedCandidate = $null
-        foreach ($candidate in $testCandidates) {
-            if ([bool]$candidate.core_valid -and [bool]$candidate.all_markers_matched) {
-                $selectedCandidate = $candidate
-                break
-            }
+        $selectedCandidate = if ($testCandidates.Count -eq 1) {
+            $testCandidates[0]
         }
-        if ($null -eq $selectedCandidate) {
-            foreach ($candidate in $testCandidates) {
-                if ([bool]$candidate.core_valid) {
-                    $selectedCandidate = $candidate
-                    break
-                }
-            }
-        }
-        if ($null -eq $selectedCandidate -and $testCandidates.Count -gt 0) {
-            $selectedCandidate = $testCandidates[0]
+        else {
+            $null
         }
 
-        $expertCorrelated = $testCandidates.Count -gt 0
+        $expertCorrelated = $testCandidates.Count -eq 1
         $initializedIndex = if ($null -ne $selectedCandidate) {
             [int]$selectedCandidate.initialized_index
         }
@@ -2489,7 +2508,12 @@ try {
             if (-not $terminalSequenceOrdered) {
                 $errors.Add('Terminal journal did not show staged-config initialization, automatic test start, and successful finish in that order.')
             }
-            if (-not $expertCorrelated) {
+            if ($testCandidates.Count -gt 1) {
+                $errors.Add(
+                    "Tester journal contained $($testCandidates.Count) exact test candidates; evidence is ambiguous."
+                )
+            }
+            elseif (-not $expertCorrelated) {
                 $errors.Add('Tester journal did not correlate the exact expert, symbol, period, and dates.')
             }
             if (-not $initialized) {

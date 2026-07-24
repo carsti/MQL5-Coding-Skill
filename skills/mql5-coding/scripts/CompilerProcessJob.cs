@@ -281,14 +281,12 @@ namespace Mql5Coding
             }
         }
 
-        public void TerminateAndWaitForEmpty(int timeoutMilliseconds)
+        public void WaitForEmpty(int timeoutMilliseconds)
         {
+            if (timeoutMilliseconds < 0)
+                throw new ArgumentOutOfRangeException("timeoutMilliseconds");
             if (jobHandle == null || jobHandle.IsInvalid || jobHandle.IsClosed)
                 throw new InvalidOperationException("The compiler Job Object is unavailable.");
-            if (!TerminateJobObject(jobHandle, 0xDEAD))
-                throw new Win32Exception(
-                    Marshal.GetLastWin32Error(),
-                    "TerminateJobObject failed.");
 
             Stopwatch stopwatch = Stopwatch.StartNew();
             while (true)
@@ -308,8 +306,28 @@ namespace Mql5Coding
                     return;
                 if (stopwatch.ElapsedMilliseconds >= timeoutMilliseconds)
                     throw new TimeoutException(
-                        "The compiler Job Object did not become empty after termination.");
+                        "The compiler Job Object did not become empty before the deadline.");
                 Thread.Sleep(25);
+            }
+        }
+
+        public void TerminateAndWaitForEmpty(int timeoutMilliseconds)
+        {
+            if (jobHandle == null || jobHandle.IsInvalid || jobHandle.IsClosed)
+                throw new InvalidOperationException("The compiler Job Object is unavailable.");
+            if (!TerminateJobObject(jobHandle, 0xDEAD))
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "TerminateJobObject failed.");
+            try
+            {
+                WaitForEmpty(timeoutMilliseconds);
+            }
+            catch (TimeoutException error)
+            {
+                throw new TimeoutException(
+                    "The compiler Job Object did not become empty after termination.",
+                    error);
             }
         }
 

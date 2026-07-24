@@ -56,16 +56,27 @@ internal static class FakeMetaEditor
         int errors = mode == "errors" ? 1 : 0;
         int warnings = mode == "warnings" ? 1 : 0;
         bool syntaxOnly = HasArgument(args, "/s");
+        string result = String.Format(
+            "Result: {0} errors, {1} warnings",
+            errors,
+            warnings);
+
+        if (mode == "delayed_completion" && !syntaxOnly)
+        {
+            File.WriteAllBytes(artifactPath, Encoding.ASCII.GetBytes("partial ex5"));
+            File.WriteAllText(logPath, result + Environment.NewLine, new UTF8Encoding(false));
+            Thread.Sleep(750);
+            File.WriteAllBytes(artifactPath, Encoding.ASCII.GetBytes("synthetic ex5 complete"));
+            File.SetLastWriteTimeUtc(artifactPath, DateTime.UtcNow);
+            return 0;
+        }
+
         if (errors == 0 && !syntaxOnly && mode != "no_artifact" && mode != "stale_artifact")
         {
             File.WriteAllBytes(artifactPath, Encoding.ASCII.GetBytes("synthetic ex5"));
             File.SetLastWriteTimeUtc(artifactPath, DateTime.UtcNow);
         }
 
-        string result = String.Format(
-            "Result: {0} errors, {1} warnings",
-            errors,
-            warnings);
         File.WriteAllText(logPath, result + Environment.NewLine, new UTF8Encoding(false));
         return 0;
     }

@@ -124,14 +124,12 @@ def main() -> int:
         text = markdown_path.read_text(encoding="utf-8")
         validate_relative_markdown_links(markdown_path, text)
 
-    portable_files = [
-        SKILL_ROOT / "SKILL.md",
-        SKILL_ROOT / "references" / "strategy-tester.md",
-        SKILL_ROOT / "agents" / "openai.yaml",
+    portable_files = [REPOSITORY_ROOT / "README.md"] + [
+        SKILL_ROOT / relative_path for relative_path in sorted(EXPECTED_SKILL_FILES)
     ]
     for path in portable_files:
-        text = path.read_text(encoding="utf-8")
-        if re.search(r"(?i)[A-Z]:\\Users\\[^\\]+", text):
+        text = path.read_text(encoding="utf-8-sig")
+        if re.search(r"(?i)[A-Z]:[\\/]Users[\\/][^\\/]+", text):
             fail(f"{path}: contains a user-specific Windows path.")
         if "Shari" in text:
             fail(f"{path}: contains a user-specific name.")

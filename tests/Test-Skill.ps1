@@ -89,6 +89,8 @@ function Invoke-RunnerCase {
         [Parameter(Mandatory = $true)]
         [string]$ExpertSha256,
         [string]$FakeMode = 'pass',
+        [string]$ExpectedLogMarker,
+        [string]$FakeMarker = '',
         [int]$TimeoutSeconds = 15
     )
 
@@ -129,6 +131,10 @@ function Invoke-RunnerCase {
         $arguments.Add('-' + [string]$pair[0])
         $arguments.Add((Quote-NativeArgument -Value ([string]$pair[1])))
     }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedLogMarker)) {
+        $arguments.Add('-ExpectedLogMarker')
+        $arguments.Add((Quote-NativeArgument -Value $ExpectedLogMarker))
+    }
 
     $startInfo = New-Object Diagnostics.ProcessStartInfo
     $startInfo.FileName = $hostExecutable
@@ -138,6 +144,7 @@ function Invoke-RunnerCase {
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
     $startInfo.EnvironmentVariables['FAKE_MT5_MODE'] = $FakeMode
+    $startInfo.EnvironmentVariables['FAKE_MT5_MARKER'] = $FakeMarker
 
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $startInfo
@@ -324,6 +331,19 @@ try {
     Assert-True -Condition ($compileSuccess.StandardOutput -match 'MQL5_COMPILE_ARTIFACT=') `
         -Message 'Successful real compilation did not report its artifact.'
 
+    $delayedCompletion = Invoke-CompilerCase `
+        -SourcePath $compileSource `
+        -MetaEditorPath $metaEditor `
+        -FakeMode 'delayed_completion'
+    Assert-True -Condition ($delayedCompletion.ExitCode -eq 0) `
+        -Message "Delayed compiler completion exit code was $($delayedCompletion.ExitCode): $($delayedCompletion.StandardError)"
+    Assert-True -Condition (
+        [IO.File]::ReadAllText($compileArtifact, [Text.Encoding]::ASCII) -ceq 'synthetic ex5 complete'
+    ) -Message 'Compiler wrapper accepted or terminated a partially written artifact.'
+    Assert-True -Condition (
+        (Get-FileHash -LiteralPath $compileLog -Algorithm SHA256).Hash -eq $sentinelLogHash
+    ) -Message 'Compiler wrapper did not restore the original log after delayed completion.'
+
     $compileError = Invoke-CompilerCase `
         -SourcePath $compileSource `
         -MetaEditorPath $metaEditor `
@@ -352,6 +372,23 @@ try {
         -Message "Synthetic missing-artifact exit code was $($missingArtifact.ExitCode)."
     Assert-True -Condition ($missingArtifact.StandardOutput -notmatch 'MQL5_COMPILE_ARTIFACT=') `
         -Message 'Missing-artifact failure incorrectly reported an artifact.'
+
+    [IO.File]::WriteAllBytes(
+        $compileArtifact,
+        [Text.Encoding]::ASCII.GetBytes('future-dated ex5')
+    )
+    [IO.File]::SetLastWriteTimeUtc(
+        $compileArtifact,
+        [datetime]::UtcNow.AddHours(1)
+    )
+    $futureDatedArtifact = Invoke-CompilerCase `
+        -SourcePath $compileSource `
+        -MetaEditorPath $metaEditor `
+        -FakeMode 'success'
+    Assert-True -Condition ($futureDatedArtifact.ExitCode -eq 0) `
+        -Message "Freshly replaced future-dated artifact was rejected with exit code $($futureDatedArtifact.ExitCode)."
+    Assert-True -Condition ($futureDatedArtifact.StandardOutput -match 'MQL5_COMPILE_ARTIFACT=') `
+        -Message 'Freshly replaced future-dated artifact was not reported.'
 
     [IO.File]::WriteAllBytes($compileArtifact, [Text.Encoding]::ASCII.GetBytes('stale ex5'))
     [IO.File]::SetLastWriteTimeUtc($compileArtifact, [datetime]::UtcNow.AddMinutes(-10))
@@ -446,6 +483,99 @@ try {
         -Message 'Synthetic execution did not record a created process.'
     Assert-True -Condition ([bool]$pass.Result.process.job_empty_verified) `
         -Message 'Synthetic execution did not verify an empty Job Object.'
+
+    $prefixedPass = Invoke-RunnerCase `
+        -Name 'execute-prefixed-pass' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'prefixed_pass'
+    Assert-True -Condition ($prefixedPass.ExitCode -eq 0) `
+        -Message "Tab-prefixed tester evidence was rejected: $($prefixedPass.StandardError)"
+
+    $forgedPass = Invoke-RunnerCase `
+        -Name 'execute-forged-engine-pass' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'forged_engine_pass'
+    Assert-True -Condition ($forgedPass.ExitCode -eq 1) `
+        -Message 'EA-authored text was accepted as a tester-engine pass.'
+    Assert-True -Condition (-not [bool]$forgedPass.Result.evidence.checks.tester_engine_passed) `
+        -Message 'Forged tester-engine evidence was marked as passed.'
+
+    $duplicateFailure = Invoke-RunnerCase `
+        -Name 'execute-duplicate-second-fails' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'two_candidates_second_fails'
+    Assert-True -Condition ($duplicateFailure.ExitCode -eq 1) `
+        -Message 'A later failed duplicate test candidate was ignored.'
+    Assert-True -Condition (
+        [int]$duplicateFailure.Result.evidence.checks.exact_test_candidate_count -eq 2
+    ) -Message 'Duplicate exact test candidates were not recorded.'
+    Assert-True -Condition (
+        -not [bool]$duplicateFailure.Result.evidence.checks.exact_test_window_selected
+    ) -Message 'Ambiguous duplicate test evidence selected a passing window.'
+
+    $markerBase = 'MQL5_CODING_PASS:' + (('a' * 32) -join '')
+    $markerLabeled = $markerBase + ':detail'
+
+    $exactMarkerPass = Invoke-RunnerCase `
+        -Name 'execute-exact-marker-pass' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'pass' `
+        -ExpectedLogMarker $markerBase `
+        -FakeMarker $markerBase
+    Assert-True -Condition ($exactMarkerPass.ExitCode -eq 0) `
+        -Message 'An exact canonical application marker did not pass.'
+    Assert-True -Condition ($exactMarkerPass.Result.status -eq 'application_marker_passed') `
+        -Message 'Exact marker pass produced the wrong status.'
+
+    $markerPrefixMismatch = Invoke-RunnerCase `
+        -Name 'execute-marker-prefix-mismatch' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'pass' `
+        -ExpectedLogMarker $markerBase `
+        -FakeMarker $markerLabeled
+    Assert-True -Condition ($markerPrefixMismatch.ExitCode -eq 1) `
+        -Message 'A longer marker incorrectly satisfied its literal prefix.'
+
+    foreach ($markerFailureMode in @('missing_marker', 'marker_after_pass')) {
+        $markerFailure = Invoke-RunnerCase `
+            -Name "execute-$markerFailureMode" `
+            -Mode Execute `
+            -TerminalPath $terminal `
+            -TerminalDataPath $dataPath `
+            -ExpertPath $expert `
+            -PresetPath $preset `
+            -ExpertSha256 $expertHash `
+            -FakeMode $markerFailureMode `
+            -ExpectedLogMarker $markerBase `
+            -FakeMarker $markerBase
+        Assert-True -Condition ($markerFailure.ExitCode -eq 1) `
+            -Message "Marker mode '$markerFailureMode' incorrectly passed."
+    }
 
     $timeout = Invoke-RunnerCase `
         -Name 'execute-timeout' `

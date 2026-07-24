@@ -141,6 +141,16 @@ internal static class FakeTerminal
         {
             WriteLog(testerLog, "successfully initialized", start, pass, marker);
         }
+        else if (mode == "prefixed_pass")
+        {
+            const string prefix = "2026.07.24 12:00:00.000	Core 1	";
+            WriteLog(
+                testerLog,
+                prefix + "successfully initialized",
+                prefix + start,
+                prefix + marker,
+                prefix + pass);
+        }
         else
         {
             WriteLog(testerLog, "successfully initialized", start, marker, pass);
