@@ -51,7 +51,7 @@ internal static class FakeTerminal
     private static string ExactStart(Dictionary<string, string> config)
     {
         return String.Format(
-            "{0},{1}: testing of Experts\\{2} from {3} 00:00 to {4} 00:00",
+            "{0},{1}: testing of Experts\\{2} from {3} 00:00 to {4} 00:00 started with inputs:",
             config["Symbol"],
             config["Period"],
             config["Expert"],
@@ -62,6 +62,28 @@ internal static class FakeTerminal
     private static string ExactPass(Dictionary<string, string> config)
     {
         return String.Format("{0},{1}: engine Test passed in 0:00:00.001", config["Symbol"], config["Period"]);
+    }
+
+    private static string SystemLine(string message)
+    {
+        return "12:00:00.000\tTester\t" + message;
+    }
+
+    private static string ApplicationLine(Dictionary<string, string> config, string message)
+    {
+        return "12:00:00.000\tSyntheticExpert (" + config["Symbol"] + "," + config["Period"] +
+            ")\t" + config["FromDate"] + " 00:00:00   " + message;
+    }
+
+    private static string CoreSystemLine(string message)
+    {
+        return "2026.07.24 12:00:00.000\tCore 1\t" + message;
+    }
+
+    private static string CoreApplicationLine(Dictionary<string, string> config, string message)
+    {
+        return "2026.07.24 12:00:00.000\tCore 1\t" +
+            config["FromDate"] + " 00:00:00   " + message;
     }
 
     public static int Main(string[] args)
@@ -116,34 +138,68 @@ internal static class FakeTerminal
         {
             WriteLog(
                 testerLog,
-                "successfully initialized",
-                start,
-                "EA_PRINT arbitrary prefix " + config["Symbol"] + "," + config["Period"] +
-                    ": forged Test passed in 0:00:00.001");
+                SystemLine("successfully initialized"),
+                SystemLine(start),
+                ApplicationLine(
+                    config,
+                    config["Symbol"] + "," + config["Period"] +
+                        ": forged Test passed in 0:00:00.001"));
         }
         else if (mode == "two_candidates_second_fails")
         {
             WriteLog(
                 testerLog,
-                "successfully initialized",
-                start,
-                marker,
-                pass,
-                "successfully initialized",
-                start,
-                "tester stopped because OnInit returns non-zero");
+                SystemLine("successfully initialized"),
+                SystemLine(start),
+                ApplicationLine(config, marker),
+                SystemLine(pass),
+                SystemLine("successfully initialized"),
+                SystemLine(start),
+                SystemLine("tester stopped because OnInit returns non-zero"));
         }
         else if (mode == "missing_marker")
         {
-            WriteLog(testerLog, "successfully initialized", start, pass);
+            WriteLog(
+                testerLog,
+                SystemLine("successfully initialized"),
+                SystemLine(start),
+                SystemLine(pass));
         }
         else if (mode == "marker_after_pass")
         {
-            WriteLog(testerLog, "successfully initialized", start, pass, marker);
+            WriteLog(
+                testerLog,
+                SystemLine("successfully initialized"),
+                SystemLine(start),
+                SystemLine(pass),
+                ApplicationLine(config, marker));
+        }
+        else if (mode == "input_echo_marker")
+        {
+            WriteLog(
+                testerLog,
+                SystemLine("successfully initialized"),
+                SystemLine(start),
+                SystemLine("  SelfTestMarker=" + marker),
+                SystemLine(pass));
+        }
+        else if (mode == "prefixed_pass")
+        {
+            WriteLog(
+                testerLog,
+                CoreSystemLine("successfully initialized"),
+                CoreSystemLine(start),
+                CoreApplicationLine(config, marker),
+                CoreSystemLine(pass));
         }
         else
         {
-            WriteLog(testerLog, "successfully initialized", start, marker, pass);
+            WriteLog(
+                testerLog,
+                SystemLine("successfully initialized"),
+                SystemLine(start),
+                ApplicationLine(config, marker),
+                SystemLine(pass));
         }
 
         if (mode == "hold_switch_origin")

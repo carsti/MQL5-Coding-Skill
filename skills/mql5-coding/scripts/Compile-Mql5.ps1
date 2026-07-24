@@ -54,6 +54,7 @@ $logPrepared = $false
 $mutex = $null
 $mutexHeld = $false
 $compileLaunch = $null
+$compileJobEmpty = $false
 
 function Resolve-ExistingFile {
     param(
@@ -204,6 +205,48 @@ function Read-SharedText {
     }
 }
 
+function Get-SharedFileSha256 {
+    param([Parameter(Mandatory = $true)][string]$LiteralPath)
+
+    $stream = [System.IO.FileStream]::new(
+        $LiteralPath,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        [System.IO.FileShare]::ReadWrite
+    )
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return [System.BitConverter]::ToString(
+            $algorithm.ComputeHash($stream)
+        ).Replace('-', '')
+    }
+    finally {
+        $algorithm.Dispose()
+        $stream.Dispose()
+    }
+}
+
+function Get-ArtifactState {
+    param([Parameter(Mandatory = $true)][string]$LiteralPath)
+
+    if (-not (Test-Path -LiteralPath $LiteralPath -PathType Leaf)) {
+        return [pscustomobject]@{
+            Existed          = $false
+            LastWriteTimeUtc = [datetime]::MinValue
+            Length           = [long]0
+            Sha256           = $null
+        }
+    }
+
+    $item = Get-Item -LiteralPath $LiteralPath
+    return [pscustomobject]@{
+        Existed          = $true
+        LastWriteTimeUtc = $item.LastWriteTimeUtc
+        Length           = [long]$item.Length
+        Sha256           = Get-SharedFileSha256 -LiteralPath $LiteralPath
+    }
+}
+
 function Restore-OriginalLog {
     param(
         [Parameter(Mandatory = $true)][string]$LiteralPath,
@@ -290,19 +333,7 @@ try {
         throw "Another compilation is already using this source file: $resolvedSource"
     }
 
-    if (Test-Path -LiteralPath $artifactPath -PathType Leaf) {
-        $existingArtifact = Get-Item -LiteralPath $artifactPath
-        $artifactSnapshot = [pscustomobject]@{
-            Existed          = $true
-            LastWriteTimeUtc = $existingArtifact.LastWriteTimeUtc
-        }
-    }
-    else {
-        $artifactSnapshot = [pscustomobject]@{
-            Existed          = $false
-            LastWriteTimeUtc = [datetime]::MinValue
-        }
-    }
+    $artifactSnapshot = Get-ArtifactState -LiteralPath $artifactPath
 
     if (Test-Path -LiteralPath $logPath -PathType Leaf) {
         $existingLog = Get-Item -LiteralPath $logPath
@@ -378,10 +409,45 @@ try {
     }
     $stopwatch.Stop()
 
+    if ($null -ne $summaryMatch) {
+        try {
+            $compileLaunch.WaitForEmpty(5000)
+            $compileJobEmpty = $true
+        }
+        catch {
+            $shutdownError = $_.Exception.Message
+            try {
+                $compileLaunch.TerminateAndWaitForEmpty(5000)
+                $compileJobEmpty = $true
+            }
+            catch {
+                throw (
+                    "MetaEditor produced a Result line but did not exit cleanly, and its process " +
+                    "could not be terminated: $shutdownError Cleanup error: $($_.Exception.Message)"
+                )
+            }
+            throw (
+                "MetaEditor produced a Result line but did not exit cleanly within 5 seconds; " +
+                "its process was terminated and the artifact was not accepted. $shutdownError"
+            )
+        }
+
+        $logText = Read-SharedText -LiteralPath $logPath
+        $finalMatches = [regex]::Matches(
+            $logText,
+            '(?im)^\s*Result:\s*(?<errors>\d+)\s+errors?,\s*(?<warnings>\d+)\s+warnings?'
+        )
+        if ($finalMatches.Count -eq 0) {
+            throw 'MetaEditor log lost its complete Result line before the compiler process exited.'
+        }
+        $summaryMatch = $finalMatches[$finalMatches.Count - 1]
+    }
+
     if ($null -eq $summaryMatch) {
         $cleanupFailed = $false
         try {
             $compileLaunch.TerminateAndWaitForEmpty(5000)
+            $compileJobEmpty = $true
         }
         catch {
             $cleanupFailed = $true
@@ -418,10 +484,16 @@ try {
                 $artifactDeadline = [datetime]::UtcNow.AddSeconds(2)
                 do {
                     if (Test-Path -LiteralPath $artifactPath -PathType Leaf) {
-                        $artifactItem = Get-Item -LiteralPath $artifactPath
+                        $artifactState = Get-ArtifactState -LiteralPath $artifactPath
                         $artifactRefreshed = (
-                            -not $artifactSnapshot.Existed -or
-                            $artifactItem.LastWriteTimeUtc -gt $artifactSnapshot.LastWriteTimeUtc
+                            $artifactState.Existed -and
+                            $artifactState.Length -gt 0 -and
+                            (
+                                -not $artifactSnapshot.Existed -or
+                                $artifactState.LastWriteTimeUtc -ne $artifactSnapshot.LastWriteTimeUtc -or
+                                $artifactState.Length -ne $artifactSnapshot.Length -or
+                                $artifactState.Sha256 -cne $artifactSnapshot.Sha256
+                            )
                         )
                         if ($artifactRefreshed) {
                             break
@@ -449,6 +521,22 @@ catch {
     $errorMessage = $_.Exception.Message
 }
 finally {
+    if ($null -ne $compileLaunch) {
+        if (-not $compileJobEmpty) {
+            try {
+                $compileLaunch.TerminateAndWaitForEmpty(5000)
+                $compileJobEmpty = $true
+            }
+            catch {
+                $exitCode = $ExitToolError
+                $status = 'tool_error'
+                $errorMessage = "MetaEditor process cleanup failed before log restoration: $($_.Exception.Message)"
+            }
+        }
+        $compileLaunch.Dispose()
+        $compileLaunch = $null
+    }
+
     if ($logPrepared -and $null -ne $logPath -and $null -ne $logSnapshot) {
         try {
             Restore-OriginalLog -LiteralPath $logPath -Snapshot $logSnapshot
@@ -465,9 +553,6 @@ finally {
     }
     if ($null -ne $mutex) {
         $mutex.Dispose()
-    }
-    if ($null -ne $compileLaunch) {
-        $compileLaunch.Dispose()
     }
 }
 
