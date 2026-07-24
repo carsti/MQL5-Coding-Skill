@@ -1135,8 +1135,18 @@ try {
         -ExpertSha256 $expertHash `
         -FakeMode 'timeout_child' `
         -TimeoutSeconds 10
+    $timeoutResultDiagnostic = if ($null -eq $timeout.Result) {
+        '<no result JSON>'
+    }
+    else {
+        $timeout.Result | ConvertTo-Json -Depth 10 -Compress
+    }
     Assert-True -Condition ($timeout.ExitCode -eq 3) `
-        -Message "Synthetic timeout exit code was $($timeout.ExitCode): $($timeout.StandardError)"
+        -Message (
+            "Synthetic timeout exit code was $($timeout.ExitCode). " +
+            "stderr=$($timeout.StandardError) stdout=$($timeout.StandardOutput) " +
+            "result=$timeoutResultDiagnostic"
+        )
     Assert-True -Condition ($timeout.Result.status -eq 'timed_out') `
         -Message "Unexpected synthetic timeout status: $($timeout.Result.status)"
     Assert-True -Condition ([bool]$timeout.Result.process.timed_out) `
