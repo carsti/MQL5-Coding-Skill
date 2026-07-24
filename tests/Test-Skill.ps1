@@ -318,22 +318,40 @@ $postExitWaitProbe = & {
         process_id = 4242
         creation_utc_ticks = [long]638574336000000000
         session_id = 3
+        executable_path = 'C:\synthetic\terminal64.exe'
         executable_file_identity = 'synthetic-identity'
     }
     $state = [pscustomobject]@{
-        mode = 'stale_owned'
+        mode = 'stale_unresolved'
         calls = 0
         sleeps = 0
     }
+    function New-UnresolvedOwnedObservation {
+        return [pscustomobject]@{
+            process_id = 4242
+            creation_utc_ticks = $null
+            session_id = $null
+            executable_file_identity = 'synthetic-identity'
+            identity_unresolved = $true
+        }
+    }
     function Get-MatchingTerminalProcesses {
-        param($ExecutablePath, $ExpectedFileIdentity, $TrustedSuspendedIdentity)
+        param(
+            $ExecutablePath,
+            $ExpectedFileIdentity,
+            $TrustedSuspendedIdentity,
+            $SettlingOwnedIdentity
+        )
         $state.calls++
         switch ($state.mode) {
-            'stale_owned' {
+            'stale_unresolved' {
                 if ($state.calls -lt 3) {
-                    return $ownedIdentity
+                    return New-UnresolvedOwnedObservation
                 }
                 return @()
+            }
+            'persistent_unresolved' {
+                return New-UnresolvedOwnedObservation
             }
             'foreign' {
                 return [pscustomobject]@{
@@ -341,6 +359,7 @@ $postExitWaitProbe = & {
                     creation_utc_ticks = [long]638574336000000100
                     session_id = 3
                     executable_file_identity = 'synthetic-identity'
+                    identity_unresolved = $false
                 }
             }
             'inspection_error' {
@@ -366,6 +385,20 @@ $postExitWaitProbe = & {
     )
     $staleCalls = $state.calls
     $staleSleeps = $state.sleeps
+
+    $state.mode = 'persistent_unresolved'
+    $state.calls = 0
+    $state.sleeps = 0
+    $persistentRemaining = @(
+        Wait-ForNoMatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -VerifiedOwnedProcessIdentity $ownedIdentity `
+            -TimeoutMilliseconds 0 `
+            -PollMilliseconds 1
+    )
+    $persistentCalls = $state.calls
+    $persistentSleeps = $state.sleeps
 
     $state.mode = 'foreign'
     $state.calls = 0
@@ -403,6 +436,15 @@ $postExitWaitProbe = & {
         stale_calls = $staleCalls
         stale_sleeps = $staleSleeps
         stale_remaining = $staleRemaining.Count
+        persistent_calls = $persistentCalls
+        persistent_sleeps = $persistentSleeps
+        persistent_remaining = $persistentRemaining.Count
+        persistent_unresolved = if ($persistentRemaining.Count -gt 0) {
+            [bool]$persistentRemaining[0].identity_unresolved
+        }
+        else {
+            $false
+        }
         foreign_calls = $foreignCalls
         foreign_sleeps = $foreignSleeps
         foreign_remaining = $foreignRemaining.Count
@@ -421,7 +463,13 @@ Assert-True -Condition (
     $postExitWaitProbe.stale_calls -eq 3 -and
     $postExitWaitProbe.stale_sleeps -eq 2 -and
     $postExitWaitProbe.stale_remaining -eq 0
-) -Message 'Post-job-empty process discovery did not tolerate bounded stale owned-process observations.'
+) -Message 'Post-job-empty process discovery did not tolerate a settling owned row.'
+Assert-True -Condition (
+    $postExitWaitProbe.persistent_calls -eq 1 -and
+    $postExitWaitProbe.persistent_sleeps -eq 0 -and
+    $postExitWaitProbe.persistent_remaining -eq 1 -and
+    $postExitWaitProbe.persistent_unresolved
+) -Message 'A persistent unresolved owned row was incorrectly accepted as gone.'
 Assert-True -Condition (
     $postExitWaitProbe.foreign_calls -eq 1 -and
     $postExitWaitProbe.foreign_sleeps -eq 0 -and
@@ -446,7 +494,7 @@ $trustedMatcherProbe = & {
         ),
         [DateTimeKind]::Utc
     )
-    $trustedIdentity = [pscustomobject]@{
+    $ownedIdentity = [pscustomobject]@{
         process_id = 4242
         creation_utc_ticks = [long]$creationDate.Ticks
         session_id = 3
@@ -457,8 +505,8 @@ $trustedMatcherProbe = & {
         ProcessId = 4242
         ParentProcessId = 111
         Name = 'terminal64.exe'
-        CreationDate = $creationDate
-        SessionId = 3
+        CreationDate = $null
+        SessionId = $null
         ExecutablePath = $null
     }
     function Get-CimInstance {
@@ -466,28 +514,13 @@ $trustedMatcherProbe = & {
         return $processRecord
     }
 
-    $exact = @(
+    $suspendedMissingFields = @(
         Get-MatchingTerminalProcesses `
             -ExecutablePath 'C:\synthetic\terminal64.exe' `
             -ExpectedFileIdentity 'synthetic-identity' `
-            -TrustedSuspendedIdentity $trustedIdentity
+            -TrustedSuspendedIdentity $ownedIdentity
     )
 
-    $processRecord.CreationDate = $creationDate.AddSeconds(1)
-    $creationMismatchError = $null
-    try {
-        $ignored = @(
-            Get-MatchingTerminalProcesses `
-                -ExecutablePath 'C:\synthetic\terminal64.exe' `
-                -ExpectedFileIdentity 'synthetic-identity' `
-                -TrustedSuspendedIdentity $trustedIdentity
-        )
-    }
-    catch {
-        $creationMismatchError = $_.Exception.Message
-    }
-
-    $processRecord.CreationDate = $creationDate
     $noTrustedError = $null
     try {
         $ignored = @(
@@ -500,74 +533,160 @@ $trustedMatcherProbe = & {
         $noTrustedError = $_.Exception.Message
     }
 
-    $processRecord.SessionId = 4
-    $sessionMismatchError = $null
+    $processRecord.CreationDate = $creationDate.AddSeconds(1)
+    $suspendedCreationMismatchError = $null
     try {
         $ignored = @(
             Get-MatchingTerminalProcesses `
                 -ExecutablePath 'C:\synthetic\terminal64.exe' `
                 -ExpectedFileIdentity 'synthetic-identity' `
-                -TrustedSuspendedIdentity $trustedIdentity
+                -TrustedSuspendedIdentity $ownedIdentity
         )
     }
     catch {
-        $sessionMismatchError = $_.Exception.Message
+        $suspendedCreationMismatchError = $_.Exception.Message
+    }
+
+    $processRecord.CreationDate = $null
+    $processRecord.SessionId = 4
+    $suspendedSessionMismatchError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -TrustedSuspendedIdentity $ownedIdentity
+        )
+    }
+    catch {
+        $suspendedSessionMismatchError = $_.Exception.Message
     }
 
     $processRecord.SessionId = $null
-    $missingSessionError = $null
+    $processRecord.Name = 'other.exe'
+    $suspendedNameMismatchError = $null
     try {
         $ignored = @(
             Get-MatchingTerminalProcesses `
                 -ExecutablePath 'C:\synthetic\terminal64.exe' `
                 -ExpectedFileIdentity 'synthetic-identity' `
-                -TrustedSuspendedIdentity $trustedIdentity
+                -TrustedSuspendedIdentity $ownedIdentity
         )
     }
     catch {
-        $missingSessionError = $_.Exception.Message
+        $suspendedNameMismatchError = $_.Exception.Message
     }
 
-    $processRecord.SessionId = 3
-    $processRecord.Name = 'other.exe'
-    $nameMismatchError = $null
+    $processRecord.Name = 'terminal64.exe'
+    $mixedModeError = $null
     try {
         $ignored = @(
             Get-MatchingTerminalProcesses `
                 -ExecutablePath 'C:\synthetic\terminal64.exe' `
                 -ExpectedFileIdentity 'synthetic-identity' `
-                -TrustedSuspendedIdentity $trustedIdentity
+                -TrustedSuspendedIdentity $ownedIdentity `
+                -SettlingOwnedIdentity $ownedIdentity
         )
     }
     catch {
-        $nameMismatchError = $_.Exception.Message
+        $mixedModeError = $_.Exception.Message
+    }
+
+    $settlingMissingFields = @(
+        Get-MatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -SettlingOwnedIdentity $ownedIdentity
+    )
+
+    $processRecord.Name = $null
+    $settlingMissingName = @(
+        Get-MatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -SettlingOwnedIdentity $ownedIdentity
+    )
+
+    $processRecord.Name = 'terminal64.exe'
+    $processRecord.CreationDate = $creationDate.AddSeconds(1)
+    $settlingCreationMismatchError = $null
+    try {
+        $ignored = @(
+            Get-MatchingTerminalProcesses `
+                -ExecutablePath 'C:\synthetic\terminal64.exe' `
+                -ExpectedFileIdentity 'synthetic-identity' `
+                -SettlingOwnedIdentity $ownedIdentity
+        )
+    }
+    catch {
+        $settlingCreationMismatchError = $_.Exception.Message
     }
 
     return [pscustomobject]@{
-        exact_count = $exact.Count
-        exact_pid = if ($exact.Count -gt 0) { [int]$exact[0].process_id } else { -1 }
-        creation_mismatch_error = $creationMismatchError
+        suspended_count = $suspendedMissingFields.Count
+        suspended_creation_ticks = if ($suspendedMissingFields.Count -gt 0) {
+            [long]$suspendedMissingFields[0].creation_utc_ticks
+        }
+        else {
+            0
+        }
+        suspended_session = if ($suspendedMissingFields.Count -gt 0) {
+            [int]$suspendedMissingFields[0].session_id
+        }
+        else {
+            -1
+        }
         no_trusted_error = $noTrustedError
-        session_mismatch_error = $sessionMismatchError
-        missing_session_error = $missingSessionError
-        name_mismatch_error = $nameMismatchError
+        suspended_creation_mismatch_error = $suspendedCreationMismatchError
+        suspended_session_mismatch_error = $suspendedSessionMismatchError
+        suspended_name_mismatch_error = $suspendedNameMismatchError
+        mixed_mode_error = $mixedModeError
+        settling_missing_count = $settlingMissingFields.Count
+        settling_missing_unresolved = if ($settlingMissingFields.Count -gt 0) {
+            [bool]$settlingMissingFields[0].identity_unresolved
+        }
+        else {
+            $false
+        }
+        settling_missing_name_count = $settlingMissingName.Count
+        settling_missing_name_unresolved = if ($settlingMissingName.Count -gt 0) {
+            [bool]$settlingMissingName[0].identity_unresolved
+        }
+        else {
+            $false
+        }
+        settling_creation_mismatch_error = $settlingCreationMismatchError
     }
 } $postExitMatcherDefinitionText
 Assert-True -Condition (
-    $trustedMatcherProbe.exact_count -eq 1 -and
-    $trustedMatcherProbe.exact_pid -eq 4242
-) -Message 'The exact verified owned process was not recognized when CIM hid its image.'
-foreach ($blockedIdentityError in @(
-        $trustedMatcherProbe.creation_mismatch_error,
+    $trustedMatcherProbe.suspended_count -eq 1 -and
+    $trustedMatcherProbe.suspended_creation_ticks -eq [long]638396640000000000 -and
+    $trustedMatcherProbe.suspended_session -eq 3
+) -Message 'The native suspended-process proof did not fill missing CIM fields.'
+foreach ($blockedSuspendedError in @(
         $trustedMatcherProbe.no_trusted_error,
-        $trustedMatcherProbe.session_mismatch_error,
-        $trustedMatcherProbe.missing_session_error,
-        $trustedMatcherProbe.name_mismatch_error
+        $trustedMatcherProbe.suspended_creation_mismatch_error,
+        $trustedMatcherProbe.suspended_session_mismatch_error,
+        $trustedMatcherProbe.suspended_name_mismatch_error
     )) {
     Assert-True -Condition (
-        $blockedIdentityError -match 'identity is unreadable for PID\(s\) 4242'
-    ) -Message 'An unreadable process row was accepted without an exact verified identity.'
+        $blockedSuspendedError -match 'identity is unreadable for PID\(s\) 4242'
+    ) -Message 'A contradictory suspended-process observation did not fail closed.'
 }
+Assert-True -Condition (
+    $trustedMatcherProbe.mixed_mode_error -match
+        'cannot use suspended and settling identities together'
+) -Message 'Process discovery accepted conflicting identity modes.'
+Assert-True -Condition (
+    $trustedMatcherProbe.settling_missing_count -eq 1 -and
+    $trustedMatcherProbe.settling_missing_unresolved -and
+    $trustedMatcherProbe.settling_missing_name_count -eq 1 -and
+    $trustedMatcherProbe.settling_missing_name_unresolved
+) -Message 'Missing post-exit CIM fields were accepted instead of marked unresolved.'
+Assert-True -Condition (
+    $trustedMatcherProbe.settling_creation_mismatch_error -match
+        'identity is unreadable for PID\(s\) 4242'
+) -Message 'A positive post-exit identity mismatch did not fail closed.'
 
 Assert-True -Condition ($skillText -notmatch '(?i)[A-Z]:\\Users\\') `
     -Message 'SKILL.md contains a user-specific path.'

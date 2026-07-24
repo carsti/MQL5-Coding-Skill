@@ -760,7 +760,7 @@ function Wait-ForNoMatchingTerminalProcesses {
             Get-MatchingTerminalProcesses `
                 -ExecutablePath $ExecutablePath `
                 -ExpectedFileIdentity $ExpectedFileIdentity `
-                -TrustedSuspendedIdentity $VerifiedOwnedProcessIdentity
+                -SettlingOwnedIdentity $VerifiedOwnedProcessIdentity
         )
         if ($matches.Count -eq 0) {
             return @()
@@ -768,16 +768,24 @@ function Wait-ForNoMatchingTerminalProcesses {
 
         $foreignMatch = @(
             $matches | Where-Object {
-                [int]$_.process_id -ne
-                    [int]$VerifiedOwnedProcessIdentity.process_id -or
-                $null -eq $_.creation_utc_ticks -or
-                [long]$_.creation_utc_ticks -ne
-                    [long]$VerifiedOwnedProcessIdentity.creation_utc_ticks -or
-                $null -eq $_.session_id -or
-                [int]$_.session_id -ne
-                    [int]$VerifiedOwnedProcessIdentity.session_id -or
-                [string]$_.executable_file_identity -cne
-                    [string]$VerifiedOwnedProcessIdentity.executable_file_identity
+                if ([bool]$_.identity_unresolved) {
+                    return (
+                        [int]$_.process_id -ne
+                            [int]$VerifiedOwnedProcessIdentity.process_id
+                    )
+                }
+                return (
+                    [int]$_.process_id -ne
+                        [int]$VerifiedOwnedProcessIdentity.process_id -or
+                    $null -eq $_.creation_utc_ticks -or
+                    [long]$_.creation_utc_ticks -ne
+                        [long]$VerifiedOwnedProcessIdentity.creation_utc_ticks -or
+                    $null -eq $_.session_id -or
+                    [int]$_.session_id -ne
+                        [int]$VerifiedOwnedProcessIdentity.session_id -or
+                    [string]$_.executable_file_identity -cne
+                        [string]$VerifiedOwnedProcessIdentity.executable_file_identity
+                )
             }
         )
         if ($foreignMatch.Count -gt 0) {
@@ -797,10 +805,53 @@ function Get-MatchingTerminalProcesses {
     param(
         [Parameter(Mandatory)][string]$ExecutablePath,
         [Parameter(Mandatory)][string]$ExpectedFileIdentity,
-        $TrustedSuspendedIdentity
+        $TrustedSuspendedIdentity,
+        $SettlingOwnedIdentity
     )
+    if (
+        $null -ne $TrustedSuspendedIdentity -and
+        $null -ne $SettlingOwnedIdentity
+    ) {
+        throw 'Process discovery cannot use suspended and settling identities together.'
+    }
+
     $wanted = [IO.Path]::GetFullPath($ExecutablePath)
     $wantedLeaf = [IO.Path]::GetFileName($wanted)
+    $suspendedVerifiedPath = $null
+    if ($null -ne $TrustedSuspendedIdentity) {
+        $suspendedVerifiedPath = [IO.Path]::GetFullPath(
+            [string]$TrustedSuspendedIdentity.executable_path
+        )
+        if (
+            -not $suspendedVerifiedPath.Equals(
+                $wanted,
+                [StringComparison]::OrdinalIgnoreCase
+            ) -or
+            [IO.Path]::GetFileName($suspendedVerifiedPath) -ine $wantedLeaf -or
+            [string]$TrustedSuspendedIdentity.executable_file_identity -cne
+                $ExpectedFileIdentity
+        ) {
+            throw 'The trusted suspended process identity does not match the selected terminal image.'
+        }
+    }
+    $settlingVerifiedPath = $null
+    if ($null -ne $SettlingOwnedIdentity) {
+        $settlingVerifiedPath = [IO.Path]::GetFullPath(
+            [string]$SettlingOwnedIdentity.executable_path
+        )
+        if (
+            -not $settlingVerifiedPath.Equals(
+                $wanted,
+                [StringComparison]::OrdinalIgnoreCase
+            ) -or
+            [IO.Path]::GetFileName($settlingVerifiedPath) -ine $wantedLeaf -or
+            [string]$SettlingOwnedIdentity.executable_file_identity -cne
+                $ExpectedFileIdentity
+        ) {
+            throw 'The settling process identity does not match the selected terminal image.'
+        }
+    }
+
     $matches = New-Object 'System.Collections.Generic.List[object]'
     $unknown = New-Object 'System.Collections.Generic.List[int]'
 
@@ -816,9 +867,13 @@ function Get-MatchingTerminalProcesses {
     foreach ($process in $processes) {
         $processId = [int]$process.ProcessId
         $processName = [string]$process.Name
-        $sameLeafName = $processName.Equals(
-            $wantedLeaf,
-            [StringComparison]::OrdinalIgnoreCase
+        $processNameAvailable = -not [string]::IsNullOrWhiteSpace($processName)
+        $sameLeafName = (
+            $processNameAvailable -and
+            $processName.Equals(
+                $wantedLeaf,
+                [StringComparison]::OrdinalIgnoreCase
+            )
         )
 
         $creationTicks = $null
@@ -841,33 +896,81 @@ function Get-MatchingTerminalProcesses {
             $sessionId = $null
         }
 
-        # A suspended process was already proven against the pinned image before
-        # resume. Reuse that proof only for the exact same PID incarnation and
-        # session when CIM can no longer expose its image during termination.
-        $trustedProcessIdMatch = (
+        # The live suspended PID and image were already verified through owned
+        # native handles. CIM may hide fields until that process is resumed.
+        $suspendedProcessIdMatch = (
             $null -ne $TrustedSuspendedIdentity -and
             $processId -eq [int]$TrustedSuspendedIdentity.process_id
         )
-        $trustedIdentityMatch = (
-            $trustedProcessIdMatch -and
-            $sameLeafName -and
-            $null -ne $creationTicks -and
-            $creationTicks -eq [long]$TrustedSuspendedIdentity.creation_utc_ticks -and
-            $null -ne $sessionId -and
-            $sessionId -eq [int]$TrustedSuspendedIdentity.session_id -and
-            [string]$TrustedSuspendedIdentity.executable_file_identity -ceq
-                $ExpectedFileIdentity
+        $suspendedIdentityCompatible = (
+            $suspendedProcessIdMatch -and
+            (
+                -not $processNameAvailable -or
+                $sameLeafName
+            ) -and
+            (
+                $null -eq $creationTicks -or
+                $creationTicks -eq [long]$TrustedSuspendedIdentity.creation_utc_ticks
+            ) -and
+            (
+                $null -eq $sessionId -or
+                $sessionId -eq [int]$TrustedSuspendedIdentity.session_id
+            )
         )
-        $trustedMatchRecord = if ($trustedIdentityMatch) {
+        $suspendedMatchRecord = if ($suspendedIdentityCompatible) {
+            [pscustomobject][ordered]@{
+                process_id = $processId
+                parent_process_id = [int]$process.ParentProcessId
+                creation_utc_ticks = [long]$TrustedSuspendedIdentity.creation_utc_ticks
+                session_id = [int]$TrustedSuspendedIdentity.session_id
+                executable_path = $suspendedVerifiedPath
+                executable_file_identity = $ExpectedFileIdentity
+                identity_match = $true
+                path_match = $true
+                identity_unresolved = $false
+            }
+        }
+        else {
+            $null
+        }
+
+        # After verified Job Object emptiness, an owned row can briefly outlive
+        # readable CIM fields. Missing fields may settle; positive mismatches may not.
+        $settlingProcessIdMatch = (
+            $null -ne $SettlingOwnedIdentity -and
+            $processId -eq [int]$SettlingOwnedIdentity.process_id
+        )
+        $settlingIdentityCompatible = (
+            $settlingProcessIdMatch -and
+            (
+                -not $processNameAvailable -or
+                $sameLeafName
+            ) -and
+            (
+                $null -eq $creationTicks -or
+                $creationTicks -eq [long]$SettlingOwnedIdentity.creation_utc_ticks
+            ) -and
+            (
+                $null -eq $sessionId -or
+                $sessionId -eq [int]$SettlingOwnedIdentity.session_id
+            )
+        )
+        $settlingIdentityComplete = (
+            $settlingIdentityCompatible -and
+            $null -ne $creationTicks -and
+            $null -ne $sessionId
+        )
+        $settlingMatchRecord = if ($settlingIdentityCompatible) {
             [pscustomobject][ordered]@{
                 process_id = $processId
                 parent_process_id = [int]$process.ParentProcessId
                 creation_utc_ticks = $creationTicks
                 session_id = $sessionId
-                executable_path = [string]$TrustedSuspendedIdentity.executable_path
+                executable_path = $settlingVerifiedPath
                 executable_file_identity = $ExpectedFileIdentity
-                identity_match = $true
-                path_match = $true
+                identity_match = $false
+                path_match = $false
+                identity_unresolved = $true
             }
         }
         else {
@@ -881,10 +984,13 @@ function Get-MatchingTerminalProcesses {
             $path = ''
         }
         if ([string]::IsNullOrWhiteSpace($path)) {
-            if ($null -ne $trustedMatchRecord) {
-                $matches.Add($trustedMatchRecord)
+            if ($null -ne $suspendedMatchRecord) {
+                $matches.Add($suspendedMatchRecord)
             }
-            elseif ($sameLeafName -or $trustedProcessIdMatch) {
+            elseif ($null -ne $settlingMatchRecord) {
+                $matches.Add($settlingMatchRecord)
+            }
+            elseif ($sameLeafName -or $suspendedProcessIdMatch -or $settlingProcessIdMatch) {
                 $unknown.Add($processId)
             }
             continue
@@ -900,10 +1006,18 @@ function Get-MatchingTerminalProcesses {
                 $null -ne $candidate -and
                 $candidate.Equals($wanted, [StringComparison]::OrdinalIgnoreCase)
             )
-            if ($null -ne $trustedMatchRecord) {
-                $matches.Add($trustedMatchRecord)
+            if ($null -ne $suspendedMatchRecord) {
+                $matches.Add($suspendedMatchRecord)
             }
-            elseif ($sameLeafName -or $pathMatches -or $trustedProcessIdMatch) {
+            elseif ($null -ne $settlingMatchRecord) {
+                $matches.Add($settlingMatchRecord)
+            }
+            elseif (
+                $sameLeafName -or
+                $pathMatches -or
+                $suspendedProcessIdMatch -or
+                $settlingProcessIdMatch
+            ) {
                 $unknown.Add($processId)
             }
             continue
@@ -918,18 +1032,50 @@ function Get-MatchingTerminalProcesses {
             [StringComparison]::Ordinal
         )
         if ($pathMatch -or $identityMatch) {
-            $matches.Add([pscustomobject][ordered]@{
-                process_id = $processId
-                parent_process_id = [int]$process.ParentProcessId
-                creation_utc_ticks = $creationTicks
-                session_id = $sessionId
-                executable_path = $candidate
-                executable_file_identity = $candidateIdentity
-                identity_match = [bool]$identityMatch
-                path_match = [bool]$pathMatch
-            })
+            if ($suspendedProcessIdMatch) {
+                if ($null -ne $suspendedMatchRecord) {
+                    $matches.Add($suspendedMatchRecord)
+                }
+                else {
+                    $unknown.Add($processId)
+                }
+            }
+            elseif ($settlingProcessIdMatch) {
+                if ($null -eq $settlingMatchRecord) {
+                    $unknown.Add($processId)
+                }
+                elseif (-not $settlingIdentityComplete) {
+                    $matches.Add($settlingMatchRecord)
+                }
+                else {
+                    $matches.Add([pscustomobject][ordered]@{
+                        process_id = $processId
+                        parent_process_id = [int]$process.ParentProcessId
+                        creation_utc_ticks = $creationTicks
+                        session_id = $sessionId
+                        executable_path = $candidate
+                        executable_file_identity = $candidateIdentity
+                        identity_match = [bool]$identityMatch
+                        path_match = [bool]$pathMatch
+                        identity_unresolved = $false
+                    })
+                }
+            }
+            else {
+                $matches.Add([pscustomobject][ordered]@{
+                    process_id = $processId
+                    parent_process_id = [int]$process.ParentProcessId
+                    creation_utc_ticks = $creationTicks
+                    session_id = $sessionId
+                    executable_path = $candidate
+                    executable_file_identity = $candidateIdentity
+                    identity_match = [bool]$identityMatch
+                    path_match = [bool]$pathMatch
+                    identity_unresolved = $false
+                })
+            }
         }
-        elseif ($trustedProcessIdMatch) {
+        elseif ($suspendedProcessIdMatch -or $settlingProcessIdMatch) {
             $unknown.Add($processId)
         }
     }
