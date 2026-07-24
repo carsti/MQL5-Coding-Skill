@@ -435,7 +435,7 @@ try {
         $logText = Read-SharedText -LiteralPath $logPath
         $finalMatches = [regex]::Matches(
             $logText,
-            '(?im)^s*Result:s*(?<errors>d+)s+errors?,s*(?<warnings>d+)s+warnings?'
+            '(?im)^\s*Result:\s*(?<errors>\d+)\s+errors?,\s*(?<warnings>\d+)\s+warnings?'
         )
         if ($finalMatches.Count -eq 0) {
             throw 'MetaEditor log lost its complete Result line before the compiler process exited.'
