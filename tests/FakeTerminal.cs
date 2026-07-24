@@ -82,7 +82,7 @@ internal static class FakeTerminal
 
     private static string CoreApplicationLine(Dictionary<string, string> config, string message)
     {
-        return "2026.07.24 12:00:00.000\tCore 1\t" +
+        return "2026.07.24 12:00:00.000\tCore 1\t   " +
             config["FromDate"] + " 00:00:00   " + message;
     }
 
@@ -192,6 +192,32 @@ internal static class FakeTerminal
                 SystemLine(start),
                 SystemLine("  SelfTestMarker=" + marker),
                 SystemLine(pass));
+        }
+        else if (mode == "application_initialized_only")
+        {
+            WriteLog(
+                testerLog,
+                CoreApplicationLine(config, "successfully initialized"),
+                CoreSystemLine(start),
+                CoreSystemLine(pass));
+        }
+        else if (mode == "application_generic_boundary")
+        {
+            WriteLog(
+                testerLog,
+                CoreSystemLine("successfully initialized"),
+                CoreSystemLine(start),
+                CoreApplicationLine(config, "testing of Experts\\Other.ex5 started with inputs:"),
+                CoreSystemLine(pass));
+        }
+        else if (mode == "application_oninit_failure")
+        {
+            WriteLog(
+                testerLog,
+                CoreSystemLine("successfully initialized"),
+                CoreSystemLine(start),
+                CoreApplicationLine(config, "tester stopped because OnInit returns non-zero"),
+                CoreSystemLine(pass));
         }
         else if (mode == "prefixed_pass")
         {

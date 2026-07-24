@@ -10,6 +10,7 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $skillRoot = Join-Path $repositoryRoot 'skills\mql5-coding'
 $runner = Join-Path $skillRoot 'scripts\Invoke-Mt5TesterSmoke.ps1'
 $compiler = Join-Path $skillRoot 'scripts\Compile-Mql5.ps1'
+$compilerProcessJobSource = Join-Path $skillRoot 'scripts\CompilerProcessJob.cs'
 $fakeTerminalSource = Join-Path $PSScriptRoot 'FakeTerminal.cs'
 $fakeMetaEditorSource = Join-Path $PSScriptRoot 'FakeMetaEditor.cs'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('mql5-coding-skill-test-' + [guid]::NewGuid().ToString('N'))
@@ -186,6 +187,8 @@ function Invoke-CompilerCase {
         [Parameter(Mandatory = $true)]
         [string]$FakeMode,
         [string]$ChildPidPath,
+        [string]$IncludePath,
+        [string]$ArgumentsPath,
         [int]$TimeoutSeconds = 5,
         [switch]$SyntaxOnly,
         [switch]$WarningsAsErrors
@@ -208,6 +211,10 @@ function Invoke-CompilerCase {
         )) {
         $arguments.Add((Quote-NativeArgument -Value ([string]$value)))
     }
+    if (-not [string]::IsNullOrWhiteSpace($IncludePath)) {
+        $arguments.Add('-IncludePath')
+        $arguments.Add((Quote-NativeArgument -Value $IncludePath))
+    }
     if ($SyntaxOnly) {
         $arguments.Add('-SyntaxOnly')
     }
@@ -225,6 +232,9 @@ function Invoke-CompilerCase {
     $startInfo.EnvironmentVariables['FAKE_METAEDITOR_MODE'] = $FakeMode
     if (-not [string]::IsNullOrWhiteSpace($ChildPidPath)) {
         $startInfo.EnvironmentVariables['FAKE_METAEDITOR_CHILD_PID_PATH'] = $ChildPidPath
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ArgumentsPath)) {
+        $startInfo.EnvironmentVariables['FAKE_METAEDITOR_ARGS_PATH'] = $ArgumentsPath
     }
 
     $process = New-Object Diagnostics.Process
@@ -247,13 +257,22 @@ function Invoke-CompilerCase {
     }
 }
 
-foreach ($requiredFile in @($runner, $compiler, $fakeTerminalSource, $fakeMetaEditorSource)) {
+foreach ($requiredFile in @(
+        $runner,
+        $compiler,
+        $compilerProcessJobSource,
+        $fakeTerminalSource,
+        $fakeMetaEditorSource
+    )) {
     Assert-True -Condition (Test-Path -LiteralPath $requiredFile -PathType Leaf) `
         -Message "Required file is missing: $requiredFile"
 }
 
 Assert-PowerShellParses -Path $runner
 Assert-PowerShellParses -Path $compiler
+if (-not ('Mql5Coding.CompilerProcessJob' -as [type])) {
+    Add-Type -Path $compilerProcessJobSource
+}
 
 $skillText = Get-Content -LiteralPath (Join-Path $skillRoot 'SKILL.md') -Raw
 $referenceText = Get-Content -LiteralPath (Join-Path $skillRoot 'references\strategy-tester.md') -Raw
@@ -394,6 +413,9 @@ try {
     [IO.File]::SetLastWriteTimeUtc($compileLog, [datetime]::UtcNow.AddDays(-1))
     $sentinelLogHash = (Get-FileHash -LiteralPath $compileLog -Algorithm SHA256).Hash
     $sentinelLogLastWriteUtc = (Get-Item -LiteralPath $compileLog).LastWriteTimeUtc
+    $compileLogMirror = Join-Path $compileDirectory 'fixture-log-mirror.log'
+    $null = New-Item -ItemType HardLink -Path $compileLogMirror -Target $compileLog
+    $sentinelLogIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileLog)
 
     $compileSuccess = Invoke-CompilerCase `
         -SourcePath $compileSource `
@@ -405,6 +427,10 @@ try {
         -Message 'Synthetic compiler success summary was missing or inaccurate.'
     Assert-True -Condition ($compileSuccess.StandardOutput -match 'MQL5_COMPILE_ARTIFACT=') `
         -Message 'Successful real compilation did not report its artifact.'
+    Assert-True -Condition (
+        [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileLog) -ceq $sentinelLogIdentity -and
+        [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileLogMirror) -ceq $sentinelLogIdentity
+    ) -Message 'Compiler wrapper replaced the pre-existing log file object instead of restoring it.'
 
     $delayedCompletion = Invoke-CompilerCase `
         -SourcePath $compileSource `
@@ -483,6 +509,87 @@ try {
         -SyntaxOnly
     Assert-True -Condition ($syntaxOnly.ExitCode -eq 0) `
         -Message "Synthetic syntax-only exit code was $($syntaxOnly.ExitCode)."
+
+    $argumentsPath = Join-Path $testRoot 'fake-metaeditor-arguments.txt'
+    $rootInclude = [IO.Path]::GetPathRoot($testRoot)
+    $rootIncludeCase = Invoke-CompilerCase `
+        -SourcePath $compileSource `
+        -MetaEditorPath $metaEditor `
+        -FakeMode 'success' `
+        -IncludePath $rootInclude `
+        -ArgumentsPath $argumentsPath `
+        -SyntaxOnly
+    Assert-True -Condition ($rootIncludeCase.ExitCode -eq 0) `
+        -Message "Root include-path compile exit code was $($rootIncludeCase.ExitCode)."
+    $receivedCompilerArguments = @([IO.File]::ReadAllLines($argumentsPath))
+    Assert-True -Condition ($receivedCompilerArguments -ccontains "/include:$rootInclude") `
+        -Message 'A root include path ending in a backslash was not delivered as one exact argument.'
+    Assert-True -Condition ($receivedCompilerArguments -ccontains '/s') `
+        -Message 'The syntax-only switch was swallowed by include-path command-line quoting.'
+
+    $earlyExit = Invoke-CompilerCase `
+        -SourcePath $compileSource `
+        -MetaEditorPath $metaEditor `
+        -FakeMode 'exit_without_result'
+    Assert-True -Condition ($earlyExit.ExitCode -eq 2) `
+        -Message "A compiler that exited without Result was classified as exit code $($earlyExit.ExitCode)."
+    Assert-True -Condition ($earlyExit.StandardError -match 'exited without producing a complete Result line') `
+        -Message 'Early compiler exit did not report the missing Result line.'
+    Assert-True -Condition ($earlyExit.StandardOutput -notmatch 'MQL5_COMPILE_ARTIFACT=') `
+        -Message 'Early compiler exit incorrectly reported an artifact.'
+
+    $compileAliasDirectory = Join-Path $testRoot 'compile-junction'
+    $null = New-Item -ItemType Junction -Path $compileAliasDirectory -Target $compileDirectory
+    try {
+        $compileAliasSource = Join-Path $compileAliasDirectory 'fixture.mq5'
+        $aliasIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileAliasSource)
+        $sourceIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileSource)
+        Assert-True -Condition ($aliasIdentity -ceq $sourceIdentity) `
+            -Message 'Junction alias did not resolve to the source file identity.'
+
+        $identityBytes = [Text.Encoding]::UTF8.GetBytes($aliasIdentity)
+        $identityAlgorithm = [Security.Cryptography.SHA256]::Create()
+        try {
+            $aliasHash = [BitConverter]::ToString(
+                $identityAlgorithm.ComputeHash($identityBytes)
+            ).Replace('-', '').Substring(0, 24)
+        }
+        finally {
+            $identityAlgorithm.Dispose()
+        }
+
+        $heldCompilerMutex = [Threading.Mutex]::new(
+            $false,
+            "Global\CodexMqlCompile_$aliasHash"
+        )
+        $heldCompilerMutexAcquired = $false
+        try {
+            $heldCompilerMutexAcquired = $heldCompilerMutex.WaitOne(0)
+            Assert-True -Condition $heldCompilerMutexAcquired `
+                -Message 'Could not acquire the compiler-alias regression mutex.'
+            $aliasBlocked = Invoke-CompilerCase `
+                -SourcePath $compileAliasSource `
+                -MetaEditorPath $metaEditor `
+                -FakeMode 'success' `
+                -TimeoutSeconds 5 `
+                -SyntaxOnly
+            Assert-True -Condition ($aliasBlocked.ExitCode -eq 2) `
+                -Message 'A junction alias bypassed the physical-source compilation mutex.'
+            Assert-True -Condition ($aliasBlocked.StandardError -match 'Another compilation is already using') `
+                -Message 'Alias mutex contention did not report the competing compilation.'
+        }
+        finally {
+            if ($heldCompilerMutexAcquired) {
+                $heldCompilerMutex.ReleaseMutex()
+            }
+            $heldCompilerMutex.Dispose()
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $compileAliasDirectory) {
+            [IO.Directory]::Delete($compileAliasDirectory)
+        }
+    }
 
     $compilerChildPidPath = Join-Path $testRoot 'fake-metaeditor-child.pid'
     $compileTimeout = Invoke-CompilerCase `
@@ -633,6 +740,50 @@ try {
         -Message "Tab-prefixed tester evidence was rejected: $($prefixedPass.StandardError)"
     Assert-True -Condition ($prefixedPass.Result.status -eq 'application_marker_passed') `
         -Message 'Tab-prefixed application marker produced the wrong status.'
+
+    $applicationInitializedOnly = Invoke-RunnerCase `
+        -Name 'execute-application-initialized-only' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'application_initialized_only'
+    Assert-True -Condition ($applicationInitializedOnly.ExitCode -eq 1) `
+        -Message 'Application-authored initialization text was accepted as tester-system evidence.'
+    Assert-True -Condition (
+        -not [bool]$applicationInitializedOnly.Result.evidence.checks.tester_initialized
+    ) -Message 'Application-authored initialization was marked as a tester initialization.'
+
+    $applicationBoundary = Invoke-RunnerCase `
+        -Name 'execute-application-generic-boundary' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'application_generic_boundary'
+    Assert-True -Condition ($applicationBoundary.ExitCode -eq 0) `
+        -Message 'Application-authored generic test text incorrectly closed the system evidence window.'
+    Assert-True -Condition ($applicationBoundary.Result.status -eq 'engine_smoke_passed') `
+        -Message 'Application-authored generic test text changed a valid engine result.'
+
+    $applicationOnInit = Invoke-RunnerCase `
+        -Name 'execute-application-oninit-failure' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'application_oninit_failure'
+    Assert-True -Condition ($applicationOnInit.ExitCode -eq 0) `
+        -Message 'Application-authored OnInit text was accepted as tester-system failure evidence.'
+    Assert-True -Condition (
+        [bool]$applicationOnInit.Result.evidence.checks.on_init_failure_absent
+    ) -Message 'Application-authored OnInit text was marked as a tester-system failure.'
 
     $forgedPass = Invoke-RunnerCase `
         -Name 'execute-forged-engine-pass' `

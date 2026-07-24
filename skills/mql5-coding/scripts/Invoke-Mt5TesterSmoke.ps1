@@ -1436,26 +1436,6 @@ function Get-TextIndex {
     return $Text.IndexOf($Needle, $StartIndex, $comparison)
 }
 
-function Get-TextLastIndexBefore {
-    param(
-        [AllowEmptyString()][string]$Text,
-        [Parameter(Mandatory)][string]$Needle,
-        [Parameter(Mandatory)][int]$EndExclusive,
-        [switch]$CaseSensitive
-    )
-
-    if ($EndExclusive -le 0 -or $EndExclusive -gt $Text.Length) {
-        return -1
-    }
-    $comparison = if ($CaseSensitive) {
-        [StringComparison]::Ordinal
-    }
-    else {
-        [StringComparison]::OrdinalIgnoreCase
-    }
-    return $Text.LastIndexOf($Needle, $EndExclusive - 1, $EndExclusive, $comparison)
-}
-
 function Protect-JournalLine {
     param(
         [Parameter(Mandatory)][string]$Line,
@@ -2400,7 +2380,6 @@ try {
                 '|(?:\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,3})?\tCore \d+\t)' +
             ')'
         )
-        $testerSystemLinePrefix = '(?m)^' + $testerSystemHeaderPattern + '[ ]*'
         $testerApplicationHeaderPattern = (
             '(?:' +
                 '(?:\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?\t' +
@@ -2419,6 +2398,12 @@ try {
             '[ ]*' +
             $simulatedTimePattern
         )
+        $testerSystemMessagePrefix = (
+            '(?m)^' +
+            $testerSystemHeaderPattern +
+            '(?![ ]*' + $simulatedTimePattern + ')' +
+            '[ ]*'
+        )
 
         $testStartNeedle = (
             $Symbol + ',' + $Period + ': testing of Experts\' +
@@ -2427,7 +2412,7 @@ try {
         )
         $testStartRecord = $testStartNeedle + ' started with inputs:'
         $testStartPattern = (
-            $testerSystemLinePrefix +
+            $testerSystemMessagePrefix +
             [regex]::Escape($testStartRecord) +
             '[ ]*\r?$'
         )
@@ -2436,7 +2421,7 @@ try {
             [Text.RegularExpressions.RegexOptions]::IgnoreCase
         )
         $testPassedPattern = (
-            $testerSystemLinePrefix +
+            $testerSystemMessagePrefix +
             [regex]::Escape("$Symbol,$Period") +
             ':[^\r\n]*Test passed in \d+:\d{2}:\d{2}(?:\.\d+)?[^\r\n]*\r?$'
         )
@@ -2444,8 +2429,33 @@ try {
             $testPassedPattern,
             [Text.RegularExpressions.RegexOptions]::IgnoreCase
         )
-        $genericTestStartNeedle = 'testing of Experts\'
+        $testerInitializedPattern = (
+            $testerSystemMessagePrefix +
+            '[^\r\n]*successfully initialized[^\r\n]*\r?$'
+        )
+        $testerInitializedRegex = New-Object Text.RegularExpressions.Regex(
+            $testerInitializedPattern,
+            [Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
+        $genericTestStartPattern = (
+            $testerSystemMessagePrefix +
+            '[^\r\n]*testing of Experts\\[^\r\n]* started with inputs:[ ]*\r?$'
+        )
+        $genericTestStartRegex = New-Object Text.RegularExpressions.Regex(
+            $genericTestStartPattern,
+            [Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
         $onInitFailureNeedle = 'tester stopped because OnInit returns non-zero'
+        $onInitFailurePattern = (
+            $testerSystemMessagePrefix +
+            '[^\r\n]*' + [regex]::Escape($onInitFailureNeedle) + '[^\r\n]*\r?$'
+        )
+        $onInitFailureRegex = New-Object Text.RegularExpressions.Regex(
+            $onInitFailurePattern,
+            [Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
+        $testerInitializedMatches = $testerInitializedRegex.Matches($testerText)
+        $genericTestStartMatches = $genericTestStartRegex.Matches($testerText)
         $testCandidates = New-Object 'System.Collections.Generic.List[object]'
         $candidateSearchIndex = 0
         while ($candidateSearchIndex -lt $testerText.Length) {
@@ -2455,22 +2465,31 @@ try {
             }
             $candidateStart = [int]$candidateStartMatch.Index
             $candidateEnd = $candidateStart + [int]$candidateStartMatch.Length
-            $previousGenericStart = Get-TextLastIndexBefore `
-                -Text $testerText `
-                -Needle $genericTestStartNeedle `
-                -EndExclusive $candidateStart
-            $candidateInitialized = Get-TextLastIndexBefore `
-                -Text $testerText `
-                -Needle 'successfully initialized' `
-                -EndExclusive $candidateStart
+            $previousGenericStart = -1
+            foreach ($genericStartMatch in $genericTestStartMatches) {
+                if ([int]$genericStartMatch.Index -ge $candidateStart) {
+                    break
+                }
+                $previousGenericStart = [int]$genericStartMatch.Index
+            }
+            $candidateInitialized = -1
+            foreach ($initializedMatch in $testerInitializedMatches) {
+                if ([int]$initializedMatch.Index -ge $candidateStart) {
+                    break
+                }
+                $candidateInitialized = [int]$initializedMatch.Index
+            }
             $initializationInWindow = (
                 $candidateInitialized -ge 0 -and
                 ($previousGenericStart -lt 0 -or $candidateInitialized -gt $previousGenericStart)
             )
-            $nextGenericStart = Get-TextIndex `
-                -Text $testerText `
-                -Needle $genericTestStartNeedle `
-                -StartIndex $candidateEnd
+            $nextGenericStart = -1
+            foreach ($genericStartMatch in $genericTestStartMatches) {
+                if ([int]$genericStartMatch.Index -ge $candidateEnd) {
+                    $nextGenericStart = [int]$genericStartMatch.Index
+                    break
+                }
+            }
             $candidateWindowEnd = if ($nextGenericStart -ge 0) {
                 $nextGenericStart
             }
@@ -2487,10 +2506,13 @@ try {
             else {
                 -1
             }
-            $candidateOnInitFailure = Get-TextIndex `
-                -Text $testerText `
-                -Needle $onInitFailureNeedle `
-                -StartIndex $candidateEnd
+            $candidateOnInitMatch = $onInitFailureRegex.Match($testerText, $candidateEnd)
+            $candidateOnInitFailure = if ($candidateOnInitMatch.Success) {
+                [int]$candidateOnInitMatch.Index
+            }
+            else {
+                -1
+            }
             $onInitFailureInWindow = (
                 $candidateOnInitFailure -ge 0 -and
                 $candidateOnInitFailure -lt $candidateWindowEnd
@@ -2591,7 +2613,7 @@ try {
             [bool]$selectedCandidate.on_init_failed
         }
         else {
-            Test-ContainsText -Text $testerText -Needle $onInitFailureNeedle
+            $onInitFailureRegex.IsMatch($testerText)
         }
 
         $markerEvidence = New-Object 'System.Collections.Generic.List[object]'
