@@ -277,6 +277,66 @@ if (-not ('Mql5Coding.CompilerProcessJob' -as [type])) {
 $skillText = Get-Content -LiteralPath (Join-Path $skillRoot 'SKILL.md') -Raw
 $referenceText = Get-Content -LiteralPath (Join-Path $skillRoot 'references\strategy-tester.md') -Raw
 $compilerText = Get-Content -LiteralPath $compiler -Raw
+$runnerTokens = $null
+$runnerParseErrors = $null
+$runnerAst = [Management.Automation.Language.Parser]::ParseFile(
+    $runner,
+    [ref]$runnerTokens,
+    [ref]$runnerParseErrors
+)
+$postExitWaitNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Wait-ForNoMatchingTerminalProcesses'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $postExitWaitNode) `
+    -Message 'Wait-ForNoMatchingTerminalProcesses was not found for CIM-settling regression testing.'
+$postExitWaitDefinitionText = $postExitWaitNode.Extent.Text
+$postExitWaitProbe = & {
+    param([Parameter(Mandatory = $true)][string]$DefinitionText)
+
+    . ([scriptblock]::Create($DefinitionText))
+    $state = [pscustomobject]@{
+        calls = 0
+        sleeps = 0
+    }
+    function Get-MatchingTerminalProcesses {
+        param($ExecutablePath, $ExpectedFileIdentity)
+        $state.calls++
+        if ($state.calls -lt 3) {
+            return [pscustomobject]@{ process_id = 4242 }
+        }
+        return @()
+    }
+    function Start-Sleep {
+        param([int]$Milliseconds)
+        $state.sleeps++
+    }
+
+    $remaining = @(
+        Wait-ForNoMatchingTerminalProcesses `
+            -ExecutablePath 'C:\synthetic\terminal64.exe' `
+            -ExpectedFileIdentity 'synthetic-identity' `
+            -TimeoutMilliseconds 1000 `
+            -PollMilliseconds 1
+    )
+    return [pscustomobject]@{
+        calls = $state.calls
+        sleeps = $state.sleeps
+        remaining = $remaining.Count
+    }
+} $postExitWaitDefinitionText
+Assert-True -Condition (
+    $postExitWaitProbe.calls -eq 3 -and
+    $postExitWaitProbe.sleeps -eq 2 -and
+    $postExitWaitProbe.remaining -eq 0
+) -Message 'Post-job-empty process discovery did not tolerate bounded stale CIM observations.'
+
 Assert-True -Condition ($skillText -notmatch '(?i)[A-Z]:\\Users\\') `
     -Message 'SKILL.md contains a user-specific path.'
 Assert-True -Condition ($referenceText -notmatch '(?i)[A-Z]:\\Users\\') `

@@ -734,6 +734,47 @@ function Open-TerminalImageReadLock {
     }
 }
 
+function Wait-ForNoMatchingTerminalProcesses {
+    param(
+        [Parameter(Mandatory)][string]$ExecutablePath,
+        [Parameter(Mandatory)][string]$ExpectedFileIdentity,
+        [ValidateRange(0, 60000)][int]$TimeoutMilliseconds = 5000,
+        [ValidateRange(0, 1000)][int]$PollMilliseconds = 100
+    )
+
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMilliseconds)
+    $lastMatches = @()
+    $lastInspectionError = $null
+    while ($true) {
+        try {
+            $lastMatches = @(
+                Get-MatchingTerminalProcesses `
+                    -ExecutablePath $ExecutablePath `
+                    -ExpectedFileIdentity $ExpectedFileIdentity
+            )
+            $lastInspectionError = $null
+            if ($lastMatches.Count -eq 0) {
+                return @()
+            }
+        }
+        catch {
+            $lastMatches = @()
+            $lastInspectionError = $_
+        }
+
+        if ([DateTime]::UtcNow -ge $deadline) {
+            if ($null -ne $lastInspectionError) {
+                throw $lastInspectionError
+            }
+            return $lastMatches
+        }
+
+        if ($PollMilliseconds -gt 0) {
+            Start-Sleep -Milliseconds $PollMilliseconds
+        }
+    }
+}
+
 function Get-MatchingTerminalProcesses {
     param(
         [Parameter(Mandatory)][string]$ExecutablePath,
@@ -2295,7 +2336,15 @@ try {
             $result.process.exit_code = [int]$process.ExitCode
         }
 
-        $postExitMatches = @(Get-MatchingTerminalProcesses -ExecutablePath $terminal -ExpectedFileIdentity $terminalImageRecord.file_identity)
+        # Win32_Process can briefly retain a terminated row after the owned Job Object is empty.
+        # Retry only at this post-containment boundary; prelaunch isolation checks remain immediate.
+        $postExitMatches = @(
+            Wait-ForNoMatchingTerminalProcesses `
+                -ExecutablePath $terminal `
+                -ExpectedFileIdentity $terminalImageRecord.file_identity `
+                -TimeoutMilliseconds 5000 `
+                -PollMilliseconds 100
+        )
         if ($postExitMatches.Count -gt 0) {
             $remaining = @($postExitMatches | ForEach-Object { $_.process_id })
             throw "BLOCKED: Bound terminal PID(s) $($remaining -join ', ') remained after the owned process ended. The runner will not stop them."
