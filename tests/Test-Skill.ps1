@@ -484,6 +484,9 @@ try {
     Assert-True -Condition ([bool]$pass.Result.process.job_empty_verified) `
         -Message 'Synthetic execution did not verify an empty Job Object.'
 
+    $markerBase = 'MQL5_CODING_PASS:' + (('a' * 32) -join '')
+    $markerLabeled = $markerBase + ':detail'
+
     $prefixedPass = Invoke-RunnerCase `
         -Name 'execute-prefixed-pass' `
         -Mode Execute `
@@ -492,9 +495,13 @@ try {
         -ExpertPath $expert `
         -PresetPath $preset `
         -ExpertSha256 $expertHash `
-        -FakeMode 'prefixed_pass'
+        -FakeMode 'prefixed_pass' `
+        -ExpectedLogMarker $markerBase `
+        -FakeMarker $markerBase
     Assert-True -Condition ($prefixedPass.ExitCode -eq 0) `
         -Message "Tab-prefixed tester evidence was rejected: $($prefixedPass.StandardError)"
+    Assert-True -Condition ($prefixedPass.Result.status -eq 'application_marker_passed') `
+        -Message 'Tab-prefixed application marker produced the wrong status.'
 
     $forgedPass = Invoke-RunnerCase `
         -Name 'execute-forged-engine-pass' `
@@ -528,9 +535,6 @@ try {
         -not [bool]$duplicateFailure.Result.evidence.checks.exact_test_window_selected
     ) -Message 'Ambiguous duplicate test evidence selected a passing window.'
 
-    $markerBase = 'MQL5_CODING_PASS:' + (('a' * 32) -join '')
-    $markerLabeled = $markerBase + ':detail'
-
     $exactMarkerPass = Invoke-RunnerCase `
         -Name 'execute-exact-marker-pass' `
         -Mode Execute `
@@ -560,6 +564,23 @@ try {
         -FakeMarker $markerLabeled
     Assert-True -Condition ($markerPrefixMismatch.ExitCode -eq 1) `
         -Message 'A longer marker incorrectly satisfied its literal prefix.'
+
+    $inputEchoMarker = Invoke-RunnerCase `
+        -Name 'execute-input-echo-marker' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 $expertHash `
+        -FakeMode 'input_echo_marker' `
+        -ExpectedLogMarker $markerBase `
+        -FakeMarker $markerBase
+    Assert-True -Condition ($inputEchoMarker.ExitCode -eq 1) `
+        -Message 'An automatically echoed input was accepted as an application marker.'
+    Assert-True -Condition (
+        -not [bool]$inputEchoMarker.Result.evidence.checks.expected_markers_matched
+    ) -Message 'Input-echo marker evidence was marked as matched.'
 
     foreach ($markerFailureMode in @('missing_marker', 'marker_after_pass')) {
         $markerFailure = Invoke-RunnerCase `

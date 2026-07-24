@@ -77,13 +77,12 @@ GitHub Actions and the local test commands validate:
 - compiler-wrapper completion, artifact, and exit-code contracts without starting MetaEditor;
 - Strategy Tester preflight, unambiguous correlated completion, adversarial log rejection, and timeout cleanup without starting real MT5.
 
-Run locally:
+Run locally inside an isolated Python 3.12 x64 environment with `PyYAML==6.0.3` available:
 
 ```powershell
-python -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r .\.github\requirements-ci.txt
 python .\tests\validate_skill.py
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Skill.ps1
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Skill.ps1
 ```
 
-The CI requirements file locks `PyYAML==6.0.3` to the expected Windows x64 Python 3.12 wheel hash.
+CI installs the validator dependency from `.github/requirements-ci.txt`, which locks the expected Windows x64 Python 3.12 wheel hash. Do not modify a global Python environment solely to run repository validation.

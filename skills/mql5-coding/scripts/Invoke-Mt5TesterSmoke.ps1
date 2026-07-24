@@ -2189,22 +2189,54 @@ try {
             $automaticStartedIndex -gt $configIndex -and
             $terminalSucceededIndex -gt $automaticStartedIndex
         )
-        $testerMessageLinePrefix = '(?m)^(?:(?:[^\r\n\t]*\t){1,8})?[ \t]*'
+        # The installed CHM does not define journal syntax. Accept only the
+        # sample-backed system layouts below and fail closed on unknown layouts.
+        $testerSystemHeaderPattern = (
+            '(?:' +
+                '(?:\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?\tTester\t)' +
+                '|(?:[A-Z]{2}\t\d+\t\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?\tCore \d+\t)' +
+                '|(?:\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,3})?\tCore \d+\t)' +
+            ')'
+        )
+        $testerSystemLinePrefix = '(?m)^' + $testerSystemHeaderPattern + '[ ]*'
+        $testerApplicationHeaderPattern = (
+            '(?:' +
+                '(?:\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?\t' +
+                    '(?![Tt][Ee][Ss][Tt][Ee][Rr]\t)[^\r\n\t]+\t)' +
+                '|(?:[A-Z]{2}\t\d+\t\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?\tCore \d+\t)' +
+                '|(?:\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,3})?\tCore \d+\t)' +
+            ')'
+        )
+        $simulatedTimePattern = (
+            '\d{4}\.\d{2}\.\d{2} ' +
+            '\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?[ ]+'
+        )
+        $testerApplicationLinePrefix = (
+            '(?m)^' +
+            $testerApplicationHeaderPattern +
+            '[ ]*' +
+            $simulatedTimePattern
+        )
 
-        $testStartNeedle = "$Symbol,$Period`: testing of Experts\$($expertRelative.Replace('/', '\')) from $FromDate 00:00 to $ToDate 00:00"
+        $testStartNeedle = (
+            $Symbol + ',' + $Period + ': testing of Experts\' +
+            $expertRelative.Replace('/', '\') +
+            ' from ' + $FromDate + ' 00:00 to ' + $ToDate + ' 00:00'
+        )
+        $testStartRecord = $testStartNeedle + ' started with inputs:'
         $testStartPattern = (
-            $testerMessageLinePrefix +
-            [regex]::Escape($testStartNeedle) +
-            '[ \t]*\r?$'
+            $testerSystemLinePrefix +
+            [regex]::Escape($testStartRecord) +
+            '[ ]*\r?$'
         )
         $testStartRegex = New-Object Text.RegularExpressions.Regex(
             $testStartPattern,
             [Text.RegularExpressions.RegexOptions]::IgnoreCase
         )
         $testPassedPattern = (
-            $testerMessageLinePrefix +
+            $testerSystemLinePrefix +
             [regex]::Escape("$Symbol,$Period") +
-            ':[^\r\n]*Test passed in [^\r\n]*\r?$'
+            ':[^\r\n]*Test passed in \d+:\d{2}:\d{2}(?:\.\d+)?[^\r\n]*\r?$'
         )
         $testPassedRegex = New-Object Text.RegularExpressions.Regex(
             $testPassedPattern,
@@ -2265,9 +2297,9 @@ try {
             $allCandidateMarkersMatched = $true
             foreach ($candidateMarker in $markers) {
                 $candidateMarkerPattern = (
-                    '(?<![A-Za-z0-9_.:-])' +
+                    $testerApplicationLinePrefix +
                     [regex]::Escape($candidateMarker) +
-                    '(?![A-Za-z0-9_.:-])'
+                    '[ ]*\r?$'
                 )
                 $candidateMarkerRegex = New-Object Text.RegularExpressions.Regex(
                     $candidateMarkerPattern,
