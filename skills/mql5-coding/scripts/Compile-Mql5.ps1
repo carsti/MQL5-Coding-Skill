@@ -468,8 +468,20 @@ try {
             $initialSourceIdentity) {
         throw 'Source path changed while its physical directory was being pinned.'
     }
-    $resolvedSource = [System.IO.Path]::GetFullPath($canonicalSource)
+    $sourceReadLease = [Mql5Coding.CompilerProcessJob]::OpenSourceFileIdentityLease(
+        $canonicalSource
+    )
+    if ($sourceReadLease.Identity -cne $initialSourceIdentity) {
+        throw 'Source file changed while its directory and file leases were being established.'
+    }
+    $resolvedSource = [System.IO.Path]::GetFullPath($sourceReadLease.FinalPath)
     $sourceParentPath = [System.IO.Path]::GetDirectoryName($resolvedSource)
+    if (-not $sourceParentPath.Equals(
+            [System.IO.Path]::GetFullPath($sourceParentLease.FinalPath),
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+        throw 'Source file resolved outside its pinned canonical parent directory.'
+    }
 
     $resolvedMetaEditor = Resolve-MetaEditorExecutable -RequestedPath $MetaEditorPath
     $artifactPath = [System.IO.Path]::ChangeExtension($resolvedSource, '.ex5')
@@ -525,16 +537,8 @@ try {
         throw "Another compilation is already using this source file: $resolvedSource"
     }
 
-    $sourceReadLease = [IO.File]::Open(
-        $resolvedSource,
-        [IO.FileMode]::Open,
-        [IO.FileAccess]::Read,
-        [IO.FileShare]::Read
-    )
-    if ([Mql5Coding.CompilerProcessJob]::GetHandleIdentity(
-            $sourceReadLease.SafeFileHandle
-        ) -cne $initialSourceIdentity) {
-        throw 'Source file changed while compilation locks were being acquired.'
+    if ($sourceReadLease.Identity -cne $initialSourceIdentity) {
+        throw 'Source file identity changed while compilation locks were being acquired.'
     }
 
     $artifactSnapshot = Get-ArtifactState -LiteralPath $artifactPath

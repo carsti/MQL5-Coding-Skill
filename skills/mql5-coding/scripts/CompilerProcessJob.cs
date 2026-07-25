@@ -21,9 +21,14 @@ namespace Mql5Coding
         private const uint WaitObject0 = 0x00000000;
         private const uint WaitFailed = 0xFFFFFFFF;
         private const uint FileListDirectory = 0x00000001;
+        private const uint GenericRead = 0x80000000;
+        private const uint ShareRead = 0x00000001;
         private const uint ShareReadWrite = 0x00000003;
         private const uint ShareReadWriteDelete = 0x00000007;
         private const uint OpenExisting = 3;
+        private const uint FileAttributeDirectory = 0x00000010;
+        private const uint FileAttributeReparsePoint = 0x00000400;
+        private const uint FileFlagOpenReparsePoint = 0x00200000;
         private const uint FileFlagBackupSemantics = 0x02000000;
 
         [StructLayout(LayoutKind.Sequential)]
@@ -236,6 +241,34 @@ namespace Mql5Coding
 
         public int ProcessId { get; private set; }
 
+        public sealed class FileIdentityLease : IDisposable
+        {
+            private SafeFileHandle handle;
+
+            internal FileIdentityLease(
+                SafeFileHandle fileHandle,
+                string identity,
+                string finalPath)
+            {
+                handle = fileHandle;
+                Identity = identity;
+                FinalPath = finalPath;
+            }
+
+            public string Identity { get; private set; }
+
+            public string FinalPath { get; private set; }
+
+            public void Dispose()
+            {
+                if (handle != null)
+                {
+                    handle.Dispose();
+                    handle = null;
+                }
+            }
+        }
+
         public sealed class DirectoryIdentityLease : IDisposable
         {
             private SafeFileHandle handle;
@@ -294,7 +327,7 @@ namespace Mql5Coding
                     "GetFinalPathNameByHandle failed.");
             if (length >= path.Capacity)
                 throw new InvalidOperationException(
-                    "The resolved directory path exceeds the supported Windows path length.");
+                    "The resolved path exceeds the supported Windows path length.");
 
             string result = path.ToString();
             const string UncPrefix = @"\\?\UNC\";
@@ -321,11 +354,54 @@ namespace Mql5Coding
             }
         }
 
-        public static string GetHandleIdentity(SafeFileHandle handle)
+        public static FileIdentityLease OpenSourceFileIdentityLease(string path)
         {
-            if (handle == null || handle.IsInvalid || handle.IsClosed)
-                throw new ArgumentException("An open file handle is required.", "handle");
-            return ReadFileIdentity(handle);
+            if (String.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("A source file path is required.", "path");
+
+            SafeFileHandle handle = OpenPathHandle(
+                path,
+                GenericRead,
+                ShareRead,
+                IntPtr.Zero,
+                OpenExisting,
+                FileFlagOpenReparsePoint,
+                IntPtr.Zero);
+            if (handle == null || handle.IsInvalid)
+            {
+                if (handle != null)
+                    handle.Dispose();
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "Opening the source-file identity lease failed.");
+            }
+
+            try
+            {
+                ByHandleFileInformation information;
+                if (!GetFileInformationByHandle(handle, out information))
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "Reading source-file attributes failed.");
+                if ((information.FileAttributes & FileAttributeDirectory) != 0)
+                    throw new InvalidOperationException(
+                        "The compiler source lease resolved to a directory.");
+                if ((information.FileAttributes & FileAttributeReparsePoint) != 0)
+                    throw new InvalidOperationException(
+                        "Source-file reparse points are not allowed.");
+
+                FileIdentityLease lease = new FileIdentityLease(
+                    handle,
+                    ReadFileIdentity(handle),
+                    ReadFinalPath(handle));
+                handle = null;
+                return lease;
+            }
+            finally
+            {
+                if (handle != null)
+                    handle.Dispose();
+            }
         }
 
         public static DirectoryIdentityLease OpenDirectoryIdentityLease(string path)

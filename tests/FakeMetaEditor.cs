@@ -37,6 +37,10 @@ internal static class FakeMetaEditor
         if (!String.IsNullOrWhiteSpace(argumentsPath))
             File.WriteAllLines(argumentsPath, args, new UTF8Encoding(false));
 
+        byte[] sourceBytes = File.ReadAllBytes(sourcePath);
+        if (sourceBytes.Length == 0)
+            throw new InvalidOperationException("Synthetic compiler received an empty source file.");
+
         if (mode == "exit_without_result")
             return 0;
 

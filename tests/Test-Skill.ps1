@@ -1120,6 +1120,47 @@ try {
     [IO.Directory]::Move($ancestorLeaseRenamed, $ancestorLeaseRoot)
     Remove-Item -LiteralPath $ancestorLeaseRoot -Recurse -Force
 
+    $compilerFileProbe = Join-Path $testRoot 'compiler-file-lease-probe.mq5'
+    $compilerFileProbeRenamed = Join-Path $testRoot 'compiler-file-lease-probe-renamed.mq5'
+    [IO.File]::WriteAllText(
+        $compilerFileProbe,
+        '// lease probe',
+        [Text.Encoding]::ASCII
+    )
+    $compilerFileLease = [Mql5Coding.CompilerProcessJob]::OpenSourceFileIdentityLease(
+        $compilerFileProbe
+    )
+    $compilerFileLeaseBlockedRename = $false
+    $compilerFileLeaseBlockedWrite = $false
+    try {
+        try {
+            [IO.File]::Move($compilerFileProbe, $compilerFileProbeRenamed)
+        }
+        catch {
+            $compilerFileLeaseBlockedRename = $true
+        }
+        try {
+            [IO.File]::WriteAllText(
+                $compilerFileProbe,
+                '// replacement',
+                [Text.Encoding]::ASCII
+            )
+        }
+        catch {
+            $compilerFileLeaseBlockedWrite = $true
+        }
+        Assert-True -Condition $compilerFileLeaseBlockedRename `
+            -Message 'A held compiler source-file lease allowed its path to be renamed.'
+        Assert-True -Condition $compilerFileLeaseBlockedWrite `
+            -Message 'A held compiler source-file lease allowed its bytes to be overwritten.'
+    }
+    finally {
+        $compilerFileLease.Dispose()
+    }
+    [IO.File]::Move($compilerFileProbe, $compilerFileProbeRenamed)
+    [IO.File]::Move($compilerFileProbeRenamed, $compilerFileProbe)
+    Remove-Item -LiteralPath $compilerFileProbe -Force
+
     $testerLeaseProbeDirectory = Join-Path $testRoot 'tester-lease-probe'
     $testerLeaseProbeRenamed = Join-Path $testRoot 'tester-lease-probe-renamed'
     [IO.Directory]::CreateDirectory($testerLeaseProbeDirectory) | Out-Null
@@ -1278,6 +1319,40 @@ try {
         -Message 'Synthetic compiler success summary was missing or inaccurate.'
     Assert-True -Condition ($compileSuccess.StandardOutput -match 'MQL5_COMPILE_ARTIFACT=') `
         -Message 'Successful real compilation did not report its artifact.'
+
+    $sourceLink = Join-Path $compileDirectory 'fixture-source-link.mq5'
+    $sourceLinkCreated = $false
+    try {
+        $null = New-Item `
+            -ItemType SymbolicLink `
+            -Path $sourceLink `
+            -Target $compileSource `
+            -ErrorAction Stop
+        $sourceLinkCreated = $true
+    }
+    catch {
+        $sourceLinkCreated = $false
+    }
+    if ($sourceLinkCreated) {
+        try {
+            $sourceLinkBlocked = Invoke-CompilerCase `
+                -SourcePath $sourceLink `
+                -MetaEditorPath $metaEditor `
+                -FakeMode 'success' `
+                -SyntaxOnly
+            Assert-True -Condition ($sourceLinkBlocked.ExitCode -eq 2) `
+                -Message 'A source-file symbolic link was not rejected.'
+            Assert-True -Condition (
+                $sourceLinkBlocked.StandardError -match '(?i)reparse'
+            ) -Message 'Source-file symbolic-link rejection did not explain the reparse-point block.'
+        }
+        finally {
+            if (Test-Path -LiteralPath $sourceLink) {
+                Remove-Item -LiteralPath $sourceLink -Force
+            }
+        }
+    }
+
     Assert-True -Condition (
         [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileLog) -ceq $sentinelLogIdentity -and
         [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileLogMirror) -ceq $sentinelLogIdentity
