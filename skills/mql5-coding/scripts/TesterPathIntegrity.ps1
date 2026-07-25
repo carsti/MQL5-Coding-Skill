@@ -544,7 +544,7 @@ function Resolve-TerminalBinding {
     $terminalDataRoot = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'MetaQuotes\Terminal'
     if ($null -eq $data) {
         $null = Open-NonReparseDirectoryChain -Path $terminalDataRoot -Tracker $Tracker -LeasesByPath $LeasesByPath
-        $matches = New-Object 'System.Collections.Generic.List[object]'
+        $matchingTerminals = New-Object 'System.Collections.Generic.List[object]'
         foreach ($directory in Get-ChildItem -LiteralPath $terminalDataRoot -Directory) {
             $candidateData = [IO.Path]::GetFullPath($directory.FullName)
             $null = Open-NonReparseDirectoryChain -Path $candidateData -Tracker $Tracker -LeasesByPath $LeasesByPath
@@ -568,7 +568,7 @@ function Resolve-TerminalBinding {
                 if ($null -eq $candidateTerminalLease) {
                     continue
                 }
-                $matches.Add([pscustomobject]@{
+                $matchingTerminals.Add([pscustomobject]@{
                     data = $candidateData
                     terminal = $candidateTerminal
                 })
@@ -592,7 +592,7 @@ function Resolve-TerminalBinding {
                 }
                 if ([string]$originInstallLease.Identity -ceq
                     [string]$terminalInstallLease.Identity) {
-                    $matches.Add([pscustomobject]@{
+                    $matchingTerminals.Add([pscustomobject]@{
                         data = $candidateData
                         terminal = $terminal
                     })
@@ -600,20 +600,20 @@ function Resolve-TerminalBinding {
             }
         }
 
-        if ($matches.Count -eq 0) {
+        if ($matchingTerminals.Count -eq 0) {
             throw 'No terminal data directory with a matching origin.txt was found.'
         }
-        if ($matches.Count -gt 1) {
-            $candidatePaths = @($matches | ForEach-Object { $_.data })
+        if ($matchingTerminals.Count -gt 1) {
+            $candidatePaths = @($matchingTerminals | ForEach-Object { $_.data })
             throw "Terminal data discovery is ambiguous: $($candidatePaths -join '; ')"
         }
-        $data = [IO.Path]::GetFullPath([string]$matches[0].data)
+        $data = [IO.Path]::GetFullPath([string]$matchingTerminals[0].data)
         if ($null -eq $terminal) {
-            $terminal = [IO.Path]::GetFullPath([string]$matches[0].terminal)
+            $terminal = [IO.Path]::GetFullPath([string]$matchingTerminals[0].terminal)
         }
     }
 
-    $dataLease = Open-NonReparseDirectoryChain -Path $data -Tracker $Tracker -LeasesByPath $LeasesByPath
+    $null = Open-NonReparseDirectoryChain -Path $data -Tracker $Tracker -LeasesByPath $LeasesByPath
     $originPath = Join-Path $data 'origin.txt'
     $originFileLease = Open-NonReparseFileLeaf -Path $originPath -Tracker $Tracker -LeasesByPath $LeasesByPath
     $origin = Read-TerminalOrigin -Path $originPath -Lease $originFileLease
@@ -797,18 +797,18 @@ function Wait-ForNoMatchingTerminalProcesses {
     while ($true) {
         # Inspection failures remain immediate blockers. Only an exact row for
         # the already verified owned process is eligible for bounded settling.
-        $matches = @(
+        $matchedProcesses = @(
             Get-MatchingTerminalProcesses `
                 -ExecutablePath $ExecutablePath `
                 -ExpectedFileIdentity $ExpectedFileIdentity `
                 -SettlingOwnedIdentity $VerifiedOwnedProcessIdentity
         )
-        if ($matches.Count -eq 0) {
+        if ($matchedProcesses.Count -eq 0) {
             return @()
         }
 
         $foreignMatch = @(
-            $matches | Where-Object {
+            $matchedProcesses | Where-Object {
                 if ([bool]$_.identity_unresolved) {
                     return (
                         [int]$_.process_id -ne
@@ -830,11 +830,11 @@ function Wait-ForNoMatchingTerminalProcesses {
             }
         )
         if ($foreignMatch.Count -gt 0) {
-            return $matches
+            return $matchedProcesses
         }
 
         if ([DateTime]::UtcNow -ge $deadline) {
-            return $matches
+            return $matchedProcesses
         }
         if ($PollMilliseconds -gt 0) {
             Start-Sleep -Milliseconds $PollMilliseconds

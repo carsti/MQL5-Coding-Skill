@@ -104,31 +104,6 @@ function Get-JournalSnapshot {
     return $snapshot
 }
 
-function Read-ExactBytes {
-    param(
-        [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][long]$Offset,
-        [Parameter(Mandatory)][int]$Length
-    )
-    $bytes = New-Object byte[] $Length
-    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
-    try {
-        $null = $stream.Seek($Offset, [IO.SeekOrigin]::Begin)
-        $readTotal = 0
-        while ($readTotal -lt $Length) {
-            $read = $stream.Read($bytes, $readTotal, $Length - $readTotal)
-            if ($read -le 0) {
-                throw "Journal ended while reading appended bytes: $Path"
-            }
-            $readTotal += $read
-        }
-    }
-    finally {
-        $stream.Dispose()
-    }
-    return $bytes
-}
-
 function Read-ExactBytesFromStream {
     param(
         [Parameter(Mandatory)][IO.Stream]$Stream,

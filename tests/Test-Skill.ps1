@@ -725,8 +725,14 @@ $processMatcherNode = $runnerAst.Find(
 )
 Assert-True -Condition (
     $null -ne $processMatcherNode -and
-    $processMatcherNode.Extent.Text -notmatch '(?i)\$matches\b'
-) -Message 'Process matching collides with PowerShell automatic $Matches state.'
+    $runnerPowerShellText -notmatch '(?im)^\s*\$matches\s*='
+) -Message 'Tester helpers assign to PowerShell automatic $Matches state.'
+Assert-True -Condition (
+    $runnerScriptText -match
+        '\$helperLoadMessage = ''Tester helper scripts could not be loaded\.''' -and
+    $runnerScriptText -notmatch
+        '(?s)\[Console\]::Error\.WriteLine\(\s*"Tester helper scripts could not be loaded:'
+) -Message 'Tester helper-load failures can disclose an unredacted local path.'
 Assert-True -Condition (
     $runnerText -notmatch 'function Get-StagingIntegrityFailures' -and
     $runnerText -match 'TryOpenFileLeafLease' -and

@@ -49,9 +49,18 @@ try {
     . (Join-Path $PSScriptRoot 'TesterEvidence.ps1')
 }
 catch {
-    [Console]::Error.WriteLine(
-        "Tester helper scripts could not be loaded: $($_.Exception.Message)"
-    )
+    $helperLoadMessage = 'Tester helper scripts could not be loaded.'
+    if ($null -ne (Get-Command -Name Protect-JournalLine -ErrorAction SilentlyContinue)) {
+        try {
+            $helperLoadMessage = Protect-JournalLine -Line (
+                "Tester helper scripts could not be loaded: $($_.Exception.Message)"
+            )
+        }
+        catch {
+            # Keep the path-safe generic message if redaction itself is unavailable.
+        }
+    }
+    [Console]::Error.WriteLine($helperLoadMessage)
     exit 2
 }
 
