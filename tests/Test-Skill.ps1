@@ -2981,7 +2981,7 @@ try {
     Assert-True -Condition ($earlyExit.ExitCode -eq 2) `
         -Message "A compiler that exited without Result was classified as exit code $($earlyExit.ExitCode)."
     Assert-True -Condition ($earlyExit.StandardError -match 'exited without producing a complete Result line') `
-        -Message 'Early compiler exit did not report the missing Result line.'
+        -Message ("Early compiler exit did not report the missing Result line. stderr=" + $earlyExit.StandardError)
     Assert-True -Condition ($earlyExit.StandardOutput -notmatch 'MQL5_COMPILE_ARTIFACT=') `
         -Message 'Early compiler exit incorrectly reported an artifact.'
 
