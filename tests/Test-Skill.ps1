@@ -450,6 +450,24 @@ $runnerAst = [Management.Automation.Language.Parser]::ParseInput(
 )
 Assert-True -Condition ($runnerParseErrors.Count -eq 0) `
     -Message 'The composed tester runner and helper scripts do not parse as one PowerShell program.'
+$runnerFunctionDefinitions = @(
+    $runnerAst.FindAll(
+        {
+            param($node)
+            return $node -is [Management.Automation.Language.FunctionDefinitionAst]
+        },
+        $true
+    )
+)
+$duplicateRunnerFunctions = @(
+    $runnerFunctionDefinitions |
+        Group-Object -Property Name |
+        Where-Object { $_.Count -gt 1 }
+)
+Assert-True -Condition ($duplicateRunnerFunctions.Count -eq 0) -Message (
+    'The composed tester program contains duplicate function definitions: ' +
+    (@($duplicateRunnerFunctions | ForEach-Object { $_.Name }) -join ', ')
+)
 Assert-True -Condition (
     [IO.File]::ReadAllLines($runner).Count -le 2000 -and
     [IO.File]::ReadAllLines($testerProcessJobSource).Count -le 1500 -and
@@ -733,12 +751,54 @@ Assert-True -Condition (
     $null -ne $processMatcherNode -and
     $runnerPowerShellText -notmatch '(?im)^\s*\$matches\s*='
 ) -Message 'Tester helpers assign to PowerShell automatic $Matches state.'
-Assert-True -Condition (
-    $runnerScriptText -match
-        '\$helperLoadMessage = ''Tester helper scripts could not be loaded\.''' -and
-    $runnerScriptText -notmatch
-        '(?s)\[Console\]::Error\.WriteLine\(\s*"Tester helper scripts could not be loaded:'
-) -Message 'Tester helper-load failures can disclose an unredacted local path.'
+$helperLoadProbeRoot = Join-Path (
+    [IO.Path]::GetTempPath()
+) ('mql5-coding-helper-load-' + [guid]::NewGuid().ToString('N'))
+[IO.Directory]::CreateDirectory($helperLoadProbeRoot) | Out-Null
+try {
+    $helperLoadProbeRunner = Join-Path $helperLoadProbeRoot 'Invoke-Mt5TesterSmoke.ps1'
+    [IO.File]::Copy($runner, $helperLoadProbeRunner, $true)
+    $helperLoadProbeStartInfo = New-Object Diagnostics.ProcessStartInfo
+    $helperLoadProbeStartInfo.FileName = $hostExecutable
+    $helperLoadProbeStartInfo.Arguments = @(
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        (Quote-NativeArgument -Value $helperLoadProbeRunner)
+    ) -join ' '
+    $helperLoadProbeStartInfo.UseShellExecute = $false
+    $helperLoadProbeStartInfo.CreateNoWindow = $true
+    $helperLoadProbeStartInfo.RedirectStandardOutput = $true
+    $helperLoadProbeStartInfo.RedirectStandardError = $true
+    $helperLoadProbeProcess = New-Object Diagnostics.Process
+    $helperLoadProbeProcess.StartInfo = $helperLoadProbeStartInfo
+    try {
+        $null = $helperLoadProbeProcess.Start()
+        $helperLoadProbeOutput = $helperLoadProbeProcess.StandardOutput.ReadToEnd()
+        $helperLoadProbeError = $helperLoadProbeProcess.StandardError.ReadToEnd()
+        $helperLoadProbeProcess.WaitForExit()
+        $helperLoadProbeExitCode = $helperLoadProbeProcess.ExitCode
+    }
+    finally {
+        $helperLoadProbeProcess.Dispose()
+    }
+    Assert-True -Condition (
+        $helperLoadProbeExitCode -eq 2 -and
+        $helperLoadProbeError -match
+            'Tester helper scripts could not be loaded\.' -and
+        $helperLoadProbeError -notmatch
+            [regex]::Escape($helperLoadProbeRoot) -and
+        [string]::IsNullOrWhiteSpace($helperLoadProbeOutput)
+    ) -Message 'A missing tester helper disclosed its unredacted local path.'
+}
+finally {
+    if ([IO.Directory]::Exists($helperLoadProbeRoot)) {
+        [IO.Directory]::Delete($helperLoadProbeRoot, $true)
+    }
+}
 Assert-True -Condition (
     $runnerText -notmatch 'function Get-StagingIntegrityFailures' -and
     $runnerText -match 'TryOpenFileLeafLease' -and

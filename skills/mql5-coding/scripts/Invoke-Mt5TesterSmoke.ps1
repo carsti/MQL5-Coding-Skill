@@ -58,6 +58,7 @@ catch {
         }
         catch {
             # Keep the path-safe generic message if redaction itself is unavailable.
+            $helperLoadMessage = 'Tester helper scripts could not be loaded.'
         }
     }
     [Console]::Error.WriteLine($helperLoadMessage)
