@@ -612,9 +612,13 @@ Assert-True -Condition ($null -ne $copyNewNode) -Message 'The hash-bound copy he
 $copyNewText = $copyNewNode.Extent.Text
 Assert-True -Condition (
     $copyNewText -match '\[IO\.FileAccess\]::ReadWrite' -and
+    $copyNewText -match '\[IO\.FileStream\]\$RetainedSourceStream' -and
+    $copyNewText -match '\$disposeInput' -and
+    $copyNewText -match '\[IO\.FileShare\]::Read' -and
     $copyNewText -match 'Get-StreamSha256 -Stream \$input' -and
     $copyNewText -match 'Get-StreamSha256 -Stream \$output' -and
-    $copyNewText -notmatch '\b(?:Get-FileSha256|Get-Item)\b'
+    $copyNewText -notmatch '\b(?:Get-FileSha256|Get-Item)\b' -and
+    $runnerText -match '-RetainedSourceStream \$canonicalConfigLock\.stream'
 ) -Message 'A new copied artifact is not hashed through its still-open source and creation handles.'
 
 $verifiedOutputCopyNode = $runnerAst.Find(
@@ -2330,6 +2334,7 @@ try {
     foreach ($retainedFunctionName in @(
             'ConvertTo-Hex',
             'Get-StreamSha256',
+            'Copy-NewHashBoundFile',
             'ConvertTo-NormalizedDirectoryPath',
             'Test-IsAbsoluteLocalDrivePath',
             'Assert-StableFixedLocalVolumePath',
@@ -2351,8 +2356,9 @@ try {
         $retainedArtifactDefinitions.Add($retainedFunctionNode.Extent.Text)
     }
     $retainedArtifactProbePath = Join-Path $testRoot 'retained-artifact-probe.txt'
+    $retainedArtifactCopyPath = $retainedArtifactProbePath + '.copy'
     $retainedArtifactProbe = & {
-        param($DefinitionTexts, $ProbePath)
+        param($DefinitionTexts, $ProbePath, $CopyPath)
         foreach ($definitionText in $DefinitionTexts) {
             . ([scriptblock]::Create($definitionText))
         }
@@ -2373,12 +2379,26 @@ try {
             catch {
                 $overwriteBlocked = $true
             }
+            $copyTracker = New-Object 'System.Collections.Generic.List[object]'
+            $copyRecord = Copy-NewHashBoundFile `
+                -Source $ProbePath `
+                -Destination $CopyPath `
+                -Kind 'retained artifact copy probe' `
+                -Tracker $copyTracker `
+                -PathEntryLeases $pathLeases `
+                -LeasesByPath $leasesByPath `
+                -RetainedSourceStream $integrityLocks[0].stream
             return [pscustomobject]@{
                 overwrite_blocked = $overwriteBlocked
                 integrity_lock_count = $integrityLocks.Count
                 path_lease_count = $pathLeases.Count
                 byte_length = [long]$record.byte_length
                 sha256 = [string]$record.sha256
+                retained_copy_verified = (
+                    [bool]$copyRecord.verified -and
+                    [long]$copyRecord.byte_length -eq [long]$record.byte_length -and
+                    [string]$copyRecord.sha256 -ceq [string]$record.sha256
+                )
             }
         }
         finally {
@@ -2389,11 +2409,15 @@ try {
                 $pathLeases[$index].Dispose()
             }
         }
-    } ($retainedArtifactDefinitions.ToArray()) $retainedArtifactProbePath
+    } `
+        ($retainedArtifactDefinitions.ToArray()) `
+        $retainedArtifactProbePath `
+        $retainedArtifactCopyPath
     Assert-True -Condition (
         [bool]$retainedArtifactProbe.overwrite_blocked -and
         [int]$retainedArtifactProbe.integrity_lock_count -eq 1 -and
         [int]$retainedArtifactProbe.path_lease_count -gt 0 -and
+        [bool]$retainedArtifactProbe.retained_copy_verified -and
         [long]$retainedArtifactProbe.byte_length -gt 0 -and
         [string]$retainedArtifactProbe.sha256 -cmatch '\A[0-9a-f]{64}\z'
     ) -Message 'A newly generated text artifact was not identity-correlated and retained under a write-denying read lock.'
@@ -2402,7 +2426,9 @@ try {
         'write after release',
         [Text.Encoding]::UTF8
     )
-    Remove-Item -LiteralPath $retainedArtifactProbePath -Force
+    Remove-Item `
+        -LiteralPath $retainedArtifactProbePath, $retainedArtifactCopyPath `
+        -Force
     $mutableReportProbe = Join-Path $testRoot 'mutable-report-reservation.htm'
     $mutableReportLease = [Mql5Coding.JobProcessLaunch]::CreateMutableOutputFileLease(
         $mutableReportProbe
