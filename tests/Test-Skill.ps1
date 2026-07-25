@@ -3248,8 +3248,18 @@ try {
         -ExpertPath $expert `
         -PresetPath $preset `
         -ExpertSha256 $expertHash
+    $preflightDiagnostic = if ($null -eq $preflight.Result) {
+        '<no result JSON>'
+    }
+    else {
+        $preflight.Result | ConvertTo-Json -Depth 10 -Compress
+    }
     Assert-True -Condition ($preflight.ExitCode -eq 0) `
-        -Message "Preflight exit code was $($preflight.ExitCode): $($preflight.StandardError)"
+        -Message (
+            "Preflight exit code was $($preflight.ExitCode); " +
+            "stdout=$($preflight.StandardOutput); stderr=$($preflight.StandardError); " +
+            "result=$preflightDiagnostic"
+        )
     Assert-True -Condition ($null -ne $preflight.Result) `
         -Message 'Preflight did not produce result JSON.'
     Assert-True -Condition ($preflight.Result.status -eq 'preflight_passed') `
