@@ -1209,7 +1209,10 @@ function Resolve-TerminalBinding {
         if (-not [IO.Path]::IsPathRooted($RequestedDataPath)) {
             throw 'TerminalDataPath must be an absolute path.'
         }
-        $data = (Resolve-Path -LiteralPath $RequestedDataPath -ErrorAction Stop).Path
+        $requestedDataFull = [IO.Path]::GetFullPath($RequestedDataPath)
+        Assert-StableFixedLocalVolumePath -Path $requestedDataFull
+        $data = (Resolve-Path -LiteralPath $requestedDataFull -ErrorAction Stop).Path
+        Assert-StableFixedLocalVolumePath -Path $data
         foreach ($required in @('origin.txt', 'MQL5', 'Tester', 'logs')) {
             if (-not (Test-Path -LiteralPath (Join-Path $data $required))) {
                 throw "TerminalDataPath lacks required entry '$required': $data"

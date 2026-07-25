@@ -1380,34 +1380,54 @@ try {
                 'PowerShell context, so the mount-manager policy was not exercised.'
             )
         }
-        $rawAliasRunnerBlocked = Invoke-RunnerCase `
-            -Name 'preflight-raw-dos-device-alias' `
-            -Mode PreflightOnly `
-            -TerminalPath $rawAliasTerminal `
-            -TerminalDataPath $rawAliasDataPath `
-            -ExpertPath $expert `
-            -PresetPath $preset `
-            -ExpertSha256 $expertHash
-        Assert-True -Condition ($rawAliasRunnerBlocked.ExitCode -eq 4) `
-            -Message (
-                'A raw DOS-device alias did not produce the required blocked exit. ' +
-                "exit=$($rawAliasRunnerBlocked.ExitCode); " +
-                "status=$($rawAliasRunnerBlocked.Result.status); " +
-                "errors=$(@($rawAliasRunnerBlocked.Result.errors) -join '; '); " +
-                "stderr=$($rawAliasRunnerBlocked.StandardError)"
+        foreach ($runnerProbe in @(
+                [pscustomobject]@{
+                    name = 'preflight-raw-dos-device-terminal-alias'
+                    terminal = $rawAliasTerminal
+                    data = $dataPath
+                },
+                [pscustomobject]@{
+                    name = 'preflight-raw-dos-device-data-alias'
+                    terminal = $terminal
+                    data = $rawAliasDataPath
+                }
+            )) {
+            $rawAliasRunnerBlocked = Invoke-RunnerCase `
+                -Name $runnerProbe.name `
+                -Mode PreflightOnly `
+                -TerminalPath $runnerProbe.terminal `
+                -TerminalDataPath $runnerProbe.data `
+                -ExpertPath $expert `
+                -PresetPath $preset `
+                -ExpertSha256 $expertHash
+            Assert-True -Condition ($rawAliasRunnerBlocked.ExitCode -eq 4) `
+                -Message (
+                    'A raw DOS-device alias did not produce the required blocked exit. ' +
+                    "case=$($runnerProbe.name); " +
+                    "exit=$($rawAliasRunnerBlocked.ExitCode); " +
+                    "status=$($rawAliasRunnerBlocked.Result.status); " +
+                    "errors=$(@($rawAliasRunnerBlocked.Result.errors) -join '; '); " +
+                    "stderr=$($rawAliasRunnerBlocked.StandardError)"
+                )
+            Assert-True -Condition (
+                $null -ne $rawAliasRunnerBlocked.Result -and
+                [string]$rawAliasRunnerBlocked.Result.status -ceq 'blocked' -and
+                -not [bool]$rawAliasRunnerBlocked.Result.process.execution_attempted
+            ) -Message (
+                "Raw DOS-device rejection for '$($runnerProbe.name)' did not produce " +
+                'a pre-execution blocked result.'
             )
-        Assert-True -Condition (
-            $null -ne $rawAliasRunnerBlocked.Result -and
-            [string]$rawAliasRunnerBlocked.Result.status -ceq 'blocked' -and
-            -not [bool]$rawAliasRunnerBlocked.Result.process.execution_attempted
-        ) -Message 'Raw DOS-device rejection did not produce a pre-execution blocked result.'
-        $rawAliasDiagnostic = @(
-            $rawAliasRunnerBlocked.StandardError,
-            @($rawAliasRunnerBlocked.Result.errors) -join ' '
-        ) -join ' '
-        Assert-True -Condition (
-            $rawAliasDiagnostic -match '(?i)mount manager|direct fixed local volume'
-        ) -Message 'Raw DOS-device rejection did not identify the unsafe volume mapping.'
+            $rawAliasDiagnostic = (
+                [string]$rawAliasRunnerBlocked.StandardError + ' ' +
+                (@($rawAliasRunnerBlocked.Result.errors) -join ' ')
+            )
+            Assert-True -Condition (
+                $rawAliasDiagnostic -match '(?i)mount manager|direct fixed local volume'
+            ) -Message (
+                "Raw DOS-device rejection for '$($runnerProbe.name)' did not identify " +
+                "the unsafe volume mapping. Diagnostic: $rawAliasDiagnostic"
+            )
+        }
     }
     finally {
         [Mql5Coding.RawDosDeviceProbe]::Remove(
