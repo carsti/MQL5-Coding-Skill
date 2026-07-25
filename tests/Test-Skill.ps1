@@ -2084,30 +2084,33 @@ try {
     $testerLeaseProbeDirectory = Join-Path $testRoot 'tester-lease-probe'
     $testerLeaseProbeRenamed = Join-Path $testRoot 'tester-lease-probe-renamed'
     [IO.Directory]::CreateDirectory($testerLeaseProbeDirectory) | Out-Null
-    $testerDirectoryLease = [Mql5Coding.JobProcessLaunch]::OpenDirectoryComponentLease(
-        $testerLeaseProbeDirectory
-    )
     $testerGuardTracker = New-Object 'System.Collections.Generic.List[object]'
     $testerGuardByPath = @{}
-    $testerDirectoryGuard = & {
-        param($DefinitionText, $Path, $DirectoryLease, $Tracker, $GuardsByPath)
-        . ([scriptblock]::Create($DefinitionText))
-        Open-DirectoryMutationGuard `
-            -Path $Path `
-            -DirectoryLease $DirectoryLease `
-            -Tracker $Tracker `
-            -GuardsByPath $GuardsByPath `
-            -RunId 'lease-probe'
-    } `
-        $directoryMutationGuardNode.Extent.Text `
-        $testerLeaseProbeDirectory `
-        $testerDirectoryLease `
-        $testerGuardTracker `
-        $testerGuardByPath
-    $testerLeaseBlockedRename = $false
-    $testerLeaseBlockedDataWrite = $false
-    $testerGuardBlockedRename = $false
+    $testerDirectoryLease = $null
+    $testerDirectoryGuard = $null
+    $testerLeaseCleanupErrors = New-Object 'System.Collections.Generic.List[string]'
     try {
+        $testerDirectoryLease = [Mql5Coding.JobProcessLaunch]::OpenDirectoryComponentLease(
+            $testerLeaseProbeDirectory
+        )
+        $testerDirectoryGuard = & {
+            param($DefinitionText, $Path, $DirectoryLease, $Tracker, $GuardsByPath)
+            . ([scriptblock]::Create($DefinitionText))
+            Open-DirectoryMutationGuard `
+                -Path $Path `
+                -DirectoryLease $DirectoryLease `
+                -Tracker $Tracker `
+                -GuardsByPath $GuardsByPath `
+                -RunId 'lease-probe'
+        } `
+            $directoryMutationGuardNode.Extent.Text `
+            $testerLeaseProbeDirectory `
+            $testerDirectoryLease `
+            $testerGuardTracker `
+            $testerGuardByPath
+        $testerLeaseBlockedRename = $false
+        $testerLeaseBlockedDataWrite = $false
+        $testerGuardBlockedRename = $false
         try {
             [IO.Directory]::Move(
                 $testerLeaseProbeDirectory,
@@ -2182,11 +2185,31 @@ try {
             -Message 'A held tester directory lease blocked normal child creation.'
     }
     finally {
-        if ($null -ne $testerDirectoryGuard) {
-            $testerDirectoryGuard.stream.Dispose()
+        for ($testerGuardIndex = $testerGuardTracker.Count - 1; $testerGuardIndex -ge 0; $testerGuardIndex--) {
+            try {
+                if ($null -ne $testerGuardTracker[$testerGuardIndex].stream) {
+                    $testerGuardTracker[$testerGuardIndex].stream.Dispose()
+                }
+            }
+            catch {
+                $testerLeaseCleanupErrors.Add(
+                    "Could not release tester mutation guard: $($_.Exception.Message)"
+                )
+            }
         }
-        $testerDirectoryLease.Dispose()
+        if ($null -ne $testerDirectoryLease) {
+            try {
+                $testerDirectoryLease.Dispose()
+            }
+            catch {
+                $testerLeaseCleanupErrors.Add(
+                    "Could not release tester directory lease: $($_.Exception.Message)"
+                )
+            }
+        }
     }
+    Assert-True -Condition ($testerLeaseCleanupErrors.Count -eq 0) `
+        -Message ("Tester lease-probe cleanup failed: " + ($testerLeaseCleanupErrors -join ' '))
     [IO.Directory]::Move(
         $testerLeaseProbeDirectory,
         $testerLeaseProbeRenamed
