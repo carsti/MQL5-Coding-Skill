@@ -1385,6 +1385,8 @@ try {
             -Message (
                 'A raw DOS-device alias did not produce the required blocked exit. ' +
                 "exit=$($rawAliasRunnerBlocked.ExitCode); " +
+                "status=$($rawAliasRunnerBlocked.Result.status); " +
+                "errors=$(@($rawAliasRunnerBlocked.Result.errors) -join '; '); " +
                 "stderr=$($rawAliasRunnerBlocked.StandardError)"
             )
         Assert-True -Condition (

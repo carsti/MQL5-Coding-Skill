@@ -917,7 +917,10 @@ function Resolve-ExistingFile {
     if (-not [IO.Path]::IsPathRooted($Path)) {
         throw "$Name must be an absolute path."
     }
-    $resolved = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
+    $full = [IO.Path]::GetFullPath($Path)
+    Assert-StableFixedLocalVolumePath -Path $full
+    $resolved = (Resolve-Path -LiteralPath $full -ErrorAction Stop).Path
+    Assert-StableFixedLocalVolumePath -Path $resolved
     if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
         throw "$Name is not a file: $resolved"
     }
