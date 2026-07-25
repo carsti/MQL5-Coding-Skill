@@ -32,6 +32,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$fixedLocalVolumeIdentities = @{}
 
 $nativeTypeLoadError = $null
 try {
@@ -61,7 +62,9 @@ namespace Mql5Coding
         private const uint WaitFailed = 0xFFFFFFFF;
         private const uint FileListDirectory = 0x00000001;
         private const uint GenericRead = 0x80000000;
+        private const uint ShareRead = 0x00000001;
         private const uint ShareReadWrite = 0x00000003;
+        private const uint DriveFixed = 3;
         private const uint OpenExisting = 3;
         private const uint FileAttributeDirectory = 0x00000010;
         private const uint FileAttributeReparsePoint = 0x00000400;
@@ -206,6 +209,34 @@ namespace Mql5Coding
             uint creationDisposition,
             uint flagsAndAttributes,
             IntPtr templateFile);
+
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "GetDriveTypeW")]
+        private static extern uint GetDriveType(string rootPathName);
+
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "QueryDosDeviceW")]
+        private static extern uint QueryDosDevice(
+            string deviceName,
+            StringBuilder targetPath,
+            uint maximumCharacters);
+
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "GetVolumeNameForVolumeMountPointW")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetVolumeNameForVolumeMountPoint(
+            string volumeMountPoint,
+            StringBuilder volumeName,
+            uint bufferLength);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -463,6 +494,80 @@ namespace Mql5Coding
                 ":" + fileIndex.ToString("X16");
         }
 
+        public static string GetFixedLocalVolumeIdentity(string path)
+        {
+            if (String.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("A path is required.", "path");
+
+            string fullPath = Path.GetFullPath(path);
+            string root = Path.GetPathRoot(fullPath);
+            if (String.IsNullOrWhiteSpace(root) ||
+                root.Length != 3 ||
+                !Char.IsLetter(root[0]) ||
+                root[1] != ':' ||
+                (root[2] != '\\' && root[2] != '/'))
+                throw new InvalidOperationException(
+                    "A drive-rooted path is required: " + fullPath);
+
+            uint driveType = GetDriveType(root);
+            if (driveType != DriveFixed)
+                throw new InvalidOperationException(
+                    "The path is not on a fixed local drive: " + fullPath);
+
+            string deviceName = root.Substring(0, 2);
+            StringBuilder mappingBuffer = new StringBuilder(32768);
+            uint mappingLength = QueryDosDevice(
+                deviceName,
+                mappingBuffer,
+                unchecked((uint)mappingBuffer.Capacity));
+            if (mappingLength == 0)
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "QueryDosDevice failed for " + deviceName + ".");
+
+            string mapping = mappingBuffer.ToString();
+            const string DirectVolumePrefix = @"\Device\HarddiskVolume";
+            if (!mapping.StartsWith(
+                    DirectVolumePrefix,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "Mapped, substituted, and redirected drive letters are not allowed: " +
+                    deviceName + " -> " + mapping);
+
+            string volumeSuffix = mapping.Substring(DirectVolumePrefix.Length);
+            if (volumeSuffix.Length == 0)
+                throw new InvalidOperationException(
+                    "The drive letter does not map to a numbered local volume: " +
+                    deviceName + " -> " + mapping);
+            foreach (char value in volumeSuffix)
+            {
+                if (!Char.IsDigit(value))
+                    throw new InvalidOperationException(
+                        "The drive letter is not a direct local-volume mapping: " +
+                        deviceName + " -> " + mapping);
+            }
+
+            StringBuilder volumeNameBuffer = new StringBuilder(1024);
+            if (!GetVolumeNameForVolumeMountPoint(
+                    root,
+                    volumeNameBuffer,
+                    unchecked((uint)volumeNameBuffer.Capacity)))
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "GetVolumeNameForVolumeMountPoint failed for " + root + ".");
+
+            string volumeName = volumeNameBuffer.ToString();
+            if (!volumeName.StartsWith(
+                    @"\\?\Volume{",
+                    StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "The drive root did not resolve to a stable volume GUID: " +
+                    root);
+
+            return volumeName.ToUpperInvariant() + "|" +
+                mapping.ToUpperInvariant();
+        }
+
         private static PathEntryLease OpenNonReparsePathEntry(
             string path,
             bool requireDirectory)
@@ -477,7 +582,7 @@ namespace Mql5Coding
             SafeFileHandle handle = OpenPathHandle(
                 path,
                 requireDirectory ? FileListDirectory : GenericRead,
-                ShareReadWrite,
+                requireDirectory ? ShareRead : ShareReadWrite,
                 IntPtr.Zero,
                 OpenExisting,
                 flags,
@@ -666,6 +771,31 @@ function Resolve-ExistingFile {
     return [IO.Path]::GetFullPath($resolved)
 }
 
+function Assert-StableFixedLocalVolumePath {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $full = [IO.Path]::GetFullPath($Path)
+    try {
+        $identity = [Mql5Coding.JobProcessLaunch]::GetFixedLocalVolumeIdentity(
+            $full
+        )
+    }
+    catch {
+        throw "BLOCKED: Security-sensitive paths must use a direct fixed local volume: $full. $($_.Exception.Message)"
+    }
+
+    $rootKey = ([IO.Path]::GetPathRoot($full)).ToUpperInvariant()
+    if ($script:fixedLocalVolumeIdentities.ContainsKey($rootKey)) {
+        if ([string]$script:fixedLocalVolumeIdentities[$rootKey] -cne
+            [string]$identity) {
+            throw "BLOCKED: The local-volume mapping changed during tester validation: $rootKey"
+        }
+    }
+    else {
+        $script:fixedLocalVolumeIdentities[$rootKey] = $identity
+    }
+}
+
 function Open-NonReparseDirectoryChain {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -680,6 +810,7 @@ function Open-NonReparseDirectoryChain {
     if ($full -cnotmatch '\A[A-Za-z]:\\') {
         throw "BLOCKED: UNC, device, and drive-relative paths are not supported for security-sensitive tester paths: $full"
     }
+    Assert-StableFixedLocalVolumePath -Path $full
     if (-not (Test-Path -LiteralPath $full -PathType Container)) {
         throw "BLOCKED: Security-sensitive directory is missing: $full"
     }
@@ -697,6 +828,7 @@ function Open-NonReparseDirectoryChain {
     }
 
     foreach ($candidate in $candidates) {
+        Assert-StableFixedLocalVolumePath -Path $candidate
         $key = ([IO.Path]::GetFullPath($candidate)).ToUpperInvariant()
         if ($LeasesByPath.ContainsKey($key)) {
             continue
@@ -713,6 +845,7 @@ function Open-NonReparseDirectoryChain {
         $LeasesByPath[$key] = $lease
         $Tracker.Add($lease)
     }
+    Assert-StableFixedLocalVolumePath -Path $full
     return $full
 }
 
@@ -727,6 +860,7 @@ function Open-NonReparseFileLeaf {
         throw "BLOCKED: Security-sensitive files must use absolute local-drive paths: $Path"
     }
     $full = [IO.Path]::GetFullPath($Path)
+    Assert-StableFixedLocalVolumePath -Path $full
     $parent = [IO.Path]::GetDirectoryName($full)
     $null = Open-NonReparseDirectoryChain -Path $parent -Tracker $Tracker -LeasesByPath $LeasesByPath
     if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
@@ -2012,17 +2146,27 @@ function Protect-JournalLine {
         '(?i)(?<![A-Za-z0-9_.-])' +
             '(?:' +
                 '(?:[A-Za-z0-9]+[._-])*' +
-                '(?:password|passwd|pwd|access[._-]?token|refresh[._-]?token|' +
-                    'token|api[._-]?key|client[._-]?secret|authorization|auth|secret)' +
+                '(?:password|passwd|pwd|access[ ._-]?token|refresh[ ._-]?token|' +
+                    'token|api[ ._-]?key|client[ ._-]?secret|authorization|auth|secret)' +
                 '["'']?\s*[:=]\s*' +
                 '(?:"[^"\r\n]*"|''[^''\r\n]*''|[^\s,;]+)' +
                 '|' +
                 '--?(?:[A-Za-z0-9]+[._-])*' +
-                '(?:password|passwd|pwd|access[._-]?token|refresh[._-]?token|' +
-                    'token|api[._-]?key|client[._-]?secret|authorization|auth|secret)' +
+                '(?:password|passwd|pwd|access[ ._-]?token|refresh[ ._-]?token|' +
+                    'token|api[ ._-]?key|client[ ._-]?secret|authorization|auth|secret)' +
                 '(?:\s+|\s*=\s*)' +
                 '(?:"[^"\r\n]*"|''[^''\r\n]*''|[^\s,;]+)' +
             ')',
+        '<SECRET>=<REDACTED>'
+    )
+    $redacted = [regex]::Replace(
+        $redacted,
+        '(?i)(?<![A-Za-z0-9_.-])' +
+            '(?:[A-Za-z0-9]+[._-])*' +
+            '(?:password|passwd|pwd|access[ ._-]?token|refresh[ ._-]?token|' +
+                'api[ ._-]?key|client[ ._-]?secret)' +
+            '["'']?\s+' +
+            '(?:"[^"\r\n]*"|''[^''\r\n]*''|[^\s,;]+)',
         '<SECRET>=<REDACTED>'
     )
     $redacted = [regex]::Replace(
@@ -2209,6 +2353,8 @@ $result = [ordered]@{
         output_artifact_read_locks = $true
         non_reparse_path_chain_leases = $true
         local_drive_paths_required = $true
+        direct_fixed_volume_mapping_required = $true
+        directory_write_sharing_denied = $true
         terminal_process_checks_point_in_time = $true
         execution_staging_auto_cleanup = $false
         preflight_staging_auto_cleanup = $false
@@ -3632,9 +3778,11 @@ finally {
     }
     if ($null -ne $pathLeaseReleaseError) {
         [Console]::Error.WriteLine(
-            "Could not release a path-integrity lease: $pathLeaseReleaseError"
+            (Protect-JournalLine -Line (
+                    'MQL5 tester smoke warning: could not release a ' +
+                    "path-integrity lease: $pathLeaseReleaseError"
+                ))
         )
-        $exitCode = 2
     }
 
 }

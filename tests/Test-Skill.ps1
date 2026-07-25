@@ -327,7 +327,10 @@ $redactionProbe = & {
         'ERROR DB_PASSWORD=db-secret',
         'ERROR HTTP_AUTHORIZATION=Basic authorization-secret',
         'ERROR --refresh-token cli-token',
-        'ERROR service.api-key: dotted-secret'
+        'ERROR service.api-key: dotted-secret',
+        'ERROR password hunter2',
+        'ERROR "api key": "sk-secret"',
+        'ERROR client secret client-secret-value'
     )
     $negative = @(
         'ERROR token refresh failed',
@@ -345,7 +348,12 @@ $redactionProbe = & {
         expected_negative = $negative
         selected = @(
             Select-JournalEvidence `
-                -Text "ERROR OPENAI_API_KEY=selected-secret`r`nOK" `
+                -Text (
+                    "ERROR OPENAI_API_KEY=selected-secret`r`n" +
+                    "ERROR password selected-password`r`n" +
+                    'ERROR "api key": "selected-api-key"' + "`r`n" +
+                    'OK'
+                ) `
                 -Patterns @('(?i)error')
         )
     }
@@ -353,7 +361,10 @@ $redactionProbe = & {
 foreach ($redactedLine in @($redactionProbe.positive)) {
     Assert-True -Condition (
         $redactedLine -match '<(?:SECRET|REDACTED)>' -and
-        $redactedLine -notmatch '(?i)sk-openai-secret|azure-secret|db-secret|authorization-secret|cli-token|dotted-secret'
+        $redactedLine -notmatch (
+            '(?i)sk-openai-secret|azure-secret|db-secret|authorization-secret|' +
+            'cli-token|dotted-secret|hunter2|sk-secret|client-secret-value'
+        )
     ) -Message "A prefixed secret was not redacted: $redactedLine"
 }
 for ($index = 0; $index -lt $redactionProbe.negative.Count; $index++) {
@@ -362,11 +373,12 @@ for ($index = 0; $index -lt $redactionProbe.negative.Count; $index++) {
             [string]$redactionProbe.expected_negative[$index]
     ) -Message "Ordinary prose was over-redacted: $($redactionProbe.negative[$index])"
 }
+$selectedEvidenceText = @($redactionProbe.selected) -join "`n"
 Assert-True -Condition (
-    $redactionProbe.selected.Count -eq 1 -and
-    [string]$redactionProbe.selected[0] -notmatch 'selected-secret' -and
-    [string]$redactionProbe.selected[0] -match '<(?:SECRET|REDACTED)>'
-) -Message 'Selected journal evidence retained a prefixed secret.'
+    $redactionProbe.selected.Count -eq 3 -and
+    $selectedEvidenceText -notmatch 'selected-secret|selected-password|selected-api-key' -and
+    $selectedEvidenceText -match '<(?:SECRET|REDACTED)>'
+) -Message 'Selected journal evidence retained a secret.'
 
 $postExitWaitNode = $runnerAst.Find(
     {
@@ -1071,6 +1083,46 @@ try {
     $compileDirectory = Join-Path $testRoot 'compile'
     [IO.Directory]::CreateDirectory($compileDirectory) | Out-Null
 
+    $directVolumeIdentity = [Mql5Coding.JobProcessLaunch]::GetFixedLocalVolumeIdentity(
+        $testRoot
+    )
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace(
+            [string]$directVolumeIdentity
+        )) -Message 'A direct fixed local test volume did not produce an identity.'
+
+    $substExecutable = Join-Path $env:WINDIR 'System32\subst.exe'
+    Assert-True -Condition (Test-Path -LiteralPath $substExecutable -PathType Leaf) `
+        -Message 'The SUBST regression test could not find subst.exe.'
+    $substDrive = $null
+    foreach ($letter in [char[]]'ZYXWVUTSRQPONMLKJIHGFED') {
+        $candidateDrive = ([string]$letter) + ':'
+        & $substExecutable $candidateDrive $testRoot 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $substDrive = $candidateDrive
+            break
+        }
+    }
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($substDrive)) `
+        -Message 'The SUBST regression test could not reserve a drive letter.'
+    try {
+        $substRejected = $false
+        try {
+            $null = [Mql5Coding.JobProcessLaunch]::GetFixedLocalVolumeIdentity(
+                "$substDrive\"
+            )
+        }
+        catch {
+            $substRejected = $true
+        }
+        Assert-True -Condition $substRejected `
+            -Message 'A SUBST drive was accepted as a direct fixed local volume.'
+    }
+    finally {
+        & $substExecutable $substDrive /D 2>$null | Out-Null
+        Assert-True -Condition ($LASTEXITCODE -eq 0) `
+            -Message "The SUBST regression drive $substDrive could not be removed."
+    }
+
     $leaseProbeDirectory = Join-Path $testRoot 'compile-lease-probe'
     $leaseProbeRenamed = Join-Path $testRoot 'compile-lease-probe-renamed'
     [IO.Directory]::CreateDirectory($leaseProbeDirectory) | Out-Null
@@ -1168,6 +1220,7 @@ try {
         $testerLeaseProbeDirectory
     )
     $testerLeaseBlockedRename = $false
+    $testerLeaseBlockedAttributeWrite = $false
     try {
         try {
             [IO.Directory]::Move(
@@ -1178,8 +1231,53 @@ try {
         catch {
             $testerLeaseBlockedRename = $true
         }
+
+        $openPathHandleMethod = [Mql5Coding.JobProcessLaunch].GetMethod(
+            'OpenPathHandle',
+            [Reflection.BindingFlags]::NonPublic -bor
+                [Reflection.BindingFlags]::Static
+        )
+        Assert-True -Condition ($null -ne $openPathHandleMethod) `
+            -Message 'The tester path-handle method was unavailable for the share-mode probe.'
+        $attributeWriteProbe = $openPathHandleMethod.Invoke(
+            $null,
+            [object[]]@(
+                [string]$testerLeaseProbeDirectory,
+                [uint32]0x00000100,
+                [uint32]0x00000007,
+                [IntPtr]::Zero,
+                [uint32]3,
+                [uint32]0x02200000,
+                [IntPtr]::Zero
+            )
+        )
+        try {
+            $testerLeaseBlockedAttributeWrite = (
+                $null -eq $attributeWriteProbe -or
+                [bool]$attributeWriteProbe.IsInvalid
+            )
+        }
+        finally {
+            if ($null -ne $attributeWriteProbe) {
+                $attributeWriteProbe.Dispose()
+            }
+        }
+
+        $testerLeaseChildDirectory = Join-Path $testerLeaseProbeDirectory 'child'
+        $testerLeaseChildFile = Join-Path $testerLeaseChildDirectory 'probe.txt'
+        [IO.Directory]::CreateDirectory($testerLeaseChildDirectory) | Out-Null
+        [IO.File]::WriteAllText(
+            $testerLeaseChildFile,
+            'child write remains available',
+            [Text.Encoding]::ASCII
+        )
+
         Assert-True -Condition $testerLeaseBlockedRename `
             -Message 'A held tester path-entry lease allowed its directory to be renamed.'
+        Assert-True -Condition $testerLeaseBlockedAttributeWrite `
+            -Message 'A held tester directory lease allowed a second attribute-write handle.'
+        Assert-True -Condition (Test-Path -LiteralPath $testerLeaseChildFile -PathType Leaf) `
+            -Message 'A held tester directory lease blocked normal child creation.'
     }
     finally {
         $testerDirectoryLease.Dispose()
@@ -1192,7 +1290,7 @@ try {
         $testerLeaseProbeRenamed,
         $testerLeaseProbeDirectory
     )
-    Remove-Item -LiteralPath $testerLeaseProbeDirectory -Force
+    Remove-Item -LiteralPath $testerLeaseProbeDirectory -Recurse -Force
 
     $testerFileProbe = Join-Path $testRoot 'tester-file-lease-probe.log'
     $testerFileProbeRenamed = Join-Path $testRoot 'tester-file-lease-probe-renamed.log'
@@ -1754,6 +1852,12 @@ try {
         -Message "Unexpected preflight status: $($preflight.Result.status)"
     Assert-True -Condition (-not [bool]$preflight.Result.process.process_created) `
         -Message 'Preflight unexpectedly created a terminal process.'
+    Assert-True -Condition (
+        [bool]$preflight.Result.safety.direct_fixed_volume_mapping_required
+    ) -Message 'Preflight did not report its direct fixed-volume requirement.'
+    Assert-True -Condition (
+        [bool]$preflight.Result.safety.directory_write_sharing_denied
+    ) -Message 'Preflight did not report its directory write-share protection.'
     Assert-True -Condition (-not [string]::IsNullOrWhiteSpace(
             [string]$preflight.Result.binding.terminal_image.file_identity
         )) -Message 'Preflight did not record the pinned terminal executable identity.'
