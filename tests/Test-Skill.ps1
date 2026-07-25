@@ -514,7 +514,12 @@ $redactionProbe = & {
         'ERROR client secret client-secret-value',
         'ERROR password invalid-secret',
         'ERROR password rejected-P@ssw0rd',
-        'ERROR client secret missing-value'
+        'ERROR client secret missing-value',
+        'ERROR token token-value',
+        'ERROR secret secret-value',
+        'ERROR auth auth-value',
+        'ERROR authorization Basic dXNlcjpwYXNz',
+        'ERROR password="quoted\"leaked-tail"'
     )
     $negative = @(
         'ERROR token refresh failed',
@@ -524,6 +529,8 @@ $redactionProbe = & {
         'ERROR api key not configured',
         'ERROR password is not configured',
         'ERROR api key is not configured',
+        'ERROR auth failed',
+        'ERROR secret missing',
         'ERROR passwordless mode active',
         'ERROR tokenizer=value'
     )
@@ -556,7 +563,7 @@ foreach ($redactedLine in @($redactionProbe.positive)) {
             '(?i)sk-openai-secret|azure-secret|db-secret|authorization-secret|' +
             'cli-token|dotted-secret|hunter2|sk-secret|sk-double-space|sk-tab|' +
             'multi word secret|client-secret-value|invalid-secret|rejected-P@ssw0rd|' +
-            'missing-value'
+            'missing-value|token-value|secret-value|auth-value|dXNlcjpwYXNz|leaked-tail'
         )
     ) -Message "A prefixed secret was not redacted: $redactedLine"
 }

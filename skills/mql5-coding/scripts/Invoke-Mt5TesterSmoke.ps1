@@ -2427,13 +2427,13 @@ function Protect-JournalLine {
                 '(?:password|passwd|pwd|access(?:[ \t._-]+)?token|refresh(?:[ \t._-]+)?token|' +
                     'token|api(?:[ \t._-]+)?key|client(?:[ \t._-]+)?secret|authorization|auth|secret)' +
                 '["'']?\s*[:=]\s*' +
-                '(?:"[^"\r\n]*"|''[^''\r\n]*''|[^\r\n,;]+)' +
+                '[^\r\n]*' +
                 '|' +
                 '--?(?:[A-Za-z0-9]+[._-])*' +
                 '(?:password|passwd|pwd|access(?:[ \t._-]+)?token|refresh(?:[ \t._-]+)?token|' +
                     'token|api(?:[ \t._-]+)?key|client(?:[ \t._-]+)?secret|authorization|auth|secret)' +
                 '(?:\s+|\s*=\s*)' +
-                '(?:"[^"\r\n]*"|''[^''\r\n]*''|[^\r\n,;]+)' +
+                '[^\r\n]*' +
             ')',
         '<SECRET>=<REDACTED>'
     )
@@ -2441,12 +2441,14 @@ function Protect-JournalLine {
         '(?i)(?<![A-Za-z0-9_.-])' +
             '(?:[A-Za-z0-9]+[._-])*' +
             '(?:password|passwd|pwd|access(?:[ \t._-]+)?token|refresh(?:[ \t._-]+)?token|' +
-                'api(?:[ \t._-]+)?key|client(?:[ \t._-]+)?secret)' +
+                'token|api(?:[ \t._-]+)?key|client(?:[ \t._-]+)?secret|authorization|' +
+                'auth|secret)' +
             '["'']?\s+' +
-            '(?<bareSecretValue>"[^"\r\n]*"|''[^''\r\n]*''|[^\r\n,;]+)'
+            '(?<bareSecretValue>[^\r\n]+)'
     $knownBareSecretDiagnosticPattern =
-        '(?i)^(?:is\s+)?(?:authentication\s+failed|not\s+configured|missing|required|' +
-            'invalid|expired|rejected|failed|failure|disabled|enabled|unavailable|empty|absent)$'
+        '(?i)^(?:is\s+)?(?:authentication\s+failed|refresh\s+failed|not\s+configured|' +
+            'missing|required|invalid|expired|rejected|failed|failure|denied|disabled|' +
+            'enabled|unavailable|empty|absent)$'
     $redacted = [regex]::Replace(
         $redacted,
         $bareSecretPattern,
