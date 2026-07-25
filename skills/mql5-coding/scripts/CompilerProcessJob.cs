@@ -365,8 +365,9 @@ namespace Mql5Coding
                 int rootOffset = IntPtr.Size == 8 ? 8 : 4;
                 int lengthOffset = rootOffset + IntPtr.Size;
                 int nameOffset = lengthOffset + sizeof(uint);
+                int structureLength = IntPtr.Size == 8 ? 24 : 16;
                 int nameBytes = checked(destinationCharacters.Length * sizeof(char));
-                int bufferLength = checked(nameOffset + nameBytes);
+                int bufferLength = checked(structureLength + nameBytes);
                 IntPtr buffer = Marshal.AllocHGlobal(bufferLength);
                 try
                 {
@@ -380,6 +381,10 @@ namespace Mql5Coding
                         0,
                         IntPtr.Add(buffer, nameOffset),
                         destinationCharacters.Length);
+                    Marshal.WriteInt16(
+                        buffer,
+                        nameOffset + nameBytes,
+                        0);
                     if (!SetFileInformationByHandle(
                             handle,
                             FileRenameInformationClass,
