@@ -2732,11 +2732,11 @@ try {
                 -RetainedSourceStream $integrityLocks[0].stream
 
             $sourceLease = Open-NonReparseFileLeaf `
-                -Path $ProbePath `
+                -Path $CopyPath `
                 -Tracker $pathLeases `
                 -LeasesByPath $leasesByPath
             $publishedRecord = Copy-NewVerifiedOutputArtifact `
-                -Source $ProbePath `
+                -Source $CopyPath `
                 -Destination $PublishedPath `
                 -Kind 'published report probe' `
                 -SourceLease $sourceLease `
