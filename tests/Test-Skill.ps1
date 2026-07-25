@@ -937,7 +937,7 @@ Assert-True -Condition (
         [StringComparison]::Ordinal
     ) -ge 0 -and
     $runnerText.IndexOf(
-        "$result.artifacts.Contains('staging_integrity')",
+        '$result.artifacts.Contains(''staging_integrity'')',
         [StringComparison]::Ordinal
     ) -ge 0
 ) -Message 'Final staging-integrity failures do not update the ordered artifact record.'
