@@ -77,7 +77,7 @@ GitHub Actions and the local test commands validate:
 - skill metadata, dependency declaration, links, and portable paths;
 - PowerShell syntax under PowerShell 7 and Windows PowerShell 5.1;
 - compiler-wrapper completion, source-path lease, artifact, and exit-code contracts without starting real MetaEditor;
-- Strategy Tester preflight, direct fixed-volume and non-reparse path-chain leases, pinned journal evidence, stable terminal-image identity checks, secret redaction, unambiguous correlated completion, adversarial log rejection, and timeout cleanup without starting real MT5.
+- Strategy Tester preflight, direct fixed-volume and non-reparse path-chain leases, pinned nonempty-directory guards, pinned journal evidence, stable terminal-image identity checks, secret redaction, unambiguous correlated completion, adversarial log rejection, and timeout cleanup without starting real MT5.
 
 Run locally inside an isolated Python 3.12 x64 environment with `PyYAML==6.0.3` available:
 

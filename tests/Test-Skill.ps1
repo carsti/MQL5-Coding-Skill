@@ -316,6 +316,18 @@ $selectEvidenceNode = $runnerAst.Find(
 )
 Assert-True -Condition ($null -ne $protectJournalNode -and $null -ne $selectEvidenceNode) `
     -Message 'Journal redaction functions were not found for regression testing.'
+$directoryMutationGuardNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Open-DirectoryMutationGuard'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $directoryMutationGuardNode) `
+    -Message 'The directory mutation-guard function was not found for regression testing.'
 $redactionProbe = & {
     param($ProtectDefinition, $SelectDefinition)
     . ([scriptblock]::Create($ProtectDefinition))
@@ -1219,8 +1231,26 @@ try {
     $testerDirectoryLease = [Mql5Coding.JobProcessLaunch]::OpenDirectoryComponentLease(
         $testerLeaseProbeDirectory
     )
+    $testerGuardTracker = New-Object 'System.Collections.Generic.List[object]'
+    $testerGuardByPath = @{}
+    $testerDirectoryGuard = & {
+        param($DefinitionText, $Path, $DirectoryLease, $Tracker, $GuardsByPath)
+        . ([scriptblock]::Create($DefinitionText))
+        Open-DirectoryMutationGuard `
+            -Path $Path `
+            -DirectoryLease $DirectoryLease `
+            -Tracker $Tracker `
+            -GuardsByPath $GuardsByPath `
+            -RunId 'lease-probe'
+    } `
+        $directoryMutationGuardNode.Extent.Text `
+        $testerLeaseProbeDirectory `
+        $testerDirectoryLease `
+        $testerGuardTracker `
+        $testerGuardByPath
     $testerLeaseBlockedRename = $false
-    $testerLeaseBlockedAttributeWrite = $false
+    $testerLeaseBlockedDataWrite = $false
+    $testerGuardBlockedRename = $false
     try {
         try {
             [IO.Directory]::Move(
@@ -1239,11 +1269,11 @@ try {
         )
         Assert-True -Condition ($null -ne $openPathHandleMethod) `
             -Message 'The tester path-handle method was unavailable for the share-mode probe.'
-        $attributeWriteProbe = $openPathHandleMethod.Invoke(
+        $directoryDataWriteProbe = $openPathHandleMethod.Invoke(
             $null,
             [object[]]@(
                 [string]$testerLeaseProbeDirectory,
-                [uint32]0x00000100,
+                [uint32]0x00000002,
                 [uint32]0x00000007,
                 [IntPtr]::Zero,
                 [uint32]3,
@@ -1252,15 +1282,25 @@ try {
             )
         )
         try {
-            $testerLeaseBlockedAttributeWrite = (
-                $null -eq $attributeWriteProbe -or
-                [bool]$attributeWriteProbe.IsInvalid
+            $testerLeaseBlockedDataWrite = (
+                $null -eq $directoryDataWriteProbe -or
+                [bool]$directoryDataWriteProbe.IsInvalid
             )
         }
         finally {
-            if ($null -ne $attributeWriteProbe) {
-                $attributeWriteProbe.Dispose()
+            if ($null -ne $directoryDataWriteProbe) {
+                $directoryDataWriteProbe.Dispose()
             }
+        }
+
+        try {
+            [IO.File]::Move(
+                [string]$testerDirectoryGuard.path,
+                ([string]$testerDirectoryGuard.path + '.renamed')
+            )
+        }
+        catch {
+            $testerGuardBlockedRename = $true
         }
 
         $testerLeaseChildDirectory = Join-Path $testerLeaseProbeDirectory 'child'
@@ -1274,12 +1314,21 @@ try {
 
         Assert-True -Condition $testerLeaseBlockedRename `
             -Message 'A held tester path-entry lease allowed its directory to be renamed.'
-        Assert-True -Condition $testerLeaseBlockedAttributeWrite `
-            -Message 'A held tester directory lease allowed a second attribute-write handle.'
+        Assert-True -Condition $testerLeaseBlockedDataWrite `
+            -Message 'A held tester directory lease allowed a second data-write handle.'
+        Assert-True -Condition $testerGuardBlockedRename `
+            -Message 'A directory mutation guard could be renamed while it was pinned.'
+        Assert-True -Condition (
+            $testerGuardTracker.Count -eq 1 -and
+            (Test-Path -LiteralPath $testerDirectoryGuard.path -PathType Leaf)
+        ) -Message 'The directory mutation guard was not pinned in the leased directory.'
         Assert-True -Condition (Test-Path -LiteralPath $testerLeaseChildFile -PathType Leaf) `
             -Message 'A held tester directory lease blocked normal child creation.'
     }
     finally {
+        if ($null -ne $testerDirectoryGuard) {
+            $testerDirectoryGuard.stream.Dispose()
+        }
         $testerDirectoryLease.Dispose()
     }
     [IO.Directory]::Move(
@@ -1856,8 +1905,11 @@ try {
         [bool]$preflight.Result.safety.direct_fixed_volume_mapping_required
     ) -Message 'Preflight did not report its direct fixed-volume requirement.'
     Assert-True -Condition (
-        [bool]$preflight.Result.safety.directory_write_sharing_denied
-    ) -Message 'Preflight did not report its directory write-share protection.'
+        [bool]$preflight.Result.safety.directory_data_write_sharing_denied
+    ) -Message 'Preflight did not report its directory data-write share protection.'
+    Assert-True -Condition (
+        [bool]$preflight.Result.safety.directory_mutation_guards
+    ) -Message 'Preflight did not report its pinned directory mutation guards.'
     Assert-True -Condition (-not [string]::IsNullOrWhiteSpace(
             [string]$preflight.Result.binding.terminal_image.file_identity
         )) -Message 'Preflight did not record the pinned terminal executable identity.'

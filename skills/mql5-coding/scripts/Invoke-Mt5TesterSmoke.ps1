@@ -64,6 +64,7 @@ namespace Mql5Coding
         private const uint GenericRead = 0x80000000;
         private const uint ShareRead = 0x00000001;
         private const uint ShareReadWrite = 0x00000003;
+        private const uint ShareReadWriteDelete = 0x00000007;
         private const uint DriveFixed = 3;
         private const uint OpenExisting = 3;
         private const uint FileAttributeDirectory = 0x00000010;
@@ -333,6 +334,27 @@ namespace Mql5Coding
 
             public bool IsDirectory { get; private set; }
 
+            public void VerifyStillNonReparseDirectory()
+            {
+                if (handle == null || handle.IsInvalid || handle.IsClosed)
+                    throw new InvalidOperationException(
+                        "The directory path-integrity handle is unavailable.");
+                if (!IsDirectory)
+                    throw new InvalidOperationException(
+                        "The path-integrity lease does not identify a directory.");
+
+                ByHandleFileInformation information;
+                if (!GetFileInformationByHandle(handle, out information))
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "Reading live directory attributes failed: " + Path);
+                if ((information.FileAttributes & FileAttributeDirectory) == 0 ||
+                    (information.FileAttributes & FileAttributeReparsePoint) != 0)
+                    throw new InvalidOperationException(
+                        "A leased directory became a reparse point or changed type: " +
+                        Path);
+            }
+
             public void Dispose()
             {
                 if (handle != null)
@@ -570,7 +592,8 @@ namespace Mql5Coding
 
         private static PathEntryLease OpenNonReparsePathEntry(
             string path,
-            bool requireDirectory)
+            bool requireDirectory,
+            uint shareMode)
         {
             if (String.IsNullOrWhiteSpace(path))
                 throw new ArgumentException("A path is required.", "path");
@@ -582,7 +605,7 @@ namespace Mql5Coding
             SafeFileHandle handle = OpenPathHandle(
                 path,
                 requireDirectory ? FileListDirectory : GenericRead,
-                requireDirectory ? ShareRead : ShareReadWrite,
+                shareMode,
                 IntPtr.Zero,
                 OpenExisting,
                 flags,
@@ -633,12 +656,23 @@ namespace Mql5Coding
 
         public static PathEntryLease OpenDirectoryComponentLease(string path)
         {
-            return OpenNonReparsePathEntry(path, true);
+            return OpenNonReparsePathEntry(path, true, ShareRead);
         }
 
         public static PathEntryLease OpenFileLeafLease(string path)
         {
-            return OpenNonReparsePathEntry(path, false);
+            return OpenNonReparsePathEntry(path, false, ShareReadWrite);
+        }
+
+        public static string GetNonReparseGuardFileIdentity(string path)
+        {
+            using (PathEntryLease lease = OpenNonReparsePathEntry(
+                path,
+                false,
+                ShareReadWriteDelete))
+            {
+                return lease.Identity;
+            }
         }
 
         public string GetImagePath()
@@ -846,7 +880,7 @@ function Open-NonReparseDirectoryChain {
         $Tracker.Add($lease)
     }
     Assert-StableFixedLocalVolumePath -Path $full
-    return $full
+    return $LeasesByPath[$full.ToUpperInvariant()]
 }
 
 function Open-NonReparseFileLeaf {
@@ -881,6 +915,78 @@ function Open-NonReparseFileLeaf {
     $LeasesByPath[$key] = $lease
     $Tracker.Add($lease)
     return $lease
+}
+
+function Open-DirectoryMutationGuard {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$DirectoryLease,
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)][hashtable]$GuardsByPath,
+        [Parameter(Mandatory)][string]$RunId
+    )
+
+    $full = [IO.Path]::GetFullPath($Path)
+    $key = $full.ToUpperInvariant()
+    if ($GuardsByPath.ContainsKey($key)) {
+        return $GuardsByPath[$key]
+    }
+    if (-not [bool]$DirectoryLease.IsDirectory -or
+        -not ([IO.Path]::GetFullPath([string]$DirectoryLease.Path)).Equals(
+            $full,
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+        throw "BLOCKED: A matching directory lease is required before creating a mutation guard: $full"
+    }
+
+    $guardLeaf = '.mcg-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.tmp'
+    $guardPath = Join-Path $full $guardLeaf
+    if ($guardPath.Length -gt 259) {
+        throw "BLOCKED: The directory mutation-guard path exceeds 259 characters: $guardPath"
+    }
+
+    $stream = $null
+    try {
+        $stream = New-Object IO.FileStream(
+            $guardPath,
+            [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::ReadWrite,
+            [IO.FileShare]::Read,
+            4096,
+            [IO.FileOptions]::DeleteOnClose
+        )
+        $bytes = [Text.Encoding]::UTF8.GetBytes($RunId)
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
+
+        $DirectoryLease.VerifyStillNonReparseDirectory()
+        $handleIdentity = [Mql5Coding.JobProcessLaunch]::GetFileIdentity(
+            $stream.SafeFileHandle
+        )
+        $pathIdentity = [Mql5Coding.JobProcessLaunch]::GetNonReparseGuardFileIdentity(
+            $guardPath
+        )
+        if ([string]$handleIdentity -cne [string]$pathIdentity) {
+            throw 'The directory mutation guard did not remain bound to its leased directory.'
+        }
+        $DirectoryLease.VerifyStillNonReparseDirectory()
+
+        $record = [pscustomobject][ordered]@{
+            directory_path = $full
+            path = $guardPath
+            file_identity = $handleIdentity
+            stream = $stream
+        }
+        $GuardsByPath[$key] = $record
+        $Tracker.Add($record)
+        return $record
+    }
+    catch {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+        throw "BLOCKED: Could not pin a nonempty leased directory '$full': $($_.Exception.Message)"
+    }
 }
 
 function Assert-ExpectedApplicationMarker {
@@ -1507,7 +1613,8 @@ function Open-DataDirectoryLock {
 function Open-NewOutputDirectoryClaim {
     param(
         [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$RunId
+        [Parameter(Mandatory)][string]$RunId,
+        [Parameter(Mandatory)]$DirectoryLease
     )
 
     if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
@@ -1525,7 +1632,7 @@ function Open-NewOutputDirectoryClaim {
             $claimPath,
             [IO.FileMode]::CreateNew,
             [IO.FileAccess]::ReadWrite,
-            [IO.FileShare]::None,
+            [IO.FileShare]::Read,
             4096,
             [IO.FileOptions]::DeleteOnClose
         )
@@ -1541,6 +1648,17 @@ function Open-NewOutputDirectoryClaim {
         $bytes = [Text.Encoding]::UTF8.GetBytes($RunId)
         $stream.Write($bytes, 0, $bytes.Length)
         $stream.Flush($true)
+        $DirectoryLease.VerifyStillNonReparseDirectory()
+        $claimHandleIdentity = [Mql5Coding.JobProcessLaunch]::GetFileIdentity(
+            $stream.SafeFileHandle
+        )
+        $claimPathIdentity = [Mql5Coding.JobProcessLaunch]::GetNonReparseGuardFileIdentity(
+            $claimPath
+        )
+        if ([string]$claimHandleIdentity -cne [string]$claimPathIdentity) {
+            throw 'The output-directory claim did not remain bound to its leased directory.'
+        }
+        $DirectoryLease.VerifyStillNonReparseDirectory()
         $ownerText = $RunId + "`n"
         Write-NewTextFile -Text $ownerText -Path $ownerPath -Encoding (New-Object Text.UTF8Encoding($false))
         return [pscustomobject]@{
@@ -1548,6 +1666,7 @@ function Open-NewOutputDirectoryClaim {
             stream = $stream
             owner_path = $ownerPath
             owner_sha256 = Get-TextSha256 -Text $ownerText
+            file_identity = $claimHandleIdentity
         }
     }
     catch {
@@ -2287,6 +2406,8 @@ $outputArtifactIntegrityRecords = New-Object 'System.Collections.Generic.List[ob
 $stagingReadLocks = New-Object 'System.Collections.Generic.List[object]'
 $pathEntryLeases = New-Object 'System.Collections.Generic.List[object]'
 $leasedPathEntries = @{}
+$directoryMutationGuards = New-Object 'System.Collections.Generic.List[object]'
+$guardedDirectories = @{}
 $journalReadStreams = New-Object 'System.Collections.Generic.List[object]'
 $generatedOwnedPaths = New-Object 'System.Collections.Generic.List[string]'
 $createdDirectories = New-Object 'System.Collections.Generic.List[string]'
@@ -2354,7 +2475,8 @@ $result = [ordered]@{
         non_reparse_path_chain_leases = $true
         local_drive_paths_required = $true
         direct_fixed_volume_mapping_required = $true
-        directory_write_sharing_denied = $true
+        directory_data_write_sharing_denied = $true
+        directory_mutation_guards = $true
         terminal_process_checks_point_in_time = $true
         execution_staging_auto_cleanup = $false
         preflight_staging_auto_cleanup = $false
@@ -2633,11 +2755,26 @@ try {
     if (-not (Test-Path -LiteralPath $outputParent -PathType Container)) {
         throw "OutputDirectory parent does not exist: $outputParent"
     }
-    $null = Open-NonReparseDirectoryChain -Path $outputParent -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
+    $outputParentLease = Open-NonReparseDirectoryChain `
+        -Path $outputParent `
+        -Tracker $pathEntryLeases `
+        -LeasesByPath $leasedPathEntries
+    $null = Open-DirectoryMutationGuard `
+        -Path $outputParent `
+        -DirectoryLease $outputParentLease `
+        -Tracker $directoryMutationGuards `
+        -GuardsByPath $guardedDirectories `
+        -RunId $runId
     [IO.Directory]::CreateDirectory($output) | Out-Null
     $outputCreated = $true
-    $null = Open-NonReparseDirectoryChain -Path $output -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
-    $outputClaim = Open-NewOutputDirectoryClaim -Path $output -RunId $runId
+    $outputDirectoryLease = Open-NonReparseDirectoryChain `
+        -Path $output `
+        -Tracker $pathEntryLeases `
+        -LeasesByPath $leasedPathEntries
+    $outputClaim = Open-NewOutputDirectoryClaim `
+        -Path $output `
+        -RunId $runId `
+        -DirectoryLease $outputDirectoryLease
     $resultPath = Join-Path $output 'smoke-result.json'
 
     $binding = Resolve-TerminalBinding -RequestedTerminalPath $TerminalPath -RequestedDataPath $TerminalDataPath
@@ -2655,8 +2792,25 @@ try {
     }
 
     $terminalPathLease = Open-NonReparseFileLeaf -Path $terminal -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
-    foreach ($requiredDirectory in @($data, $mql5, $expertsRoot, $profilesRoot, $terminalLogRoot, $testerLogRoot)) {
-        $null = Open-NonReparseDirectoryChain -Path $requiredDirectory -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
+    $mutationGuardDirectories = @(
+        $expertsRoot,
+        $profilesRoot,
+        $terminalLogRoot,
+        $testerLogRoot
+    )
+    foreach ($requiredDirectory in @($data, $mql5) + $mutationGuardDirectories) {
+        $requiredDirectoryLease = Open-NonReparseDirectoryChain `
+            -Path $requiredDirectory `
+            -Tracker $pathEntryLeases `
+            -LeasesByPath $leasedPathEntries
+        if ($mutationGuardDirectories -icontains $requiredDirectory) {
+            $null = Open-DirectoryMutationGuard `
+                -Path $requiredDirectory `
+                -DirectoryLease $requiredDirectoryLease `
+                -Tracker $directoryMutationGuards `
+                -GuardsByPath $guardedDirectories `
+                -RunId $runId
+        }
     }
     $originPathLease = Open-NonReparseFileLeaf -Path (Join-Path $data 'origin.txt') -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
 
@@ -2863,12 +3017,31 @@ try {
         [IO.Directory]::CreateDirectory($expertStageRoot) | Out-Null
         $createdDirectories.Add($expertStageRoot)
     }
-    $null = Open-NonReparseDirectoryChain -Path $expertStageRoot -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
+    $expertStageRootLease = Open-NonReparseDirectoryChain `
+        -Path $expertStageRoot `
+        -Tracker $pathEntryLeases `
+        -LeasesByPath $leasedPathEntries
+    $null = Open-DirectoryMutationGuard `
+        -Path $expertStageRoot `
+        -DirectoryLease $expertStageRootLease `
+        -Tracker $directoryMutationGuards `
+        -GuardsByPath $guardedDirectories `
+        -RunId $runId
     if (-not $directoryExisted) {
         [IO.Directory]::CreateDirectory((Split-Path -Parent $expertStage)) | Out-Null
         $createdDirectories.Add((Split-Path -Parent $expertStage))
     }
-    $null = Open-NonReparseDirectoryChain -Path (Split-Path -Parent $expertStage) -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
+    $expertStageDirectory = Split-Path -Parent $expertStage
+    $expertStageDirectoryLease = Open-NonReparseDirectoryChain `
+        -Path $expertStageDirectory `
+        -Tracker $pathEntryLeases `
+        -LeasesByPath $leasedPathEntries
+    $null = Open-DirectoryMutationGuard `
+        -Path $expertStageDirectory `
+        -DirectoryLease $expertStageDirectoryLease `
+        -Tracker $directoryMutationGuards `
+        -GuardsByPath $guardedDirectories `
+        -RunId $runId
     $stageRecord = Copy-NewHashBoundFile -Source $expert -Destination $expertStage -Kind 'expert' -Tracker $hashBoundStaging
     if ($stageRecord.sha256 -cne $expertHash -or [long]$stageRecord.byte_length -ne [long]$expertInfo.Length) {
         throw 'Expert source bytes changed while the hash-bound staging copy was prepared.'
@@ -3658,6 +3831,17 @@ finally {
         catch {
             $cleanupErrors.Add(
                 "Could not release a pinned journal read stream: $($_.Exception.Message)"
+            )
+        }
+    }
+
+    for ($index = $directoryMutationGuards.Count - 1; $index -ge 0; $index--) {
+        try {
+            $directoryMutationGuards[$index].stream.Dispose()
+        }
+        catch {
+            $cleanupErrors.Add(
+                "Could not release the directory mutation guard '$($directoryMutationGuards[$index].path)': $($_.Exception.Message)"
             )
         }
     }
