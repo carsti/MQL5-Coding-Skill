@@ -2392,13 +2392,20 @@ function Protect-JournalLine {
     )
     $redacted = $Line
     $secretLabelPattern =
-        '(?:[A-Za-z0-9]+[._-])*' +
-            '(?:' +
-                '[A-Za-z0-9]*(?:password|passwd|pwd|token|secret|authorization|auth|' +
-                    'apikey|authorizationheader)' +
-                '|access[ \t._-]+token|refresh[ \t._-]+token|' +
-                    'api[ \t._-]+key|client[ \t._-]+secret' +
-            ')'
+        '(?:' +
+            '(?:[A-Za-z0-9]+[._-])*' +
+                '(?:password|passwd|pwd|token|secret|authorization|auth|' +
+                    'access[._-]+token|refresh[._-]+token|api[._-]+key|' +
+                    'client[._-]+secret)' +
+                '(?:[._-][A-Za-z0-9]+)*' +
+            '|' +
+            '(?-i:[A-Za-z0-9]*(?:[Pp]assword|[Pp]asswd|[Pp]wd|[Tt]oken|' +
+                '[Ss]ecret|[Aa]uthorization|[Aa]uth|[Aa]pi[Kk]ey)' +
+                '(?:[A-Z][A-Za-z0-9]*)*)' +
+            '|' +
+            'access[ \t]+token|refresh[ \t]+token|api[ \t]+key|' +
+                'client[ \t]+secret' +
+        ')'
     $secretLabelClosingQuotePattern = '(?:\\*["''])?'
     $orderedSensitiveValues = @(
         $SensitiveValues |

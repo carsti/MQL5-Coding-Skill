@@ -561,7 +561,11 @@ $redactionProbe = & {
         'ERROR clientSecret=camel-client-secret',
         'ERROR authToken=camel-auth-token',
         'ERROR oauthToken=camel-oauth-token',
-        'ERROR authorizationHeader: Basic header-secret'
+        'ERROR authorizationHeader: Basic header-secret',
+        'ERROR AUTHORIZATION_HEADER: Basic snake-header-secret',
+        'ERROR AWS_SECRET_ACCESS_KEY=aws-secret-access-key',
+        'ERROR SECRET_KEY=framework-secret-key',
+        'ERROR secretAccessKey=camel-secret-access-key'
     )
     $negative = @(
         'ERROR token refresh failed',
@@ -574,7 +578,8 @@ $redactionProbe = & {
         'ERROR auth failed',
         'ERROR secret missing',
         'ERROR passwordless mode active',
-        'ERROR tokenizer=value'
+        'ERROR tokenizer=value',
+        'ERROR authentication failed'
     )
     return [pscustomobject]@{
         positive = @($positive | ForEach-Object {
@@ -608,7 +613,8 @@ foreach ($redactedLine in @($redactionProbe.positive)) {
             'missing-value|token-value|secret-value|auth-value|dXNlcjpwYXNz|leaked-tail|' +
             'colon-password|colon-token|colon-authorization|json-password|json-token|' +
             'json-api-key|camel-password|camel-client-secret|camel-auth-token|' +
-            'camel-oauth-token|header-secret'
+            'camel-oauth-token|header-secret|snake-header-secret|aws-secret-access-key|' +
+            'framework-secret-key|camel-secret-access-key'
         )
     ) -Message "A prefixed secret was not redacted: $redactedLine"
 }
