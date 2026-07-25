@@ -17,6 +17,9 @@ EXPECTED_SKILL_FILES = {
     "scripts/Compile-Mql5.ps1",
     "scripts/CompilerProcessJob.cs",
     "scripts/Invoke-Mt5TesterSmoke.ps1",
+    "scripts/TesterEvidence.ps1",
+    "scripts/TesterPathIntegrity.ps1",
+    "scripts/TesterProcessJob.cs",
 }
 
 
