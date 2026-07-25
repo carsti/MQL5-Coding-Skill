@@ -2435,7 +2435,7 @@ function Protect-JournalLine {
                 '--?(?:[A-Za-z0-9]+[._-])*' +
                 '(?:password|passwd|pwd|access(?:[ \t._-]+)?token|refresh(?:[ \t._-]+)?token|' +
                     'token|api(?:[ \t._-]+)?key|client(?:[ \t._-]+)?secret|authorization|auth|secret)' +
-                '(?:\s+|\s*=\s*)' +
+                '(?:\s+|\s*[:=]\s*)' +
                 '[^\r\n]*' +
             ')',
         '<SECRET>=<REDACTED>'

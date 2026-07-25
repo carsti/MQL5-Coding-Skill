@@ -519,7 +519,10 @@ $redactionProbe = & {
         'ERROR secret secret-value',
         'ERROR auth auth-value',
         'ERROR authorization Basic dXNlcjpwYXNz',
-        'ERROR password="quoted\"leaked-tail"'
+        'ERROR password="quoted\"leaked-tail"',
+        'ERROR -password:colon-password',
+        'ERROR --token:colon-token',
+        'ERROR --authorization:Basic colon-authorization'
     )
     $negative = @(
         'ERROR token refresh failed',
@@ -563,7 +566,8 @@ foreach ($redactedLine in @($redactionProbe.positive)) {
             '(?i)sk-openai-secret|azure-secret|db-secret|authorization-secret|' +
             'cli-token|dotted-secret|hunter2|sk-secret|sk-double-space|sk-tab|' +
             'multi word secret|client-secret-value|invalid-secret|rejected-P@ssw0rd|' +
-            'missing-value|token-value|secret-value|auth-value|dXNlcjpwYXNz|leaked-tail'
+            'missing-value|token-value|secret-value|auth-value|dXNlcjpwYXNz|leaked-tail|' +
+            'colon-password|colon-token|colon-authorization'
         )
     ) -Message "A prefixed secret was not redacted: $redactedLine"
 }
