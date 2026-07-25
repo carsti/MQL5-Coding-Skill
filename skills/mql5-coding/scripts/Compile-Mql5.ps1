@@ -687,7 +687,7 @@ try {
         throw "Another compilation is already using this source file (identity lock): $resolvedSource"
     }
 
-    if ($sourceReadLease.Identity -cne $initialSourceIdentity) {
+    if ([string]$sourceReadLease.GetCurrentIdentity() -cne $initialSourceIdentity) {
         throw 'Source file identity changed while compilation locks were being acquired.'
     }
 

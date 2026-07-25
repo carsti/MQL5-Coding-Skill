@@ -793,6 +793,10 @@ Assert-True -Condition (
     $sourceIdentityIndex -gt $sourceLeaseIndex -and
     $compilerText -notmatch '(?s)\$canonicalSource = .*?Test-Path.*?\$sourceReadLease'
 ) -Message 'Compiler source identity is still read before the no-follow leaf lease.'
+Assert-True -Condition (
+    $compilerText -match
+        '\[string\]\$sourceReadLease\.GetCurrentIdentity\(\)\s+-cne\s+\$initialSourceIdentity'
+) -Message 'Compiler source identity is not freshly re-read after both compilation locks are acquired.'
 $metaEditorLeaseIndex = $compilerText.IndexOf(
     '$metaEditorReadLease = [Mql5Coding.CompilerProcessJob]::OpenExecutableFileIdentityLease',
     [StringComparison]::Ordinal
