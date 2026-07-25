@@ -909,7 +909,7 @@ try {
             }
         }
         elseif (-not $timedOut) {
-            throw 'MetaEditor exited without creating its compilation log.'
+            throw 'MetaEditor exited without producing a complete Result line because it did not create its compilation log.'
         }
 
         $artifactPair = Open-FinalCompilerOutputLeases -LiteralPath $artifactPath -ExpectedIdentity $null -Description 'compiler artifact'
