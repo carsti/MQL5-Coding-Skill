@@ -25,6 +25,8 @@ namespace Mql5Coding
         private const uint ShareRead = 0x00000001;
         private const uint ShareReadWrite = 0x00000003;
         private const uint ShareReadWriteDelete = 0x00000007;
+        private const int ErrorFileNotFound = 2;
+        private const int ErrorPathNotFound = 3;
         private const uint OpenExisting = 3;
         private const uint FileAttributeDirectory = 0x00000010;
         private const uint FileAttributeReparsePoint = 0x00000400;
@@ -259,6 +261,13 @@ namespace Mql5Coding
 
             public string FinalPath { get; private set; }
 
+            public string GetCurrentIdentity()
+            {
+                if (handle == null || handle.IsInvalid || handle.IsClosed)
+                    throw new InvalidOperationException("The file identity lease is unavailable.");
+                return CompilerProcessJob.ReadFileIdentity(handle);
+            }
+
             public void Dispose()
             {
                 if (handle != null)
@@ -361,26 +370,33 @@ namespace Mql5Coding
             }
         }
 
-        public static FileIdentityLease OpenSourceFileIdentityLease(string path)
+        private static FileIdentityLease TryOpenNonReparseFileIdentityLease(
+            string path,
+            uint desiredAccess,
+            uint shareMode,
+            string description)
         {
             if (String.IsNullOrWhiteSpace(path))
-                throw new ArgumentException("A source file path is required.", "path");
+                throw new ArgumentException("A file path is required.", "path");
 
             SafeFileHandle handle = OpenPathHandle(
                 path,
-                GenericRead,
-                ShareRead,
+                desiredAccess,
+                shareMode,
                 IntPtr.Zero,
                 OpenExisting,
                 FileFlagOpenReparsePoint,
                 IntPtr.Zero);
             if (handle == null || handle.IsInvalid)
             {
+                int error = Marshal.GetLastWin32Error();
                 if (handle != null)
                     handle.Dispose();
+                if (error == ErrorFileNotFound || error == ErrorPathNotFound)
+                    return null;
                 throw new Win32Exception(
-                    Marshal.GetLastWin32Error(),
-                    "Opening the source-file identity lease failed.");
+                    error,
+                    "Opening the " + description + " identity lease failed.");
             }
 
             try
@@ -389,13 +405,13 @@ namespace Mql5Coding
                 if (!GetFileInformationByHandle(handle, out information))
                     throw new Win32Exception(
                         Marshal.GetLastWin32Error(),
-                        "Reading source-file attributes failed.");
+                        "Reading " + description + " attributes failed.");
                 if ((information.FileAttributes & FileAttributeDirectory) != 0)
                     throw new InvalidOperationException(
-                        "The compiler source lease resolved to a directory.");
+                        "The " + description + " lease resolved to a directory.");
                 if ((information.FileAttributes & FileAttributeReparsePoint) != 0)
                     throw new InvalidOperationException(
-                        "Source-file reparse points are not allowed.");
+                        description + " reparse points are not allowed.");
 
                 FileIdentityLease lease = new FileIdentityLease(
                     handle,
@@ -409,6 +425,40 @@ namespace Mql5Coding
                 if (handle != null)
                     handle.Dispose();
             }
+        }
+
+        public static FileIdentityLease OpenSourceFileIdentityLease(string path)
+        {
+            FileIdentityLease lease = TryOpenNonReparseFileIdentityLease(
+                path,
+                GenericRead,
+                ShareRead,
+                "compiler source");
+            if (lease == null)
+                throw new FileNotFoundException(
+                    "The compiler source file does not exist.",
+                    path);
+            return lease;
+        }
+
+        public static FileIdentityLease TryOpenMovableOutputFileIdentityLease(
+            string path)
+        {
+            return TryOpenNonReparseFileIdentityLease(
+                path,
+                0,
+                ShareReadWriteDelete,
+                "compiler output");
+        }
+
+        public static FileIdentityLease TryOpenPinnedOutputFileIdentityLease(
+            string path)
+        {
+            return TryOpenNonReparseFileIdentityLease(
+                path,
+                0,
+                ShareReadWrite,
+                "compiler output");
         }
 
         public static DirectoryIdentityLease OpenDirectoryIdentityLease(string path)

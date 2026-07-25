@@ -50,7 +50,14 @@ $resolvedMetaEditor = $null
 $logPath = $null
 $logSnapshot = $null
 $artifactSnapshot = $null
+$artifactPrepared = $false
+$artifactAccepted = $false
+$artifactOutputLease = $null
+$artifactBackupLease = $null
+$artifactBackupPath = $null
+$artifactBackupIdentity = $null
 $logPrepared = $false
+$logOutputLease = $null
 $pathMutex = $null
 $pathMutexHeld = $false
 $identityMutex = $null
@@ -69,12 +76,10 @@ function Resolve-ExistingFile {
         [string]$Description
     )
 
-    $item = Get-Item -LiteralPath $LiteralPath -ErrorAction Stop
-    if ($item.PSIsContainer) {
-        throw "$Description must be a file: $LiteralPath"
+    if ([string]::IsNullOrWhiteSpace($LiteralPath)) {
+        throw "$Description is required."
     }
-
-    return $item.FullName
+    return [System.IO.Path]::GetFullPath($LiteralPath)
 }
 
 function Get-MetaEditorFromCandidate {
@@ -257,23 +262,109 @@ function Get-SharedFileSha256 {
 }
 
 function Get-ArtifactState {
-    param([Parameter(Mandatory = $true)][string]$LiteralPath)
+    param(
+        [Parameter(Mandatory = $true)][string]$LiteralPath,
+        [Parameter(Mandatory = $true)]$Lease
+    )
 
-    if (-not (Test-Path -LiteralPath $LiteralPath -PathType Leaf)) {
-        return [pscustomobject]@{
-            Existed          = $false
-            LastWriteTimeUtc = [datetime]::MinValue
-            Length           = [long]0
-            Sha256           = $null
-        }
+    $expectedIdentity = [string]$Lease.Identity
+    if ([string]$Lease.GetCurrentIdentity() -cne $expectedIdentity) {
+        throw "Artifact identity lease changed before inspection: $LiteralPath"
     }
-
-    $item = Get-Item -LiteralPath $LiteralPath
-    return [pscustomobject]@{
+    $item = Get-Item -LiteralPath $LiteralPath -ErrorAction Stop
+    $state = [pscustomobject]@{
         Existed          = $true
         LastWriteTimeUtc = $item.LastWriteTimeUtc
         Length           = [long]$item.Length
         Sha256           = Get-SharedFileSha256 -LiteralPath $LiteralPath
+    }
+    if ([string]$Lease.GetCurrentIdentity() -cne $expectedIdentity) {
+        throw "Artifact identity lease changed during inspection: $LiteralPath"
+    }
+    return $state
+}
+
+function Move-OriginalArtifactAside {
+    param([Parameter(Mandatory = $true)][string]$LiteralPath)
+
+    $directory = [System.IO.Path]::GetDirectoryName($LiteralPath)
+    $maximumLeafLength = [System.IO.Path]::GetFileName($LiteralPath).Length
+    $backupLeafLength = [Math]::Min(32, $maximumLeafLength)
+    $lastError = $null
+    for ($attempt = 0; $attempt -lt 100; $attempt++) {
+        $candidateLeaf = [guid]::NewGuid().ToString('N').Substring(0, $backupLeafLength)
+        $candidate = Join-Path $directory $candidateLeaf
+        try {
+            [System.IO.File]::Move($LiteralPath, $candidate)
+            return $candidate
+        }
+        catch [System.IO.IOException] {
+            $lastError = $_.Exception
+        }
+    }
+    throw "Could not move the original compiler artifact to a unique adjacent backup path: $($lastError.Message)"
+}
+
+function Remove-CompilerArtifactSafely {
+    param(
+        [Parameter(Mandatory = $true)][string]$LiteralPath,
+        [AllowNull()][string]$ExpectedIdentity
+    )
+
+    $lease = [Mql5Coding.CompilerProcessJob]::TryOpenMovableOutputFileIdentityLease(
+        $LiteralPath
+    )
+    if ($null -eq $lease) {
+        return
+    }
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedIdentity) -and
+            [string]$lease.Identity -cne $ExpectedIdentity) {
+            throw "Refusing to remove a compiler artifact whose identity changed: $LiteralPath"
+        }
+        [System.IO.File]::Delete($LiteralPath)
+    }
+    finally {
+        $lease.Dispose()
+    }
+}
+
+function Restore-OriginalArtifact {
+    param(
+        [Parameter(Mandatory = $true)][string]$LiteralPath,
+        [Parameter(Mandatory = $true)][string]$BackupPath,
+        [Parameter(Mandatory = $true)][string]$BackupIdentity
+    )
+
+    $backupLease = [Mql5Coding.CompilerProcessJob]::TryOpenMovableOutputFileIdentityLease(
+        $BackupPath
+    )
+    if ($null -eq $backupLease) {
+        throw "The preserved compiler artifact backup is missing: $BackupPath"
+    }
+    try {
+        if ([string]$backupLease.Identity -cne $BackupIdentity) {
+            throw "The preserved compiler artifact backup identity changed: $BackupPath"
+        }
+        [System.IO.File]::Move($BackupPath, $LiteralPath)
+    }
+    finally {
+        $backupLease.Dispose()
+    }
+
+    $restoredLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(
+        $LiteralPath
+    )
+    if ($null -eq $restoredLease) {
+        throw "The original compiler artifact was not restored: $LiteralPath"
+    }
+    try {
+        if ([string]$restoredLease.Identity -cne $BackupIdentity) {
+            throw "The restored compiler artifact identity does not match its backup: $LiteralPath"
+        }
+    }
+    finally {
+        $restoredLease.Dispose()
     }
 }
 
@@ -324,16 +415,20 @@ function Move-OriginalLogAside {
     $directory = [System.IO.Path]::GetDirectoryName($LiteralPath)
     $maximumLeafLength = [System.IO.Path]::GetFileName($LiteralPath).Length
     $backupLeafLength = [Math]::Min(32, $maximumLeafLength)
+    $lastError = $null
     for ($attempt = 0; $attempt -lt 100; $attempt++) {
         $candidateLeaf = [guid]::NewGuid().ToString('N').Substring(0, $backupLeafLength)
         $candidate = Join-Path $directory $candidateLeaf
-        if (-not (Test-Path -LiteralPath $candidate)) {
+        try {
             [System.IO.File]::Move($LiteralPath, $candidate)
             return $candidate
         }
+        catch [System.IO.IOException] {
+            $lastError = $_.Exception
+        }
     }
 
-    throw "Could not allocate a unique adjacent backup path for: $LiteralPath"
+    throw "Could not allocate a unique adjacent backup path for '$LiteralPath': $($lastError.Message)"
 }
 
 function Restore-OriginalLog {
@@ -344,23 +439,51 @@ function Restore-OriginalLog {
 
     $lastError = $null
     for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        $currentLease = $null
+        $backupLease = $null
         try {
-            if (Test-Path -LiteralPath $LiteralPath -PathType Leaf) {
-                [System.IO.File]::SetAttributes($LiteralPath, [System.IO.FileAttributes]::Normal)
+            $currentLease = [Mql5Coding.CompilerProcessJob]::TryOpenMovableOutputFileIdentityLease(
+                $LiteralPath
+            )
+            if ($null -ne $currentLease) {
+                [System.IO.File]::SetAttributes(
+                    $LiteralPath,
+                    [System.IO.FileAttributes]::Normal
+                )
                 [System.IO.File]::Delete($LiteralPath)
+                $currentLease.Dispose()
+                $currentLease = $null
             }
 
             if ($Snapshot.Existed) {
-                if (-not (Test-Path -LiteralPath $Snapshot.BackupPath -PathType Leaf)) {
+                $backupLease = [Mql5Coding.CompilerProcessJob]::TryOpenMovableOutputFileIdentityLease(
+                    $Snapshot.BackupPath
+                )
+                if ($null -eq $backupLease) {
                     throw "The preserved log backup is missing: $($Snapshot.BackupPath)"
                 }
+                if ($null -ne $Snapshot.PSObject.Properties['Identity'] -and
+                    -not [string]::IsNullOrWhiteSpace([string]$Snapshot.Identity) -and
+                    [string]$backupLease.Identity -cne [string]$Snapshot.Identity) {
+                    throw "The preserved log backup identity changed: $($Snapshot.BackupPath)"
+                }
                 [System.IO.File]::Move($Snapshot.BackupPath, $LiteralPath)
+                $backupLease.Dispose()
+                $backupLease = $null
             }
             return
         }
         catch {
             $lastError = $_.Exception
             Start-Sleep -Milliseconds 100
+        }
+        finally {
+            if ($null -ne $currentLease) {
+                $currentLease.Dispose()
+            }
+            if ($null -ne $backupLease) {
+                $backupLease.Dispose()
+            }
         }
     }
 
@@ -444,36 +567,39 @@ try {
         $resolvedInclude = $includeItem.FullName
     }
     else {
-        $logicalDirectory = (Get-Item -LiteralPath $resolvedSource).Directory
-        while ($null -ne $logicalDirectory) {
-            if ($logicalDirectory.Name -eq 'MQL5') {
-                $resolvedInclude = $logicalDirectory.FullName
+        $logicalDirectoryPath = [System.IO.Path]::GetDirectoryName($resolvedSource)
+        while (-not [string]::IsNullOrWhiteSpace($logicalDirectoryPath)) {
+            $logicalLeaf = [System.IO.Path]::GetFileName(
+                $logicalDirectoryPath.TrimEnd('\', '/')
+            )
+            if ($logicalLeaf -eq 'MQL5') {
+                $resolvedInclude = [System.IO.Path]::GetFullPath($logicalDirectoryPath)
                 break
             }
-            $logicalDirectory = $logicalDirectory.Parent
+            $logicalParent = [System.IO.Path]::GetDirectoryName(
+                $logicalDirectoryPath.TrimEnd('\', '/')
+            )
+            if ([string]::IsNullOrWhiteSpace($logicalParent) -or
+                $logicalParent.Equals(
+                    $logicalDirectoryPath,
+                    [StringComparison]::OrdinalIgnoreCase
+                )) {
+                break
+            }
+            $logicalDirectoryPath = $logicalParent
         }
     }
 
-    $initialSourceIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity(
-        $resolvedSource
-    )
     $sourceLeaf = [System.IO.Path]::GetFileName($resolvedSource)
     $sourceParentPath = [System.IO.Path]::GetDirectoryName($resolvedSource)
     $sourceParentLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
         $sourceParentPath
     )
     $canonicalSource = Join-Path $sourceParentLease.FinalPath $sourceLeaf
-    if (-not (Test-Path -LiteralPath $canonicalSource -PathType Leaf) -or
-        [Mql5Coding.CompilerProcessJob]::GetFileIdentity($canonicalSource) -cne
-            $initialSourceIdentity) {
-        throw 'Source path changed while its physical directory was being pinned.'
-    }
     $sourceReadLease = [Mql5Coding.CompilerProcessJob]::OpenSourceFileIdentityLease(
         $canonicalSource
     )
-    if ($sourceReadLease.Identity -cne $initialSourceIdentity) {
-        throw 'Source file changed while its directory and file leases were being established.'
-    }
+    $initialSourceIdentity = [string]$sourceReadLease.Identity
     $resolvedSource = [System.IO.Path]::GetFullPath($sourceReadLease.FinalPath)
     $sourceParentPath = [System.IO.Path]::GetDirectoryName($resolvedSource)
     if (-not $sourceParentPath.Equals(
@@ -541,22 +667,84 @@ try {
         throw 'Source file identity changed while compilation locks were being acquired.'
     }
 
-    $artifactSnapshot = Get-ArtifactState -LiteralPath $artifactPath
+    $artifactProbeLease = $null
+    try {
+            $artifactProbeLease = [Mql5Coding.CompilerProcessJob]::TryOpenMovableOutputFileIdentityLease(
+                $artifactPath
+            )
+            if ($null -eq $artifactProbeLease) {
+                $artifactSnapshot = [pscustomobject]@{
+                    Existed = $false
+                    BackupPath = $null
+                    Identity = $null
+                }
+                $artifactPrepared = $true
+            }
+            else {
+                $artifactBackupIdentity = [string]$artifactProbeLease.Identity
+                $artifactBackupPath = Move-OriginalArtifactAside -LiteralPath $artifactPath
+                $artifactPrepared = $true
+                $artifactBackupLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(
+                    $artifactBackupPath
+                )
+                if ($null -eq $artifactBackupLease -or
+                    [string]$artifactBackupLease.Identity -cne $artifactBackupIdentity) {
+                    throw 'The original compiler artifact changed while it was moved to its backup path.'
+                }
+                $artifactSnapshot = Get-ArtifactState `
+                    -LiteralPath $artifactBackupPath `
+                    -Lease $artifactBackupLease
+                $artifactSnapshot | Add-Member -NotePropertyName BackupPath -NotePropertyValue $artifactBackupPath
+                $artifactSnapshot | Add-Member -NotePropertyName Identity -NotePropertyValue $artifactBackupIdentity
+            }
+    }
+    finally {
+        if ($null -ne $artifactProbeLease) {
+            $artifactProbeLease.Dispose()
+        }
+    }
 
-    if (Test-Path -LiteralPath $logPath -PathType Leaf) {
-        $logSnapshot = [pscustomobject]@{
-            Existed    = $true
-            BackupPath = $null
+    $logProbeLease = $null
+    try {
+        $logProbeLease = [Mql5Coding.CompilerProcessJob]::TryOpenMovableOutputFileIdentityLease(
+            $logPath
+        )
+        if ($null -ne $logProbeLease) {
+            $logIdentity = [string]$logProbeLease.Identity
+            $logSnapshot = [pscustomobject]@{
+                Existed    = $true
+                BackupPath = Move-OriginalLogAside -LiteralPath $logPath
+                Identity   = $logIdentity
+            }
+            $logBackupProbe = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(
+                $logSnapshot.BackupPath
+            )
+            if ($null -eq $logBackupProbe) {
+                throw 'The original compilation log disappeared while it was moved aside.'
+            }
+            try {
+                if ([string]$logBackupProbe.Identity -cne $logIdentity) {
+                    throw 'The original compilation log identity changed while it was moved aside.'
+                }
+            }
+            finally {
+                $logBackupProbe.Dispose()
+            }
         }
-        $logSnapshot.BackupPath = Move-OriginalLogAside -LiteralPath $logPath
+        else {
+            $logSnapshot = [pscustomobject]@{
+                Existed    = $false
+                BackupPath = $null
+                Identity   = $null
+            }
+        }
+        $logPrepared = $true
     }
-    else {
-        $logSnapshot = [pscustomobject]@{
-            Existed    = $false
-            BackupPath = $null
+    finally {
+        if ($null -ne $logProbeLease) {
+            $logProbeLease.Dispose()
         }
     }
-    $logPrepared = $true
 
     $argumentTokens = New-Object 'System.Collections.Generic.List[string]'
     $argumentTokens.Add("/compile:$resolvedSource")
@@ -599,7 +787,12 @@ try {
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $summaryMatch = $null
     while ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
-        if (Test-Path -LiteralPath $logPath -PathType Leaf) {
+        if ($null -eq $logOutputLease) {
+            $logOutputLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(
+                $logPath
+            )
+        }
+        if ($null -ne $logOutputLease) {
             try {
                 $candidateText = Read-SharedText -LiteralPath $logPath
                 $matches = [regex]::Matches(
@@ -624,9 +817,16 @@ try {
     }
     $stopwatch.Stop()
 
-    if ($null -eq $summaryMatch -and $compileJobEmpty -and
-        (Test-Path -LiteralPath $logPath -PathType Leaf)) {
+    if ($null -eq $summaryMatch -and $compileJobEmpty) {
+        if ($null -eq $logOutputLease) {
+            $logOutputLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(
+                $logPath
+            )
+        }
         try {
+            if ($null -eq $logOutputLease) {
+                throw 'MetaEditor exited without creating its compilation log.'
+            }
             $logText = Read-SharedText -LiteralPath $logPath
         }
         catch {
@@ -691,7 +891,12 @@ try {
                 $cleanupFailed = $true
                 $errorMessage = "MetaEditor timed out and its process could not be terminated: $($_.Exception.Message)"
             }
-            if (Test-Path -LiteralPath $logPath -PathType Leaf) {
+            if ($null -eq $logOutputLease) {
+                $logOutputLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(
+                    $logPath
+                )
+            }
+            if ($null -ne $logOutputLease) {
                 try { $logText = Read-SharedText -LiteralPath $logPath } catch { }
             }
             if ($cleanupFailed) {
@@ -722,17 +927,18 @@ try {
             if (-not $SyntaxOnly) {
                 $artifactDeadline = [datetime]::UtcNow.AddSeconds(2)
                 do {
-                    if (Test-Path -LiteralPath $artifactPath -PathType Leaf) {
-                        $artifactState = Get-ArtifactState -LiteralPath $artifactPath
+                    if ($null -eq $artifactOutputLease) {
+                        $artifactOutputLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(
+                            $artifactPath
+                        )
+                    }
+                    if ($null -ne $artifactOutputLease) {
+                        $artifactState = Get-ArtifactState `
+                            -LiteralPath $artifactPath `
+                            -Lease $artifactOutputLease
                         $artifactRefreshed = (
                             $artifactState.Existed -and
-                            $artifactState.Length -gt 0 -and
-                            (
-                                -not $artifactSnapshot.Existed -or
-                                $artifactState.LastWriteTimeUtc -ne $artifactSnapshot.LastWriteTimeUtc -or
-                                $artifactState.Length -ne $artifactSnapshot.Length -or
-                                $artifactState.Sha256 -cne $artifactSnapshot.Sha256
-                            )
+                            $artifactState.Length -gt 0
                         )
                         if ($artifactRefreshed) {
                             break
@@ -748,6 +954,7 @@ try {
                 $errorMessage = "MetaEditor reported zero errors but did not create or refresh the expected artifact: $artifactPath"
             }
             else {
+                $artifactAccepted = -not $SyntaxOnly
                 $exitCode = $ExitSuccess
                 $status = 'success'
             }
@@ -776,6 +983,20 @@ finally {
         $compileLaunch = $null
     }
 
+    if ($null -ne $logOutputLease) {
+        try {
+            $logOutputLease.Dispose()
+        }
+        catch {
+            $exitCode = $ExitToolError
+            $status = 'tool_error'
+            if ([string]::IsNullOrWhiteSpace($errorMessage)) {
+                $errorMessage = "Could not release the compilation-log identity lease: $($_.Exception.Message)"
+            }
+        }
+        $logOutputLease = $null
+    }
+
     if ($logPrepared -and $null -ne $logPath -and $null -ne $logSnapshot) {
         try {
             Complete-CompilationLog `
@@ -793,6 +1014,75 @@ finally {
             else {
                 $errorMessage = "$errorMessage Log handling error: $logCompletionError"
             }
+        }
+    }
+
+    if ($artifactPrepared) {
+        $artifactOutputIdentity = if ($null -eq $artifactOutputLease) {
+            $null
+        }
+        else {
+            [string]$artifactOutputLease.Identity
+        }
+        if ($null -ne $artifactOutputLease) {
+            $artifactOutputLease.Dispose()
+            $artifactOutputLease = $null
+        }
+        if ($null -ne $artifactBackupLease) {
+            $artifactBackupLease.Dispose()
+            $artifactBackupLease = $null
+        }
+
+        try {
+            if (-not $compileJobEmpty) {
+                $recovery = if ([string]::IsNullOrWhiteSpace($artifactBackupPath)) {
+                    ''
+                }
+                else {
+                    " The preserved original remains at: $artifactBackupPath"
+                }
+                throw "MetaEditor process-tree termination was not verified; compiler artifact paths were not finalized.$recovery"
+            }
+
+            if ($artifactAccepted) {
+                if (-not [string]::IsNullOrWhiteSpace($artifactBackupPath)) {
+                    Remove-CompilerArtifactSafely `
+                        -LiteralPath $artifactBackupPath `
+                        -ExpectedIdentity $artifactBackupIdentity
+                }
+            }
+            else {
+                Remove-CompilerArtifactSafely `
+                    -LiteralPath $artifactPath `
+                    -ExpectedIdentity $artifactOutputIdentity
+                if (-not [string]::IsNullOrWhiteSpace($artifactBackupPath)) {
+                    Restore-OriginalArtifact `
+                        -LiteralPath $artifactPath `
+                        -BackupPath $artifactBackupPath `
+                        -BackupIdentity $artifactBackupIdentity
+                }
+            }
+        }
+        catch {
+            $exitCode = $ExitToolError
+            $status = 'tool_error'
+            $artifactCompletionError = $_.Exception.Message
+            if ([string]::IsNullOrWhiteSpace($errorMessage)) {
+                $errorMessage = $artifactCompletionError
+            }
+            else {
+                $errorMessage = "$errorMessage Artifact handling error: $artifactCompletionError"
+            }
+        }
+    }
+    else {
+        if ($null -ne $artifactOutputLease) {
+            $artifactOutputLease.Dispose()
+            $artifactOutputLease = $null
+        }
+        if ($null -ne $artifactBackupLease) {
+            $artifactBackupLease.Dispose()
+            $artifactBackupLease = $null
         }
     }
 

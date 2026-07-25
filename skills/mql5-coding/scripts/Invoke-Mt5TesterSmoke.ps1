@@ -66,6 +66,10 @@ namespace Mql5Coding
         private const uint ShareReadWrite = 0x00000003;
         private const uint ShareReadWriteDelete = 0x00000007;
         private const uint DriveFixed = 3;
+        private const int ErrorFileNotFound = 2;
+        private const int ErrorPathNotFound = 3;
+        private const int ErrorFileExists = 80;
+        private const int ErrorAlreadyExists = 183;
         private const int ErrorMoreData = 234;
         private const uint OpenExisting = 3;
         private const uint FileAttributeDirectory = 0x00000010;
@@ -211,6 +215,16 @@ namespace Mql5Coding
             uint creationDisposition,
             uint flagsAndAttributes,
             IntPtr templateFile);
+
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "CreateDirectoryW")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CreateDirectoryPath(
+            string path,
+            IntPtr securityAttributes);
 
         [DllImport(
             "kernel32.dll",
@@ -783,6 +797,36 @@ namespace Mql5Coding
             return OpenNonReparsePathEntry(path, false, ShareReadWrite);
         }
 
+        public static PathEntryLease TryOpenFileLeafLease(string path)
+        {
+            try
+            {
+                return OpenNonReparsePathEntry(path, false, ShareReadWrite);
+            }
+            catch (Win32Exception exception)
+            {
+                if (exception.NativeErrorCode == ErrorFileNotFound ||
+                    exception.NativeErrorCode == ErrorPathNotFound)
+                    return null;
+                throw;
+            }
+        }
+
+        public static bool TryCreateDirectory(string path)
+        {
+            if (String.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("A path is required.", "path");
+            if (CreateDirectoryPath(path, IntPtr.Zero))
+                return true;
+
+            int error = Marshal.GetLastWin32Error();
+            if (error == ErrorFileExists || error == ErrorAlreadyExists)
+                return false;
+            throw new Win32Exception(
+                error,
+                "Creating a path-integrity directory failed: " + path);
+        }
+
         public static string GetNonReparseGuardFileIdentity(string path)
         {
             using (PathEntryLease lease = OpenNonReparsePathEntry(
@@ -921,19 +965,20 @@ function Test-IsAbsoluteLocalDrivePath {
 function Resolve-ExistingFile {
     param(
         [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$Name
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
     )
     if (-not (Test-IsAbsoluteLocalDrivePath -Path $Path)) {
         throw "$Name must be an absolute path."
     }
     $full = [IO.Path]::GetFullPath($Path)
     Assert-StableFixedLocalVolumePath -Path $full
-    $resolved = (Resolve-Path -LiteralPath $full -ErrorAction Stop).Path
-    Assert-StableFixedLocalVolumePath -Path $resolved
-    if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
-        throw "$Name is not a file: $resolved"
-    }
-    return [IO.Path]::GetFullPath($resolved)
+    $null = Open-NonReparseFileLeaf `
+        -Path $full `
+        -Tracker $Tracker `
+        -LeasesByPath $LeasesByPath
+    return $full
 }
 
 function Assert-StableFixedLocalVolumePath {
@@ -976,9 +1021,6 @@ function Open-NonReparseDirectoryChain {
         throw "BLOCKED: UNC, device, and drive-relative paths are not supported for security-sensitive tester paths: $full"
     }
     Assert-StableFixedLocalVolumePath -Path $full
-    if (-not (Test-Path -LiteralPath $full -PathType Container)) {
-        throw "BLOCKED: Security-sensitive directory is missing: $full"
-    }
 
     $root = [IO.Path]::GetPathRoot($full)
     $candidates = New-Object 'System.Collections.Generic.List[string]'
@@ -1046,9 +1088,6 @@ function Open-NonReparseFileLeaf {
     Assert-StableFixedLocalVolumePath -Path $full
     $parent = [IO.Path]::GetDirectoryName($full)
     $null = Open-NonReparseDirectoryChain -Path $parent -Tracker $Tracker -LeasesByPath $LeasesByPath
-    if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
-        throw "BLOCKED: Security-sensitive file is missing: $full"
-    }
 
     $key = $full.ToUpperInvariant()
     if ($LeasesByPath.ContainsKey($key)) {
@@ -1083,6 +1122,77 @@ function Open-NonReparseFileLeaf {
     $LeasesByPath[$key] = $lease
     $Tracker.Add($lease)
     return $lease
+}
+
+function Try-OpenNonReparseFileLeaf {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
+    )
+
+    if (-not (Test-IsAbsoluteLocalDrivePath -Path $Path)) {
+        throw "BLOCKED: Security-sensitive files must use absolute local-drive paths: $Path"
+    }
+    $full = [IO.Path]::GetFullPath($Path)
+    Assert-StableFixedLocalVolumePath -Path $full
+    $parent = [IO.Path]::GetDirectoryName($full)
+    $null = Open-NonReparseDirectoryChain -Path $parent -Tracker $Tracker -LeasesByPath $LeasesByPath
+
+    $key = $full.ToUpperInvariant()
+    if ($LeasesByPath.ContainsKey($key)) {
+        $existingLease = $LeasesByPath[$key]
+        Assert-StableFixedLocalVolumePath -Path $full
+        [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
+            $full,
+            $existingLease
+        )
+        return $existingLease
+    }
+
+    $lease = $null
+    try {
+        $lease = [Mql5Coding.JobProcessLaunch]::TryOpenFileLeafLease($full)
+        if ($null -eq $lease) {
+            return $null
+        }
+        Assert-StableFixedLocalVolumePath -Path $full
+        [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
+            $full,
+            $lease
+        )
+    }
+    catch {
+        if ($null -ne $lease) {
+            $lease.Dispose()
+        }
+        throw "BLOCKED: Unsafe or unleaseable file path '$full': $($_.Exception.Message)"
+    }
+    $LeasesByPath[$key] = $lease
+    $Tracker.Add($lease)
+    return $lease
+}
+
+function Open-OrCreateNonReparseDirectory {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
+    )
+
+    if (-not (Test-IsAbsoluteLocalDrivePath -Path $Path)) {
+        throw "BLOCKED: Security-sensitive directories must use absolute local-drive paths: $Path"
+    }
+    $full = [IO.Path]::GetFullPath($Path)
+    Assert-StableFixedLocalVolumePath -Path $full
+    $parent = [IO.Path]::GetDirectoryName($full)
+    $null = Open-NonReparseDirectoryChain -Path $parent -Tracker $Tracker -LeasesByPath $LeasesByPath
+    $created = [Mql5Coding.JobProcessLaunch]::TryCreateDirectory($full)
+    $lease = Open-NonReparseDirectoryChain -Path $full -Tracker $Tracker -LeasesByPath $LeasesByPath
+    return [pscustomobject]@{
+        created = [bool]$created
+        lease = $lease
+    }
 }
 
 function Open-DirectoryMutationGuard {
@@ -1187,28 +1297,70 @@ function ConvertFrom-TerminalOriginText {
 }
 
 function Read-TerminalOrigin {
-    param([Parameter(Mandatory)][string]$Path)
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Lease
+    )
 
-    $originInfo = Get-Item -LiteralPath $Path -ErrorAction Stop
-    if ([long]$originInfo.Length -le 0 -or [long]$originInfo.Length -gt 32768) {
-        throw "Terminal origin file must contain 1-32768 bytes: $Path"
+    $full = [IO.Path]::GetFullPath($Path)
+    if ($null -eq $Lease -or [bool]$Lease.IsDirectory -or
+        -not ([IO.Path]::GetFullPath([string]$Lease.Path)).Equals(
+            $full,
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+        throw "A matching no-follow file lease is required before reading terminal origin: $full"
     }
-    return ConvertFrom-TerminalOriginText `
-        -Text ([IO.File]::ReadAllText($Path)) `
-        -SourcePath $Path
+
+    $stream = [IO.File]::Open(
+        $full,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::Read,
+        [IO.FileShare]::Read
+    )
+    try {
+        $streamIdentity = [Mql5Coding.JobProcessLaunch]::GetFileIdentity(
+            $stream.SafeFileHandle
+        )
+        if ([string]$streamIdentity -cne [string]$Lease.Identity) {
+            throw "Terminal origin path changed while its file lease was held: $full"
+        }
+        if ([long]$stream.Length -le 0 -or [long]$stream.Length -gt 32768) {
+            throw "Terminal origin file must contain 1-32768 bytes: $full"
+        }
+        $strictUtf8 = New-Object Text.UTF8Encoding($false, $true)
+        $reader = New-Object IO.StreamReader(
+            $stream,
+            $strictUtf8,
+            $true,
+            1024,
+            $true
+        )
+        try {
+            $text = $reader.ReadToEnd()
+        }
+        finally {
+            $reader.Dispose()
+        }
+        return ConvertFrom-TerminalOriginText -Text $text -SourcePath $full
+    }
+    finally {
+        $stream.Dispose()
+    }
 }
 
 function Resolve-TerminalBinding {
     param(
         [string]$RequestedTerminalPath,
-        [string]$RequestedDataPath
+        [string]$RequestedDataPath,
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
     )
 
     $terminal = $null
     $data = $null
 
     if (-not [string]::IsNullOrWhiteSpace($RequestedTerminalPath)) {
-        $terminal = Resolve-ExistingFile -Path $RequestedTerminalPath -Name 'TerminalPath'
+        $terminal = Resolve-ExistingFile -Path $RequestedTerminalPath -Name 'TerminalPath' -Tracker $Tracker -LeasesByPath $LeasesByPath
         if ([IO.Path]::GetFileName($terminal) -ine 'terminal64.exe') {
             throw "TerminalPath must identify terminal64.exe: $terminal"
         }
@@ -1218,58 +1370,54 @@ function Resolve-TerminalBinding {
         if (-not (Test-IsAbsoluteLocalDrivePath -Path $RequestedDataPath)) {
             throw 'TerminalDataPath must be an absolute path.'
         }
-        $requestedDataFull = [IO.Path]::GetFullPath($RequestedDataPath)
-        Assert-StableFixedLocalVolumePath -Path $requestedDataFull
-        $data = (Resolve-Path -LiteralPath $requestedDataFull -ErrorAction Stop).Path
-        Assert-StableFixedLocalVolumePath -Path $data
-        foreach ($required in @('origin.txt', 'MQL5', 'Tester', 'logs')) {
-            if (-not (Test-Path -LiteralPath (Join-Path $data $required))) {
-                throw "TerminalDataPath lacks required entry '$required': $data"
-            }
-        }
-    }
-
-    if ($null -ne $data) {
-        $origin = Read-TerminalOrigin -Path (Join-Path $data 'origin.txt')
-        $originTerminal = Join-Path $origin 'terminal64.exe'
-        if ($null -eq $terminal) {
-            $terminal = Resolve-ExistingFile -Path $originTerminal -Name 'terminal64.exe from origin.txt'
-        }
-        elseif (-not ([IO.Path]::GetFullPath((Split-Path -Parent $terminal)).TrimEnd('\', '/')).Equals(
-                $origin.TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase)) {
-            throw "TerminalDataPath belongs to '$origin', not to '$terminal'."
-        }
+        $data = [IO.Path]::GetFullPath($RequestedDataPath)
+        $null = Open-NonReparseDirectoryChain -Path $data -Tracker $Tracker -LeasesByPath $LeasesByPath
     }
 
     $terminalDataRoot = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'MetaQuotes\Terminal'
     if ($null -eq $data) {
-        if (-not (Test-Path -LiteralPath $terminalDataRoot -PathType Container)) {
-            throw "MetaTrader terminal data root does not exist: $terminalDataRoot"
-        }
-
-        $matches = New-Object 'System.Collections.Generic.List[string]'
+        $null = Open-NonReparseDirectoryChain -Path $terminalDataRoot -Tracker $Tracker -LeasesByPath $LeasesByPath
+        $matches = New-Object 'System.Collections.Generic.List[object]'
         foreach ($directory in Get-ChildItem -LiteralPath $terminalDataRoot -Directory) {
-            $originPath = Join-Path $directory.FullName 'origin.txt'
-            if (-not (Test-Path -LiteralPath $originPath -PathType Leaf)) {
+            $candidateData = [IO.Path]::GetFullPath($directory.FullName)
+            $null = Open-NonReparseDirectoryChain -Path $candidateData -Tracker $Tracker -LeasesByPath $LeasesByPath
+            $originPath = Join-Path $candidateData 'origin.txt'
+            $originLease = Try-OpenNonReparseFileLeaf -Path $originPath -Tracker $Tracker -LeasesByPath $LeasesByPath
+            if ($null -eq $originLease) {
                 continue
             }
             try {
-                $origin = Read-TerminalOrigin -Path $originPath
+                $origin = Read-TerminalOrigin -Path $originPath -Lease $originLease
             }
             catch {
                 continue
             }
 
             if ($null -eq $terminal) {
-                $candidate = Join-Path $origin 'terminal64.exe'
-                if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-                    $matches.Add($directory.FullName)
+                $candidateTerminal = [IO.Path]::GetFullPath(
+                    (Join-Path $origin 'terminal64.exe')
+                )
+                $candidateTerminalLease = Try-OpenNonReparseFileLeaf -Path $candidateTerminal -Tracker $Tracker -LeasesByPath $LeasesByPath
+                if ($null -eq $candidateTerminalLease) {
+                    continue
                 }
+                $matches.Add([pscustomobject]@{
+                    data = $candidateData
+                    terminal = $candidateTerminal
+                })
             }
             else {
-                $terminalInstall = [IO.Path]::GetFullPath((Split-Path -Parent $terminal)).TrimEnd('\', '/')
-                if ($origin.TrimEnd('\', '/').Equals($terminalInstall, [StringComparison]::OrdinalIgnoreCase)) {
-                    $matches.Add($directory.FullName)
+                $terminalInstall = [IO.Path]::GetFullPath(
+                    (Split-Path -Parent $terminal)
+                ).TrimEnd('\', '/')
+                if ($origin.TrimEnd('\', '/').Equals(
+                        $terminalInstall,
+                        [StringComparison]::OrdinalIgnoreCase
+                    )) {
+                    $matches.Add([pscustomobject]@{
+                        data = $candidateData
+                        terminal = $terminal
+                    })
                 }
             }
         }
@@ -1278,13 +1426,42 @@ function Resolve-TerminalBinding {
             throw 'No terminal data directory with a matching origin.txt was found.'
         }
         if ($matches.Count -gt 1) {
-            throw "Terminal data discovery is ambiguous: $($matches -join '; ')"
+            $candidatePaths = @($matches | ForEach-Object { $_.data })
+            throw "Terminal data discovery is ambiguous: $($candidatePaths -join '; ')"
         }
-        $data = [IO.Path]::GetFullPath($matches[0])
+        $data = [IO.Path]::GetFullPath([string]$matches[0].data)
         if ($null -eq $terminal) {
-            $origin = Read-TerminalOrigin -Path (Join-Path $data 'origin.txt')
-            $terminal = Resolve-ExistingFile -Path (Join-Path $origin 'terminal64.exe') -Name 'discovered terminal64.exe'
+            $terminal = [IO.Path]::GetFullPath([string]$matches[0].terminal)
         }
+    }
+
+    $dataLease = Open-NonReparseDirectoryChain -Path $data -Tracker $Tracker -LeasesByPath $LeasesByPath
+    $originPath = Join-Path $data 'origin.txt'
+    $originFileLease = Open-NonReparseFileLeaf -Path $originPath -Tracker $Tracker -LeasesByPath $LeasesByPath
+    $origin = Read-TerminalOrigin -Path $originPath -Lease $originFileLease
+    if ($null -eq $terminal) {
+        $terminal = Resolve-ExistingFile -Path (Join-Path $origin 'terminal64.exe') -Name 'terminal64.exe from origin.txt' -Tracker $Tracker -LeasesByPath $LeasesByPath
+    }
+    else {
+        $null = Open-NonReparseFileLeaf -Path $terminal -Tracker $Tracker -LeasesByPath $LeasesByPath
+    }
+
+    $terminalInstall = [IO.Path]::GetFullPath(
+        (Split-Path -Parent $terminal)
+    ).TrimEnd('\', '/')
+    if (-not $origin.TrimEnd('\', '/').Equals(
+            $terminalInstall,
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+        throw "TerminalDataPath belongs to '$origin', not to '$terminal'."
+    }
+
+    foreach ($requiredDirectory in @(
+            (Join-Path $data 'MQL5'),
+            (Join-Path $data 'Tester'),
+            (Join-Path $data 'logs')
+        )) {
+        $null = Open-NonReparseDirectoryChain -Path $requiredDirectory -Tracker $Tracker -LeasesByPath $LeasesByPath
     }
 
     return [pscustomobject][ordered]@{
@@ -1296,21 +1473,16 @@ function Resolve-TerminalBinding {
 function Get-FileIdentityFromPath {
     param([Parameter(Mandatory)][string]$Path)
 
-    $share = [IO.FileShare](
-        [int][IO.FileShare]::ReadWrite -bor
-        [int][IO.FileShare]::Delete
-    )
-    $stream = [IO.File]::Open(
-        $Path,
-        [IO.FileMode]::Open,
-        [IO.FileAccess]::Read,
-        $share
-    )
+    $temporaryLeases = New-Object 'System.Collections.Generic.List[object]'
+    $temporaryLeasesByPath = @{}
     try {
-        return [Mql5Coding.JobProcessLaunch]::GetFileIdentity($stream.SafeFileHandle)
+        $lease = Open-NonReparseFileLeaf -Path $Path -Tracker $temporaryLeases -LeasesByPath $temporaryLeasesByPath
+        return [string]$lease.Identity
     }
     finally {
-        $stream.Dispose()
+        for ($index = $temporaryLeases.Count - 1; $index -ge 0; $index--) {
+            $temporaryLeases[$index].Dispose()
+        }
     }
 }
 
@@ -1853,21 +2025,24 @@ function Copy-NewHashBoundFile {
         [Parameter(Mandatory)][string]$Source,
         [Parameter(Mandatory)][string]$Destination,
         [Parameter(Mandatory)][string]$Kind,
-        [Parameter(Mandatory)]$Tracker
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)]$PathEntryLeases,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
     )
-    if (Test-Path -LiteralPath $Destination) {
-        throw "Refusing to overwrite an existing $Kind staging path: $Destination"
-    }
+
+    $sourceLease = Open-NonReparseFileLeaf -Path $Source -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
     $parent = Split-Path -Parent $Destination
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
-        [IO.Directory]::CreateDirectory($parent) | Out-Null
-    }
+    $null = Open-NonReparseDirectoryChain -Path $parent -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
     $input = $null
     $output = $null
     $record = $null
     try {
         $input = [IO.File]::Open($Source, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
-        $output = [IO.File]::Open($Destination, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        if ([Mql5Coding.JobProcessLaunch]::GetFileIdentity($input.SafeFileHandle) -cne
+            [string]$sourceLease.Identity) {
+            throw "$Kind source path changed before staging: $Source"
+        }
+        $output = [IO.File]::Open($Destination, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
         $record = [pscustomobject][ordered]@{
             kind = $Kind
             source_path = $Source
@@ -1879,6 +2054,13 @@ function Copy-NewHashBoundFile {
         $Tracker.Add($record)
         $input.CopyTo($output)
         $output.Flush($true)
+
+        $destinationLease = Open-NonReparseFileLeaf -Path $Destination -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
+        if ([Mql5Coding.JobProcessLaunch]::GetFileIdentity($output.SafeFileHandle) -cne
+            [string]$destinationLease.Identity) {
+            throw "$Kind staging path changed while its lease was established: $Destination"
+        }
+
         $output.Dispose()
         $output = $null
         $input.Dispose()
@@ -1985,27 +2167,44 @@ function Open-TerminalOriginReadLock {
 function Open-StagingReadLocks {
     param(
         [Parameter(Mandatory)]$Records,
-        [Parameter(Mandatory)]$Tracker
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)]$PathEntryLeases,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
     )
 
     foreach ($record in $Records) {
         if ($null -eq $record.PSObject.Properties['verified'] -or -not [bool]$record.verified) {
             throw "Cannot lock an unverified $($record.kind) staging copy: $($record.destination_path)"
         }
+        $path = [IO.Path]::GetFullPath([string]$record.destination_path)
+        $lease = Open-NonReparseFileLeaf -Path $path -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
         $stream = [IO.File]::Open(
-            [string]$record.destination_path,
+            $path,
             [IO.FileMode]::Open,
             [IO.FileAccess]::Read,
             [IO.FileShare]::Read
         )
-        $entry = [pscustomobject][ordered]@{
-            record = $record
-            stream = $stream
+        try {
+            if ([Mql5Coding.JobProcessLaunch]::GetFileIdentity($stream.SafeFileHandle) -cne
+                [string]$lease.Identity) {
+                throw "$($record.kind) path changed while its read lock was established: $path"
+            }
+            $entry = [pscustomobject][ordered]@{
+                record = $record
+                stream = $stream
+            }
+            $Tracker.Add($entry)
+            $stream = $null
+            $hash = Get-StreamSha256 -Stream $entry.stream
+            if ([long]$entry.stream.Length -ne [long]$record.byte_length -or
+                $hash -cne [string]$record.sha256) {
+                throw "$($record.kind) staging bytes changed before the read lock was established: $path"
+            }
         }
-        $Tracker.Add($entry)
-        $hash = Get-StreamSha256 -Stream $stream
-        if ([long]$stream.Length -ne [long]$record.byte_length -or $hash -cne [string]$record.sha256) {
-            throw "$($record.kind) staging bytes changed before the read lock was established: $($record.destination_path)"
+        finally {
+            if ($null -ne $stream) {
+                $stream.Dispose()
+            }
         }
     }
 }
@@ -2014,22 +2213,43 @@ function Open-VerifiedArtifactReadLock {
     param(
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)][string]$Kind,
-        [Parameter(Mandatory)]$Tracker
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)]$PathEntryLeases,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
     )
 
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        throw "Cannot lock a missing $Kind artifact: $Path"
+    $full = [IO.Path]::GetFullPath($Path)
+    $lease = Open-NonReparseFileLeaf -Path $full -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
+    $stream = [IO.File]::Open(
+        $full,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::Read,
+        [IO.FileShare]::Read
+    )
+    try {
+        if ([Mql5Coding.JobProcessLaunch]::GetFileIdentity($stream.SafeFileHandle) -cne
+            [string]$lease.Identity) {
+            throw "$Kind path changed while its read lock was established: $full"
+        }
+        $record = [pscustomobject][ordered]@{
+            kind = $Kind
+            destination_path = $full
+            byte_length = [long]$stream.Length
+            sha256 = Get-StreamSha256 -Stream $stream
+            verified = $true
+        }
+        $Tracker.Add([pscustomobject][ordered]@{
+            record = $record
+            stream = $stream
+        })
+        $stream = $null
+        return $record
     }
-    $info = Get-Item -LiteralPath $Path
-    $record = [pscustomobject][ordered]@{
-        kind = $Kind
-        destination_path = $Path
-        byte_length = [long]$info.Length
-        sha256 = Get-FileSha256 -Path $Path
-        verified = $true
+    finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
     }
-    Open-StagingReadLocks -Records @($record) -Tracker $Tracker
-    return $record
 }
 
 function Get-PinnedStagingIntegrityFailures {
@@ -2085,33 +2305,6 @@ function Get-StreamPrefixSha256 {
     }
 }
 
-function Get-StagingIntegrityFailures {
-    param([Parameter(Mandatory)]$Records)
-    $failures = New-Object 'System.Collections.Generic.List[string]'
-    foreach ($record in $Records) {
-        $path = [string]$record.destination_path
-        if ($null -eq $record.PSObject.Properties['verified'] -or -not [bool]$record.verified) {
-            $failures.Add("$($record.kind) staging copy was not fully verified: $path")
-            continue
-        }
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            $failures.Add("$($record.kind) staging file is missing: $path")
-            continue
-        }
-        try {
-            $info = Get-Item -LiteralPath $path
-            $hash = Get-FileSha256 -Path $path
-            if ([long]$info.Length -ne [long]$record.byte_length -or $hash -cne [string]$record.sha256) {
-                $failures.Add("$($record.kind) staging bytes changed: $path")
-            }
-        }
-        catch {
-            $failures.Add("Could not verify $($record.kind) staging bytes '$path': $($_.Exception.Message)")
-        }
-    }
-    return $failures.ToArray()
-}
-
 function Get-JournalSnapshot {
     param(
         [Parameter(Mandatory)][string]$RootPath,
@@ -2121,9 +2314,7 @@ function Get-JournalSnapshot {
         [hashtable]$Existing = @{}
     )
     $snapshot = @{}
-    if (-not (Test-Path -LiteralPath $RootPath -PathType Container)) {
-        return $snapshot
-    }
+    $null = Open-NonReparseDirectoryChain -Path $RootPath -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
     foreach ($file in Get-ChildItem -LiteralPath $RootPath -File -Filter '*.log') {
         $fullPath = [IO.Path]::GetFullPath($file.FullName)
         $key = $fullPath.ToLowerInvariant()
@@ -2840,8 +3031,7 @@ try {
         }
     }
     if (-not [string]::IsNullOrWhiteSpace($ExpectedLogMarkerFile)) {
-        $markerFile = Resolve-ExistingFile -Path $ExpectedLogMarkerFile -Name 'ExpectedLogMarkerFile'
-        $null = Open-NonReparseFileLeaf -Path $markerFile -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
+        $markerFile = Resolve-ExistingFile -Path $ExpectedLogMarkerFile -Name 'ExpectedLogMarkerFile' -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
         $markerFileStream = [IO.File]::Open(
             $markerFile,
             [IO.FileMode]::Open,
@@ -2920,8 +3110,7 @@ try {
         $result.inputs.expected_log_marker_aggregate_sha256 = Get-TextSha256 -Text $aggregateMaterial
     }
 
-    $expert = Resolve-ExistingFile -Path $ExpertPath -Name 'ExpertPath'
-    $null = Open-NonReparseFileLeaf -Path $expert -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
+    $expert = Resolve-ExistingFile -Path $ExpertPath -Name 'ExpertPath' -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
     if ([IO.Path]::GetExtension($expert) -ine '.ex5') {
         throw "ExpertPath must identify a compiled .ex5 file: $expert"
     }
@@ -2933,8 +3122,7 @@ try {
     $presetInfo = $null
     $presetHash = $null
     if (-not [string]::IsNullOrWhiteSpace($SetPath)) {
-        $preset = Resolve-ExistingFile -Path $SetPath -Name 'SetPath'
-        $null = Open-NonReparseFileLeaf -Path $preset -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
+        $preset = Resolve-ExistingFile -Path $SetPath -Name 'SetPath' -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
         if ([IO.Path]::GetExtension($preset) -ine '.set') {
             throw "SetPath must identify a .set file: $preset"
         }
@@ -2946,13 +3134,7 @@ try {
         throw 'OutputDirectory must be an absolute path.'
     }
     $output = [IO.Path]::GetFullPath($OutputDirectory)
-    if (Test-Path -LiteralPath $output) {
-        throw "OutputDirectory must not already exist: $output"
-    }
     $outputParent = Split-Path -Parent $output
-    if (-not (Test-Path -LiteralPath $outputParent -PathType Container)) {
-        throw "OutputDirectory parent does not exist: $outputParent"
-    }
     $outputParentLease = Open-NonReparseDirectoryChain `
         -Path $outputParent `
         -Tracker $pathEntryLeases `
@@ -2963,19 +3145,23 @@ try {
         -Tracker $directoryMutationGuards `
         -GuardsByPath $guardedDirectories `
         -RunId $runId
-    [IO.Directory]::CreateDirectory($output) | Out-Null
-    $outputCreated = $true
-    $outputDirectoryLease = Open-NonReparseDirectoryChain `
+    $outputCreation = Open-OrCreateNonReparseDirectory `
         -Path $output `
         -Tracker $pathEntryLeases `
         -LeasesByPath $leasedPathEntries
+    if (-not [bool]$outputCreation.created) {
+        throw "OutputDirectory must not already exist: $output"
+    }
+    $outputCreated = $true
+    $outputDirectoryLease = $outputCreation.lease
     $outputClaim = Open-NewOutputDirectoryClaim `
         -Path $output `
         -RunId $runId `
         -DirectoryLease $outputDirectoryLease
+    $null = Open-NonReparseFileLeaf -Path $outputClaim.owner_path -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
     $resultPath = Join-Path $output 'smoke-result.json'
 
-    $binding = Resolve-TerminalBinding -RequestedTerminalPath $TerminalPath -RequestedDataPath $TerminalDataPath
+    $binding = Resolve-TerminalBinding -RequestedTerminalPath $TerminalPath -RequestedDataPath $TerminalDataPath -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
     $terminal = [string]$binding.terminal_path
     $data = [string]$binding.terminal_data_path
     $mql5 = Join-Path $data 'MQL5'
@@ -2983,12 +3169,6 @@ try {
     $profilesRoot = Join-Path $mql5 'Profiles\Tester'
     $terminalLogRoot = Join-Path $data 'logs'
     $testerLogRoot = Join-Path $data 'Tester\logs'
-    foreach ($requiredDirectory in @($expertsRoot, $profilesRoot, $terminalLogRoot, $testerLogRoot)) {
-        if (-not (Test-Path -LiteralPath $requiredDirectory -PathType Container)) {
-            throw "Required MT5 directory is missing: $requiredDirectory"
-        }
-    }
-
     $terminalPathLease = Open-NonReparseFileLeaf -Path $terminal -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
     $mutationGuardDirectories = @(
         $expertsRoot,
@@ -3089,9 +3269,6 @@ try {
         if ($path.Length -gt 259) {
             throw "Owned MT5 staging path exceeds 259 characters: $path"
         }
-        if (Test-Path -LiteralPath $path) {
-            throw "Refusing to reuse an existing owned staging path: $path"
-        }
     }
 
     $configLines = New-Object 'System.Collections.Generic.List[string]'
@@ -3148,6 +3325,7 @@ try {
     $canonicalConfig = Join-Path $output 'tester-start.ini'
     $utf16 = New-Object Text.UnicodeEncoding($false, $true)
     Write-NewTextFile -Text $configContent -Path $canonicalConfig -Encoding $utf16
+    $null = Open-NonReparseFileLeaf -Path $canonicalConfig -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
     $canonicalConfigInfo = Get-Item -LiteralPath $canonicalConfig
     $canonicalConfigHash = Get-FileSha256 -Path $canonicalConfig
 
@@ -3209,38 +3387,37 @@ try {
         verified = $true
     })
 
-    $rootExisted = Test-Path -LiteralPath $expertStageRoot -PathType Container
-    $directoryExisted = Test-Path -LiteralPath (Split-Path -Parent $expertStage) -PathType Container
-    if (-not $rootExisted) {
-        [IO.Directory]::CreateDirectory($expertStageRoot) | Out-Null
-        $createdDirectories.Add($expertStageRoot)
-    }
-    $expertStageRootLease = Open-NonReparseDirectoryChain `
+    $expertStageRootCreation = Open-OrCreateNonReparseDirectory `
         -Path $expertStageRoot `
         -Tracker $pathEntryLeases `
         -LeasesByPath $leasedPathEntries
+    if ([bool]$expertStageRootCreation.created) {
+        $createdDirectories.Add($expertStageRoot)
+    }
+    $expertStageRootLease = $expertStageRootCreation.lease
     $null = Open-DirectoryMutationGuard `
         -Path $expertStageRoot `
         -DirectoryLease $expertStageRootLease `
         -Tracker $directoryMutationGuards `
         -GuardsByPath $guardedDirectories `
         -RunId $runId
-    if (-not $directoryExisted) {
-        [IO.Directory]::CreateDirectory((Split-Path -Parent $expertStage)) | Out-Null
-        $createdDirectories.Add((Split-Path -Parent $expertStage))
-    }
     $expertStageDirectory = Split-Path -Parent $expertStage
-    $expertStageDirectoryLease = Open-NonReparseDirectoryChain `
+    $expertStageDirectoryCreation = Open-OrCreateNonReparseDirectory `
         -Path $expertStageDirectory `
         -Tracker $pathEntryLeases `
         -LeasesByPath $leasedPathEntries
+    if (-not [bool]$expertStageDirectoryCreation.created) {
+        throw "Refusing to reuse an existing run staging directory: $expertStageDirectory"
+    }
+    $createdDirectories.Add($expertStageDirectory)
+    $expertStageDirectoryLease = $expertStageDirectoryCreation.lease
     $null = Open-DirectoryMutationGuard `
         -Path $expertStageDirectory `
         -DirectoryLease $expertStageDirectoryLease `
         -Tracker $directoryMutationGuards `
         -GuardsByPath $guardedDirectories `
         -RunId $runId
-    $stageRecord = Copy-NewHashBoundFile -Source $expert -Destination $expertStage -Kind 'expert' -Tracker $hashBoundStaging
+    $stageRecord = Copy-NewHashBoundFile -Source $expert -Destination $expertStage -Kind 'expert' -Tracker $hashBoundStaging -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries
     if ($stageRecord.sha256 -cne $expertHash -or [long]$stageRecord.byte_length -ne [long]$expertInfo.Length) {
         throw 'Expert source bytes changed while the hash-bound staging copy was prepared.'
     }
@@ -3253,7 +3430,7 @@ try {
         $result.artifacts.expert.executed_copy = $result.artifacts.expert.staged_copy
     }
     if ($null -ne $presetStage) {
-        $presetRecord = Copy-NewHashBoundFile -Source $preset -Destination $presetStage -Kind 'preset' -Tracker $hashBoundStaging
+        $presetRecord = Copy-NewHashBoundFile -Source $preset -Destination $presetStage -Kind 'preset' -Tracker $hashBoundStaging -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries
         if ($presetRecord.sha256 -cne $presetHash -or [long]$presetRecord.byte_length -ne [long]$presetInfo.Length) {
             throw 'Preset source bytes changed while the hash-bound staging copy was prepared.'
         }
@@ -3266,7 +3443,7 @@ try {
             $result.artifacts.preset.executed_copy = $result.artifacts.preset.staged_copy
         }
     }
-    $configRecord = Copy-NewHashBoundFile -Source $canonicalConfig -Destination $configStage -Kind 'startup config' -Tracker $hashBoundStaging
+    $configRecord = Copy-NewHashBoundFile -Source $canonicalConfig -Destination $configStage -Kind 'startup config' -Tracker $hashBoundStaging -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries
     if ($configRecord.sha256 -cne $canonicalConfigHash -or [long]$configRecord.byte_length -ne [long]$canonicalConfigInfo.Length) {
         throw 'Canonical startup config bytes changed while the staging copy was prepared.'
     }
@@ -3279,9 +3456,19 @@ try {
         $result.artifacts.canonical_config.executed_copy = $result.artifacts.canonical_config.staged_copy
     }
 
+    foreach ($generatedPath in @($reportStage) + @($reportCompanionStages)) {
+        $existingGeneratedLease = Try-OpenNonReparseFileLeaf `
+            -Path $generatedPath `
+            -Tracker $pathEntryLeases `
+            -LeasesByPath $leasedPathEntries
+        if ($null -ne $existingGeneratedLease) {
+            throw "Refusing to reuse an existing generated report path: $generatedPath"
+        }
+    }
+
     $stagingReadLocksReleased = $false
     $integrityRecordsToLock = @($hashBoundStaging.ToArray()) + @($outputArtifactIntegrityRecords.ToArray())
-    Open-StagingReadLocks -Records $integrityRecordsToLock -Tracker $stagingReadLocks
+    Open-StagingReadLocks -Records $integrityRecordsToLock -Tracker $stagingReadLocks -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries
     $stagingReadLockAcquisitionCompleted = $true
     $result.artifacts.staging_integrity.read_locks_acquired = $true
     $prelaunchIntegrityFailures = @(Get-PinnedStagingIntegrityFailures -Locks $stagingReadLocks)
@@ -3794,7 +3981,11 @@ try {
             }
         }
 
-        if (Test-Path -LiteralPath $reportStage -PathType Leaf) {
+        $reportStageLease = Try-OpenNonReparseFileLeaf `
+            -Path $reportStage `
+            -Tracker $pathEntryLeases `
+            -LeasesByPath $leasedPathEntries
+        if ($null -ne $reportStageLease) {
             $reportInfo = Get-Item -LiteralPath $reportStage
             if ($reportInfo.Length -gt 0) {
                 $finalReport = Join-Path $output $reportLeaf
@@ -3802,10 +3993,16 @@ try {
                 $finalReportRecord = Open-VerifiedArtifactReadLock `
                     -Path $finalReport `
                     -Kind 'output report' `
-                    -Tracker $stagingReadLocks
+                    -Tracker $stagingReadLocks `
+                    -PathEntryLeases $pathEntryLeases `
+                    -LeasesByPath $leasedPathEntries
                 $reportCompanions = New-Object 'System.Collections.Generic.List[object]'
                 foreach ($companionStage in $reportCompanionStages) {
-                    if (-not (Test-Path -LiteralPath $companionStage -PathType Leaf)) {
+                    $companionStageLease = Try-OpenNonReparseFileLeaf `
+                        -Path $companionStage `
+                        -Tracker $pathEntryLeases `
+                        -LeasesByPath $leasedPathEntries
+                    if ($null -eq $companionStageLease) {
                         continue
                     }
                     $companionInfo = Get-Item -LiteralPath $companionStage
@@ -3817,7 +4014,9 @@ try {
                     $companionRecord = Open-VerifiedArtifactReadLock `
                         -Path $companionFinal `
                         -Kind 'output report companion' `
-                        -Tracker $stagingReadLocks
+                        -Tracker $stagingReadLocks `
+                        -PathEntryLeases $pathEntryLeases `
+                        -LeasesByPath $leasedPathEntries
                     $reportCompanions.Add([pscustomobject][ordered]@{
                         path = $companionFinal
                         byte_length = [long]$companionRecord.byte_length
@@ -4065,19 +4264,24 @@ finally {
     }
     foreach ($record in $hashBoundStaging) {
         $path = [string]$record.destination_path
-        if (Test-Path -LiteralPath $path -PathType Leaf) {
-            $cleanupPreserved.Add("$($record.kind): $preservationReason; preserved: $path")
-        }
+        $cleanupPreserved.Add("$($record.kind): $preservationReason; preserved: $path")
     }
     foreach ($path in $generatedOwnedPaths) {
-        if (Test-Path -LiteralPath $path -PathType Leaf) {
-            $cleanupPreserved.Add("generated report artifact: $preservationReason; preserved: $path")
+        try {
+            $generatedLease = Try-OpenNonReparseFileLeaf `
+                -Path $path `
+                -Tracker $pathEntryLeases `
+                -LeasesByPath $leasedPathEntries
+            if ($null -ne $generatedLease) {
+                $cleanupPreserved.Add("generated report artifact: $preservationReason; preserved: $path")
+            }
+        }
+        catch {
+            $cleanupErrors.Add("Could not safely inspect generated report artifact '$path': $($_.Exception.Message)")
         }
     }
     foreach ($directory in $createdDirectories) {
-        if (Test-Path -LiteralPath $directory -PathType Container) {
-            $cleanupPreserved.Add("staging directory: $preservationReason; preserved: $directory")
-        }
+        $cleanupPreserved.Add("staging directory: $preservationReason; preserved: $directory")
     }
     if ($stagingArtifactsExist -and ($conservativeExecutionPreservation -or $conservativePreflightPreservation)) {
         $warnings.Add(

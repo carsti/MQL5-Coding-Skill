@@ -420,6 +420,7 @@ namespace Mql5Coding
 $skillText = Get-Content -LiteralPath (Join-Path $skillRoot 'SKILL.md') -Raw
 $referenceText = Get-Content -LiteralPath (Join-Path $skillRoot 'references\strategy-tester.md') -Raw
 $compilerText = Get-Content -LiteralPath $compiler -Raw
+$compilerProcessJobText = Get-Content -LiteralPath $compilerProcessJobSource -Raw
 $runnerText = Get-Content -LiteralPath $runner -Raw
 $runnerTokens = $null
 $runnerParseErrors = $null
@@ -493,6 +494,79 @@ Assert-True -Condition (
     $absolutePathProbe.invalid_accepted -eq 0 -and
     $runnerText -notmatch '\[IO\.Path\]::IsPathRooted'
 ) -Message 'Drive-relative, root-relative, or UNC input passed the absolute-path contract.'
+
+foreach ($functionName in @(
+        'Resolve-ExistingFile',
+        'Open-NonReparseDirectoryChain',
+        'Open-NonReparseFileLeaf'
+    )) {
+    $pathFunctionNode = $runnerAst.Find(
+        {
+            param($node)
+            return (
+                $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+            )
+        },
+        $true
+    )
+    Assert-True -Condition ($null -ne $pathFunctionNode) `
+        -Message "Path-integrity function was not found: $functionName"
+    Assert-True -Condition (
+        $pathFunctionNode.Extent.Text -notmatch
+            '(?i)\b(?:Test-Path|Resolve-Path|Get-Item|Get-ChildItem)\b'
+    ) -Message "$functionName performs filesystem probing before its no-follow lease."
+}
+$processIdentityNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Get-FileIdentityFromPath'
+        )
+    },
+    $true
+)
+Assert-True -Condition (
+    $null -ne $processIdentityNode -and
+    $processIdentityNode.Extent.Text -match 'Open-NonReparseFileLeaf' -and
+    $processIdentityNode.Extent.Text -notmatch '\[IO\.File\]::Open'
+) -Message 'Process-image identity can still open an unvalidated executable pathname.'
+Assert-True -Condition (
+    $runnerText -notmatch 'function Get-StagingIntegrityFailures' -and
+    $runnerText -match 'TryOpenFileLeafLease' -and
+    $runnerText -match 'TryCreateDirectory'
+) -Message 'Safe optional-file or exclusive-directory primitives are missing.'
+$bindingRootLeaseIndex = $runnerText.IndexOf(
+    'Open-NonReparseDirectoryChain -Path $terminalDataRoot',
+    [StringComparison]::Ordinal
+)
+$bindingEnumerationIndex = $runnerText.IndexOf(
+    'Get-ChildItem -LiteralPath $terminalDataRoot -Directory',
+    [StringComparison]::Ordinal
+)
+Assert-True -Condition (
+    $bindingRootLeaseIndex -ge 0 -and
+    $bindingEnumerationIndex -gt $bindingRootLeaseIndex
+) -Message 'Terminal discovery enumerates its data root before leasing it.'
+$sourceLeaseIndex = $compilerText.IndexOf(
+    '$sourceReadLease = [Mql5Coding.CompilerProcessJob]::OpenSourceFileIdentityLease',
+    [StringComparison]::Ordinal
+)
+$sourceIdentityIndex = $compilerText.IndexOf(
+    '$initialSourceIdentity = [string]$sourceReadLease.Identity',
+    [StringComparison]::Ordinal
+)
+Assert-True -Condition (
+    $sourceLeaseIndex -ge 0 -and
+    $sourceIdentityIndex -gt $sourceLeaseIndex -and
+    $compilerText -notmatch '(?s)\$canonicalSource = .*?Test-Path.*?\$sourceReadLease'
+) -Message 'Compiler source identity is still read before the no-follow leaf lease.'
+Assert-True -Condition (
+    $compilerProcessJobText -match 'TryOpenMovableOutputFileIdentityLease' -and
+    $compilerProcessJobText -match 'TryOpenPinnedOutputFileIdentityLease' -and
+    $compilerText -notmatch 'Test-Path -LiteralPath \$artifactPath'
+) -Message 'Compiler artifact paths are not protected by no-follow output leases.'
 $resultWriteIndex = $runnerText.LastIndexOf(
     'Write-JsonFile -Value $result -Path $resultPath',
     [StringComparison]::Ordinal
@@ -510,7 +584,7 @@ $outputClaimReleaseIndex = $runnerText.LastIndexOf(
     [StringComparison]::Ordinal
 )
 $stagingPreservationProbeIndex = $runnerText.LastIndexOf(
-    'if (Test-Path -LiteralPath $directory -PathType Container)',
+    'Try-OpenNonReparseFileLeaf `',
     [StringComparison]::Ordinal
 )
 Assert-True -Condition (
@@ -565,7 +639,11 @@ $redactionProbe = & {
         'ERROR AUTHORIZATION_HEADER: Basic snake-header-secret',
         'ERROR AWS_SECRET_ACCESS_KEY=aws-secret-access-key',
         'ERROR SECRET_KEY=framework-secret-key',
-        'ERROR secretAccessKey=camel-secret-access-key'
+        'ERROR secretAccessKey=camel-secret-access-key',
+        'ERROR password_confirmation=confirmation-secret',
+        'ERROR tokenValue=camel-token-value',
+        'ERROR {\"password_confirmation\":\"json-confirmation-secret\"}',
+        'ERROR {\"tokenValue\":\"json-token-value\"}'
     )
     $negative = @(
         'ERROR token refresh failed',
@@ -614,7 +692,8 @@ foreach ($redactedLine in @($redactionProbe.positive)) {
             'colon-password|colon-token|colon-authorization|json-password|json-token|' +
             'json-api-key|camel-password|camel-client-secret|camel-auth-token|' +
             'camel-oauth-token|header-secret|snake-header-secret|aws-secret-access-key|' +
-            'framework-secret-key|camel-secret-access-key'
+            'framework-secret-key|camel-secret-access-key|confirmation-secret|' +
+            'camel-token-value|json-confirmation-secret|json-token-value'
         )
     ) -Message "A prefixed secret was not redacted: $redactedLine"
 }
@@ -1848,6 +1927,91 @@ try {
         finally {
             if (Test-Path -LiteralPath $sourceLink) {
                 Remove-Item -LiteralPath $sourceLink -Force
+            }
+        }
+    }
+
+    $artifactLinkTarget = Join-Path $compileDirectory 'artifact-link-target.bin'
+    [IO.File]::WriteAllText(
+        $artifactLinkTarget,
+        'artifact target sentinel',
+        [Text.Encoding]::ASCII
+    )
+    $artifactLinkTargetHash = (
+        Get-FileHash -LiteralPath $artifactLinkTarget -Algorithm SHA256
+    ).Hash
+    if (Test-Path -LiteralPath $compileArtifact -PathType Leaf) {
+        Remove-Item -LiteralPath $compileArtifact -Force
+    }
+    $artifactLinkCreated = $false
+    try {
+        $null = New-Item `
+            -ItemType SymbolicLink `
+            -Path $compileArtifact `
+            -Target $artifactLinkTarget `
+            -ErrorAction Stop
+        $artifactLinkCreated = $true
+    }
+    catch {
+        $artifactLinkCreated = $false
+    }
+    if ($artifactLinkCreated) {
+        try {
+            $artifactLinkBlocked = Invoke-CompilerCase `
+                -SourcePath $compileSource `
+                -MetaEditorPath $metaEditor `
+                -FakeMode 'success'
+            Assert-True -Condition ($artifactLinkBlocked.ExitCode -eq 2) `
+                -Message 'A planted compiler artifact symlink was not blocked.'
+            Assert-True -Condition (
+                $artifactLinkBlocked.StandardError -match '(?i)reparse' -and
+                (Get-FileHash -LiteralPath $artifactLinkTarget -Algorithm SHA256).Hash -eq
+                    $artifactLinkTargetHash
+            ) -Message 'Artifact-symlink rejection touched its target or omitted its diagnosis.'
+        }
+        finally {
+            if (Test-Path -LiteralPath $compileArtifact) {
+                Remove-Item -LiteralPath $compileArtifact -Force
+            }
+        }
+    }
+
+    $logLinkSource = Join-Path $compileDirectory 'log-link-fixture.mq5'
+    $logLinkPath = [IO.Path]::ChangeExtension($logLinkSource, '.log')
+    $logLinkTarget = Join-Path $compileDirectory 'log-link-target.txt'
+    [IO.File]::WriteAllText($logLinkSource, '// log link probe', [Text.Encoding]::ASCII)
+    [IO.File]::WriteAllText($logLinkTarget, 'log target sentinel', [Text.Encoding]::ASCII)
+    $logLinkTargetHash = (Get-FileHash -LiteralPath $logLinkTarget -Algorithm SHA256).Hash
+    $logLinkCreated = $false
+    try {
+        $null = New-Item `
+            -ItemType SymbolicLink `
+            -Path $logLinkPath `
+            -Target $logLinkTarget `
+            -ErrorAction Stop
+        $logLinkCreated = $true
+    }
+    catch {
+        $logLinkCreated = $false
+    }
+    if ($logLinkCreated) {
+        try {
+            $logLinkBlocked = Invoke-CompilerCase `
+                -SourcePath $logLinkSource `
+                -MetaEditorPath $metaEditor `
+                -FakeMode 'success' `
+                -SyntaxOnly
+            Assert-True -Condition ($logLinkBlocked.ExitCode -eq 2) `
+                -Message 'A planted compiler log symlink was not blocked.'
+            Assert-True -Condition (
+                $logLinkBlocked.StandardError -match '(?i)reparse' -and
+                (Get-FileHash -LiteralPath $logLinkTarget -Algorithm SHA256).Hash -eq
+                    $logLinkTargetHash
+            ) -Message 'Log-symlink rejection touched its target or omitted its diagnosis.'
+        }
+        finally {
+            if (Test-Path -LiteralPath $logLinkPath) {
+                Remove-Item -LiteralPath $logLinkPath -Force
             }
         }
     }
