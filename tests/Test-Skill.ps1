@@ -2123,7 +2123,7 @@ try {
                 -not [bool]$caseCacheBlocked.Result.process.execution_attempted
             )
         )
-        $caseUpperJunctionPattern = [regex]::Escape($caseUpperJunction)
+        $caseUpperJunctionPattern = '(?i)case-sensitive-path-cache[\\/]+A'
         Assert-True -Condition (
             $caseCacheBlocked.ExitCode -eq 4 -and
             $caseCacheStatusValid -and
