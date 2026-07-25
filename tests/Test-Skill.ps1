@@ -2770,6 +2770,9 @@ try {
             for ($index = $publicationLocks.Count - 1; $index -ge 0; $index--) {
                 $publicationLocks[$index].stream.Dispose()
             }
+            for ($index = $pathLeases.Count - 1; $index -ge 0; $index--) {
+                $pathLeases[$index].Dispose()
+            }
             try {
                 [IO.File]::WriteAllText(
                     $PublishedPath,
