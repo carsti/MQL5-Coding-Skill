@@ -746,6 +746,40 @@ Assert-True -Condition (
     $bindingRootLeaseIndex -ge 0 -and
     $bindingEnumerationIndex -gt $bindingRootLeaseIndex
 ) -Message 'Terminal discovery enumerates its data root before leasing it.'
+$terminalBindingNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Resolve-TerminalBinding'
+        )
+    },
+    $true
+)
+$terminalOriginLockNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Open-TerminalOriginReadLock'
+        )
+    },
+    $true
+)
+Assert-True -Condition (
+    $null -ne $terminalBindingNode -and
+    $terminalBindingNode.Extent.Text -match
+        '\$originInstallLease\.Identity\s+-c(?:eq|ne)' -and
+    $terminalBindingNode.Extent.Text -match
+        '\$terminalInstallLease\.Identity' -and
+    $terminalBindingNode.Extent.Text -notmatch 'OrdinalIgnoreCase' -and
+    $null -ne $terminalOriginLockNode -and
+    $terminalOriginLockNode.Extent.Text -match
+        '\$ExpectedInstallPath' -and
+    $terminalOriginLockNode.Extent.Text -match
+        '\[StringComparison\]::Ordinal' -and
+    $terminalOriginLockNode.Extent.Text -notmatch 'OrdinalIgnoreCase'
+) -Message 'Terminal origin binding still conflates case-distinct install directories.'
 $sourceLeaseIndex = $compilerText.IndexOf(
     '$sourceReadLease = [Mql5Coding.CompilerProcessJob]::OpenSourceFileIdentityLease',
     [StringComparison]::Ordinal
@@ -1946,6 +1980,71 @@ try {
     )
     $expertHash = (Get-FileHash -LiteralPath $expert -Algorithm SHA256).Hash.ToLowerInvariant()
 
+    $poisonDirectory = Join-Path $testRoot 'cache-poison-a'
+    [IO.Directory]::CreateDirectory($poisonDirectory) | Out-Null
+    $poisonAliasSpelling = Join-Path $testRoot 'CACHE-POISON-A'
+    Assert-True -Condition ([IO.Directory]::Exists($poisonAliasSpelling)) `
+        -Message 'The always-run cache-poison fixture is not on a case-insensitive directory.'
+    $poisonDefinitionTexts = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($poisonFunctionName in @(
+            'ConvertTo-NormalizedDirectoryPath',
+            'Test-IsAbsoluteLocalDrivePath',
+            'Assert-StableFixedLocalVolumePath',
+            'Open-NonReparseDirectoryChain'
+        )) {
+        $poisonFunctionNode = $runnerAst.Find(
+            {
+                param($node)
+                return (
+                    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                    $node.Name -eq $poisonFunctionName
+                )
+            },
+            $true
+        )
+        Assert-True -Condition ($null -ne $poisonFunctionNode) `
+            -Message "Cache-poison dependency was not found: $poisonFunctionName"
+        $poisonDefinitionTexts.Add($poisonFunctionNode.Extent.Text)
+    }
+    $plainHashtablePoisonBlocked = & {
+        param($DefinitionTexts, $LowerPath, $UpperPath)
+        foreach ($definitionText in $DefinitionTexts) {
+            . ([scriptblock]::Create($definitionText))
+        }
+        $script:fixedLocalVolumeIdentities = @{}
+        $poisonLeases = New-Object 'System.Collections.Generic.List[object]'
+        $plainCache = @{}
+        try {
+            $null = Open-NonReparseDirectoryChain `
+                -Path $LowerPath `
+                -Tracker $poisonLeases `
+                -LeasesByPath $plainCache
+            try {
+                $null = Open-NonReparseDirectoryChain `
+                    -Path $UpperPath `
+                    -Tracker $poisonLeases `
+                    -LeasesByPath $plainCache
+                return $false
+            }
+            catch {
+                return (
+                    $_.Exception.Message -match
+                        'cached directory lease does not exactly match'
+                )
+            }
+        }
+        finally {
+            for ($index = $poisonLeases.Count - 1; $index -ge 0; $index--) {
+                $poisonLeases[$index].Dispose()
+            }
+        }
+    } `
+        ($poisonDefinitionTexts.ToArray()) `
+        $poisonDirectory `
+        $poisonAliasSpelling
+    Assert-True -Condition $plainHashtablePoisonBlocked `
+        -Message 'A caller-supplied case-insensitive path cache bypassed exact lease correlation.'
+
     $caseSensitiveRoot = Join-Path $testRoot 'case-sensitive-path-cache'
     [IO.Directory]::CreateDirectory($caseSensitiveRoot) | Out-Null
     $fsutilExecutable = Join-Path $env:WINDIR 'System32\fsutil.exe'
@@ -1972,6 +2071,10 @@ try {
         $caseExpert = Join-Path $caseLowerDirectory 'fixture.ex5'
         $casePreset = Join-Path $caseUpperTarget 'fixture.set'
         [IO.File]::Copy($expert, $caseExpert)
+        [IO.File]::Copy(
+            $preset,
+            (Join-Path $caseLowerDirectory 'fixture.set')
+        )
         [IO.File]::Copy($preset, $casePreset)
         $caseJunctionOutput = @(
             & $env:ComSpec /d /c mklink /J $caseUpperJunction $caseUpperTarget 2>&1
@@ -1981,6 +2084,14 @@ try {
             'Could not create the case-distinct junction regression fixture. ' +
             ($caseJunctionOutput -join ' ')
         )
+        $caseEntryNames = @(
+            [IO.Directory]::EnumerateFileSystemEntries($caseSensitiveRoot) |
+                ForEach-Object { [IO.Path]::GetFileName($_) }
+        )
+        Assert-True -Condition (
+            $caseEntryNames -ccontains 'a' -and
+            $caseEntryNames -ccontains 'A'
+        ) -Message 'The case-sensitive regression parent did not preserve distinct a and A entries.'
         try {
             $caseCacheBlocked = Invoke-RunnerCase `
                 -Name 'preflight-case-sensitive-cache-junction' `
@@ -2012,11 +2123,15 @@ try {
                 -not [bool]$caseCacheBlocked.Result.process.execution_attempted
             )
         )
+        $caseUpperJunctionPattern = [regex]::Escape($caseUpperJunction)
         Assert-True -Condition (
             $caseCacheBlocked.ExitCode -eq 4 -and
             $caseCacheStatusValid -and
             $caseCacheDiagnostic -match
-                '(?i)unsafe or unleaseable directory path component'
+                '(?i)unsafe or unleaseable directory path component' -and
+            $caseCacheDiagnostic -match $caseUpperJunctionPattern -and
+            $caseCacheDiagnostic -match
+                '(?i)Reparse-point path entries are not allowed'
         ) -Message (
             'A case-distinct intermediate junction reused a safe cached path lease. ' +
             "exit=$($caseCacheBlocked.ExitCode); diagnostic=$caseCacheDiagnostic"

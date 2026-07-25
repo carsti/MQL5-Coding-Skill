@@ -1690,10 +1690,21 @@ function Resolve-TerminalBinding {
                 $terminalInstall = [IO.Path]::GetFullPath(
                     (Split-Path -Parent $terminal)
                 ).TrimEnd('\', '/')
-                if ($origin.TrimEnd('\', '/').Equals(
-                        $terminalInstall,
-                        [StringComparison]::OrdinalIgnoreCase
-                    )) {
+                try {
+                    $originInstallLease = Open-NonReparseDirectoryChain `
+                        -Path $origin `
+                        -Tracker $Tracker `
+                        -LeasesByPath $LeasesByPath
+                    $terminalInstallLease = Open-NonReparseDirectoryChain `
+                        -Path $terminalInstall `
+                        -Tracker $Tracker `
+                        -LeasesByPath $LeasesByPath
+                }
+                catch {
+                    continue
+                }
+                if ([string]$originInstallLease.Identity -ceq
+                    [string]$terminalInstallLease.Identity) {
                     $matches.Add([pscustomobject]@{
                         data = $candidateData
                         terminal = $terminal
@@ -1729,10 +1740,16 @@ function Resolve-TerminalBinding {
     $terminalInstall = [IO.Path]::GetFullPath(
         (Split-Path -Parent $terminal)
     ).TrimEnd('\', '/')
-    if (-not $origin.TrimEnd('\', '/').Equals(
-            $terminalInstall,
-            [StringComparison]::OrdinalIgnoreCase
-        )) {
+    $originInstallLease = Open-NonReparseDirectoryChain `
+        -Path $origin `
+        -Tracker $Tracker `
+        -LeasesByPath $LeasesByPath
+    $terminalInstallLease = Open-NonReparseDirectoryChain `
+        -Path $terminalInstall `
+        -Tracker $Tracker `
+        -LeasesByPath $LeasesByPath
+    if ([string]$originInstallLease.Identity -cne
+        [string]$terminalInstallLease.Identity) {
         throw "TerminalDataPath belongs to '$origin', not to '$terminal'."
     }
 
@@ -1747,6 +1764,8 @@ function Resolve-TerminalBinding {
     return [pscustomobject][ordered]@{
         terminal_path = [IO.Path]::GetFullPath($terminal)
         terminal_data_path = [IO.Path]::GetFullPath($data)
+        terminal_install_path = [IO.Path]::GetFullPath($origin)
+        terminal_install_identity = [string]$originInstallLease.Identity
     }
 }
 
@@ -2687,6 +2706,7 @@ function Open-TerminalOriginReadLock {
     param(
         [Parameter(Mandatory)][string]$TerminalDataPath,
         [Parameter(Mandatory)][string]$TerminalPath,
+        [Parameter(Mandatory)][string]$ExpectedInstallPath,
         [Parameter(Mandatory)]$Tracker
     )
 
@@ -2712,12 +2732,14 @@ function Open-TerminalOriginReadLock {
             $reader.Dispose()
         }
         $origin = ConvertFrom-TerminalOriginText -Text $originText -SourcePath $originPath
-        $terminalInstall = [IO.Path]::GetFullPath((Split-Path -Parent $TerminalPath)).TrimEnd('\', '/')
+        $expectedInstall = [IO.Path]::GetFullPath(
+            $ExpectedInstallPath
+        ).TrimEnd('\', '/')
         if (-not $origin.TrimEnd('\', '/').Equals(
-                $terminalInstall,
-                [StringComparison]::OrdinalIgnoreCase
+                $expectedInstall,
+                [StringComparison]::Ordinal
             )) {
-            throw "Terminal data origin changed or does not belong to '$TerminalPath': $originPath"
+            throw "Terminal data origin changed after binding to '$TerminalPath': $originPath"
         }
 
         $stream.Position = 0
@@ -3805,6 +3827,7 @@ try {
     $originRecord = Open-TerminalOriginReadLock `
         -TerminalDataPath $data `
         -TerminalPath $terminal `
+        -ExpectedInstallPath $binding.terminal_install_path `
         -Tracker $stagingReadLocks
     if ($originRecord.file_identity -cne [string]$originPathLease.Identity) {
         throw 'Terminal origin identity changed while its path-chain lease was established.'
