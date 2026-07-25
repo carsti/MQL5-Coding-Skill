@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using Microsoft.Win32.SafeHandles;
@@ -21,9 +22,12 @@ namespace Mql5Coding
         private const uint WaitObject0 = 0x00000000;
         private const uint WaitFailed = 0xFFFFFFFF;
         private const uint FileListDirectory = 0x00000001;
+        private const uint FileReadAttributes = 0x00000080;
+        private const uint DeleteAccess = 0x00010000;
         private const uint GenericRead = 0x80000000;
         private const uint ShareRead = 0x00000001;
         private const uint ShareReadWrite = 0x00000003;
+        private const uint ShareDelete = 0x00000004;
         private const uint ShareReadWriteDelete = 0x00000007;
         private const int ErrorFileNotFound = 2;
         private const int ErrorPathNotFound = 3;
@@ -32,6 +36,9 @@ namespace Mql5Coding
         private const uint FileAttributeReparsePoint = 0x00000400;
         private const uint FileFlagOpenReparsePoint = 0x00200000;
         private const uint FileFlagBackupSemantics = 0x02000000;
+        private const int FileRenameInformationClass = 3;
+        private const int FileDispositionInformationClass = 4;
+        private const uint DuplicateSameAccess = 0x00000002;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct NativeFileTime
@@ -164,6 +171,20 @@ namespace Mql5Coding
             SafeFileHandle file,
             out ByHandleFileInformation information);
 
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetCurrentProcess();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool DuplicateHandle(
+            IntPtr sourceProcess,
+            SafeFileHandle sourceHandle,
+            IntPtr targetProcess,
+            out SafeFileHandle targetHandle,
+            uint desiredAccess,
+            [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
+            uint options);
+
         [DllImport(
             "kernel32.dll",
             CharSet = CharSet.Unicode,
@@ -177,6 +198,14 @@ namespace Mql5Coding
             uint creationDisposition,
             uint flagsAndAttributes,
             IntPtr templateFile);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetFileInformationByHandle(
+            SafeFileHandle file,
+            int informationClass,
+            IntPtr information,
+            uint informationLength);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern uint GetFinalPathNameByHandle(
@@ -263,9 +292,139 @@ namespace Mql5Coding
 
             public string GetCurrentIdentity()
             {
-                if (handle == null || handle.IsInvalid || handle.IsClosed)
-                    throw new InvalidOperationException("The file identity lease is unavailable.");
+                EnsureAvailable();
                 return CompilerProcessJob.ReadFileIdentity(handle);
+            }
+
+            public string ReadAllText()
+            {
+                EnsureAvailable();
+                using (FileStream stream = OpenReadStreamCopy())
+                {
+                    stream.Seek(0, SeekOrigin.Begin);
+                    using (StreamReader reader = new StreamReader(stream, true))
+                    {
+                        return reader.ReadToEnd();
+                    }
+                }
+            }
+
+            public long GetLength()
+            {
+                EnsureAvailable();
+                ByHandleFileInformation information;
+                if (!GetFileInformationByHandle(handle, out information))
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "Reading the leased compiler output length failed.");
+                return unchecked(
+                    ((long)information.FileSizeHigh << 32) |
+                    information.FileSizeLow);
+            }
+
+            public string GetSha256()
+            {
+                EnsureAvailable();
+                using (FileStream stream = OpenReadStreamCopy())
+                using (SHA256 algorithm = SHA256.Create())
+                {
+                    stream.Seek(0, SeekOrigin.Begin);
+                    return BitConverter.ToString(
+                        algorithm.ComputeHash(stream)).Replace("-", "");
+                }
+            }
+
+            private FileStream OpenReadStreamCopy()
+            {
+                SafeFileHandle duplicate;
+                IntPtr process = GetCurrentProcess();
+                if (!DuplicateHandle(
+                        process,
+                        handle,
+                        process,
+                        out duplicate,
+                        0,
+                        false,
+                        DuplicateSameAccess))
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "Duplicating the leased compiler output handle failed.");
+                return new FileStream(duplicate, FileAccess.Read);
+            }
+
+            public void RenameTo(string destinationPath)
+            {
+                EnsureAvailable();
+                if (String.IsNullOrWhiteSpace(destinationPath))
+                    throw new ArgumentException(
+                        "A destination path is required.",
+                        "destinationPath");
+
+                string fullDestination = Path.GetFullPath(destinationPath);
+                char[] destinationCharacters = fullDestination.ToCharArray();
+                int rootOffset = IntPtr.Size == 8 ? 8 : 4;
+                int lengthOffset = rootOffset + IntPtr.Size;
+                int nameOffset = lengthOffset + sizeof(uint);
+                int nameBytes = checked(destinationCharacters.Length * sizeof(char));
+                int bufferLength = checked(nameOffset + nameBytes);
+                IntPtr buffer = Marshal.AllocHGlobal(bufferLength);
+                try
+                {
+                    for (int index = 0; index < bufferLength; index++)
+                        Marshal.WriteByte(buffer, index, 0);
+                    Marshal.WriteByte(buffer, 0, 0);
+                    Marshal.WriteIntPtr(buffer, rootOffset, IntPtr.Zero);
+                    Marshal.WriteInt32(buffer, lengthOffset, nameBytes);
+                    Marshal.Copy(
+                        destinationCharacters,
+                        0,
+                        IntPtr.Add(buffer, nameOffset),
+                        destinationCharacters.Length);
+                    if (!SetFileInformationByHandle(
+                            handle,
+                            FileRenameInformationClass,
+                            buffer,
+                            unchecked((uint)bufferLength)))
+                        throw new Win32Exception(
+                            Marshal.GetLastWin32Error(),
+                            "Renaming the leased compiler output failed.");
+                    FinalPath = fullDestination;
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
+            }
+
+            public void Delete()
+            {
+                EnsureAvailable();
+                const uint DispositionInformationLength = 1;
+                IntPtr buffer = Marshal.AllocHGlobal(
+                    unchecked((int)DispositionInformationLength));
+                try
+                {
+                    Marshal.WriteByte(buffer, 0, 1);
+                    if (!SetFileInformationByHandle(
+                            handle,
+                            FileDispositionInformationClass,
+                            buffer,
+                            DispositionInformationLength))
+                        throw new Win32Exception(
+                            Marshal.GetLastWin32Error(),
+                            "Deleting the leased compiler output failed.");
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
+            }
+
+            private void EnsureAvailable()
+            {
+                if (handle == null || handle.IsInvalid || handle.IsClosed)
+                    throw new InvalidOperationException(
+                        "The file identity lease is unavailable.");
             }
 
             public void Dispose()
@@ -355,6 +514,13 @@ namespace Mql5Coding
             return result;
         }
 
+        public static string GetFileIdentity(SafeFileHandle handle)
+        {
+            if (handle == null || handle.IsInvalid || handle.IsClosed)
+                throw new ArgumentException("A live file handle is required.", "handle");
+            return ReadFileIdentity(handle);
+        }
+
         public static string GetFileIdentity(string path)
         {
             if (String.IsNullOrWhiteSpace(path))
@@ -441,13 +607,38 @@ namespace Mql5Coding
             return lease;
         }
 
+        public static FileIdentityLease OpenExecutableFileIdentityLease(
+            string path)
+        {
+            FileIdentityLease lease = TryOpenNonReparseFileIdentityLease(
+                path,
+                GenericRead,
+                ShareRead,
+                "MetaEditor executable");
+            if (lease == null)
+                throw new FileNotFoundException(
+                    "The MetaEditor executable does not exist.",
+                    path);
+            return lease;
+        }
+
+        public static FileIdentityLease TryOpenObservedOutputFileIdentityLease(
+            string path)
+        {
+            return TryOpenNonReparseFileIdentityLease(
+                path,
+                GenericRead,
+                ShareReadWriteDelete,
+                "compiler output");
+        }
+
         public static FileIdentityLease TryOpenMovableOutputFileIdentityLease(
             string path)
         {
             return TryOpenNonReparseFileIdentityLease(
                 path,
-                0,
-                ShareReadWriteDelete,
+                DeleteAccess | FileReadAttributes,
+                ShareRead,
                 "compiler output");
         }
 
@@ -456,8 +647,8 @@ namespace Mql5Coding
         {
             return TryOpenNonReparseFileIdentityLease(
                 path,
-                0,
-                ShareReadWrite,
+                GenericRead,
+                ShareRead | ShareDelete,
                 "compiler output");
         }
 
