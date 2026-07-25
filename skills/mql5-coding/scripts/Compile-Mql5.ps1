@@ -520,7 +520,7 @@ try {
         $pathMutexHeld = $true
     }
     if (-not $pathMutexHeld) {
-        throw "Another compilation is already using this source file: $resolvedSource"
+        throw "Another compilation is already using this source file (path lock): $resolvedSource"
     }
 
     $identityWait = $lockBudget - $lockTimer.Elapsed
@@ -534,7 +534,7 @@ try {
         $identityMutexHeld = $true
     }
     if (-not $identityMutexHeld) {
-        throw "Another compilation is already using this source file: $resolvedSource"
+        throw "Another compilation is already using this source file (identity lock): $resolvedSource"
     }
 
     if ($sourceReadLease.Identity -cne $initialSourceIdentity) {
@@ -825,13 +825,39 @@ finally {
     }
 
     if ($identityMutexHeld -and $null -ne $identityMutex) {
-        try { $identityMutex.ReleaseMutex() } catch { }
+        try {
+            $identityMutex.ReleaseMutex()
+        }
+        catch {
+            $exitCode = $ExitToolError
+            $status = 'tool_error'
+            $releaseMessage = "Could not release the identity compilation lock: $($_.Exception.Message)"
+            if ([string]::IsNullOrWhiteSpace($errorMessage)) {
+                $errorMessage = $releaseMessage
+            }
+            else {
+                $errorMessage = "$errorMessage $releaseMessage"
+            }
+        }
     }
     if ($null -ne $identityMutex) {
         $identityMutex.Dispose()
     }
     if ($pathMutexHeld -and $null -ne $pathMutex) {
-        try { $pathMutex.ReleaseMutex() } catch { }
+        try {
+            $pathMutex.ReleaseMutex()
+        }
+        catch {
+            $exitCode = $ExitToolError
+            $status = 'tool_error'
+            $releaseMessage = "Could not release the path compilation lock: $($_.Exception.Message)"
+            if ([string]::IsNullOrWhiteSpace($errorMessage)) {
+                $errorMessage = $releaseMessage
+            }
+            else {
+                $errorMessage = "$errorMessage $releaseMessage"
+            }
+        }
     }
     if ($null -ne $pathMutex) {
         $pathMutex.Dispose()

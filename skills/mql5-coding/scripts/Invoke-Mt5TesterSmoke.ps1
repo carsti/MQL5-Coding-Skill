@@ -2375,7 +2375,7 @@ try {
     }
     if (-not [string]::IsNullOrWhiteSpace($ExpectedLogMarkerFile)) {
         $markerFile = Resolve-ExistingFile -Path $ExpectedLogMarkerFile -Name 'ExpectedLogMarkerFile'
-        $markerFileLease = Open-NonReparseFileLeaf -Path $markerFile -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
+        $null = Open-NonReparseFileLeaf -Path $markerFile -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
         $markerFileStream = [IO.File]::Open(
             $markerFile,
             [IO.FileMode]::Open,
@@ -2455,7 +2455,7 @@ try {
     }
 
     $expert = Resolve-ExistingFile -Path $ExpertPath -Name 'ExpertPath'
-    $expertPathLease = Open-NonReparseFileLeaf -Path $expert -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
+    $null = Open-NonReparseFileLeaf -Path $expert -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
     if ([IO.Path]::GetExtension($expert) -ine '.ex5') {
         throw "ExpertPath must identify a compiled .ex5 file: $expert"
     }
@@ -2468,7 +2468,7 @@ try {
     $presetHash = $null
     if (-not [string]::IsNullOrWhiteSpace($SetPath)) {
         $preset = Resolve-ExistingFile -Path $SetPath -Name 'SetPath'
-        $presetPathLease = Open-NonReparseFileLeaf -Path $preset -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
+        $null = Open-NonReparseFileLeaf -Path $preset -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
         if ([IO.Path]::GetExtension($preset) -ine '.set') {
             throw "SetPath must identify a .set file: $preset"
         }

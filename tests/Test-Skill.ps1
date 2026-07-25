@@ -1505,12 +1505,17 @@ try {
             [IO.Directory]::CreateDirectory($compileRetargetDirectory) | Out-Null
             [IO.Directory]::Delete($compileAliasDirectory)
             $null = New-Item -ItemType Junction -Path $compileAliasDirectory -Target $compileRetargetDirectory
+            $leasedTargetIdentity = $compileAliasLease.GetCurrentIdentity()
             Assert-True -Condition (
-                [IO.Path]::GetFullPath($compileAliasLease.FinalPath).Equals(
-                    [IO.Path]::GetFullPath($compileDirectory),
-                    [StringComparison]::OrdinalIgnoreCase
-                )
-            ) -Message 'Retargeting a junction changed the compiler lease canonical target.'
+                $leasedTargetIdentity -ceq
+                    [Mql5Coding.CompilerProcessJob]::GetDirectoryIdentity(
+                        $compileDirectory
+                    ) -and
+                $leasedTargetIdentity -cne
+                    [Mql5Coding.CompilerProcessJob]::GetDirectoryIdentity(
+                        $compileRetargetDirectory
+                    )
+            ) -Message 'Retargeting a junction changed the directory object held by the compiler lease.'
             [IO.Directory]::Delete($compileAliasDirectory)
             $null = New-Item -ItemType Junction -Path $compileAliasDirectory -Target $compileDirectory
             Remove-Item -LiteralPath $compileRetargetDirectory -Force

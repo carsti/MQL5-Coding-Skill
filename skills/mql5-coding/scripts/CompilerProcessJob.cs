@@ -287,6 +287,13 @@ namespace Mql5Coding
 
             public string FinalPath { get; private set; }
 
+            public string GetCurrentIdentity()
+            {
+                if (handle == null || handle.IsInvalid || handle.IsClosed)
+                    throw new InvalidOperationException("The directory identity lease is unavailable.");
+                return CompilerProcessJob.ReadFileIdentity(handle);
+            }
+
             public void Dispose()
             {
                 if (handle != null)
