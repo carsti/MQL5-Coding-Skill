@@ -11,6 +11,9 @@ $skillRoot = Join-Path $repositoryRoot 'skills\mql5-coding'
 $runner = Join-Path $skillRoot 'scripts\Invoke-Mt5TesterSmoke.ps1'
 $compiler = Join-Path $skillRoot 'scripts\Compile-Mql5.ps1'
 $compilerProcessJobSource = Join-Path $skillRoot 'scripts\CompilerProcessJob.cs'
+$testerProcessJobSource = Join-Path $skillRoot 'scripts\TesterProcessJob.cs'
+$testerPathIntegrity = Join-Path $skillRoot 'scripts\TesterPathIntegrity.ps1'
+$testerEvidence = Join-Path $skillRoot 'scripts\TesterEvidence.ps1'
 $fakeTerminalSource = Join-Path $PSScriptRoot 'FakeTerminal.cs'
 $fakeMetaEditorSource = Join-Path $PSScriptRoot 'FakeMetaEditor.cs'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('mql5-coding-skill-test-' + [guid]::NewGuid().ToString('N'))
@@ -303,6 +306,9 @@ foreach ($requiredFile in @(
         $runner,
         $compiler,
         $compilerProcessJobSource,
+        $testerProcessJobSource,
+        $testerPathIntegrity,
+        $testerEvidence,
         $fakeTerminalSource,
         $fakeMetaEditorSource
     )) {
@@ -312,18 +318,14 @@ foreach ($requiredFile in @(
 
 Assert-PowerShellParses -Path $runner
 Assert-PowerShellParses -Path $compiler
+Assert-PowerShellParses -Path $testerPathIntegrity
+Assert-PowerShellParses -Path $testerEvidence
 if (-not ('Mql5Coding.CompilerProcessJob' -as [type])) {
     Add-Type -Path $compilerProcessJobSource
 }
-$runnerTextForNativeType = Get-Content -LiteralPath $runner -Raw
-$runnerTypeMatch = [regex]::Match(
-    $runnerTextForNativeType,
-    "(?s)Add-Type\s+-TypeDefinition\s+@'\r?\n(?<source>.*?)\r?\n'@"
-)
-Assert-True -Condition $runnerTypeMatch.Success `
-    -Message 'The tester native helper source could not be extracted for lease tests.'
+$testerProcessJobText = Get-Content -LiteralPath $testerProcessJobSource -Raw
 if (-not ('Mql5Coding.JobProcessLaunch' -as [type])) {
-    Add-Type -TypeDefinition $runnerTypeMatch.Groups['source'].Value
+    Add-Type -Path $testerProcessJobSource
 }
 if (-not ('Mql5Coding.RawDosDeviceProbe' -as [type])) {
     Add-Type -TypeDefinition @'
@@ -425,14 +427,63 @@ $skillText = Get-Content -LiteralPath (Join-Path $skillRoot 'SKILL.md') -Raw
 $referenceText = Get-Content -LiteralPath (Join-Path $skillRoot 'references\strategy-tester.md') -Raw
 $compilerText = Get-Content -LiteralPath $compiler -Raw
 $compilerProcessJobText = Get-Content -LiteralPath $compilerProcessJobSource -Raw
-$runnerText = Get-Content -LiteralPath $runner -Raw
+$runnerScriptText = Get-Content -LiteralPath $runner -Raw
+$testerPathIntegrityText = Get-Content -LiteralPath $testerPathIntegrity -Raw
+$testerEvidenceText = Get-Content -LiteralPath $testerEvidence -Raw
+$runnerText = @(
+    $testerProcessJobText,
+    $testerPathIntegrityText,
+    $testerEvidenceText,
+    $runnerScriptText
+) -join "`n"
+$runnerPowerShellText = @(
+    $runnerScriptText,
+    $testerPathIntegrityText,
+    $testerEvidenceText
+) -join "`n"
 $runnerTokens = $null
 $runnerParseErrors = $null
-$runnerAst = [Management.Automation.Language.Parser]::ParseFile(
-    $runner,
+$runnerAst = [Management.Automation.Language.Parser]::ParseInput(
+    $runnerPowerShellText,
     [ref]$runnerTokens,
     [ref]$runnerParseErrors
 )
+Assert-True -Condition ($runnerParseErrors.Count -eq 0) `
+    -Message 'The composed tester runner and helper scripts do not parse as one PowerShell program.'
+$runnerFunctionDefinitions = @(
+    $runnerAst.FindAll(
+        {
+            param($node)
+            return $node -is [Management.Automation.Language.FunctionDefinitionAst]
+        },
+        $true
+    )
+)
+$duplicateRunnerFunctions = @(
+    $runnerFunctionDefinitions |
+        Group-Object -Property Name |
+        Where-Object { $_.Count -gt 1 }
+)
+Assert-True -Condition ($duplicateRunnerFunctions.Count -eq 0) -Message (
+    'The composed tester program contains duplicate function definitions: ' +
+    (@($duplicateRunnerFunctions | ForEach-Object { $_.Name }) -join ', ')
+)
+Assert-True -Condition (
+    [IO.File]::ReadAllLines($runner).Count -le 2000 -and
+    [IO.File]::ReadAllLines($testerProcessJobSource).Count -le 1500 -and
+    [IO.File]::ReadAllLines($testerPathIntegrity).Count -le 2000 -and
+    [IO.File]::ReadAllLines($testerEvidence).Count -le 1000 -and
+    $runnerScriptText -match
+        'Add-Type -Path \(Join-Path \$PSScriptRoot ''TesterProcessJob\.cs''\)' -and
+    $runnerScriptText -match "TesterPathIntegrity\.ps1" -and
+    $runnerScriptText -match "TesterEvidence\.ps1"
+) -Message 'The Strategy Tester runner has regressed to a monolithic implementation.'
+Assert-True -Condition (
+    $testerPathIntegrityText -match "-Name 'fixedLocalVolumeIdentities'" -and
+    $testerPathIntegrityText -match '-Scope Script' -and
+    $testerPathIntegrityText -match
+        '\$script:fixedLocalVolumeIdentities\s*=\s*@\{\}'
+) -Message 'The path-integrity helper does not initialize its script-scope volume cache.'
 $protectJournalNode = $runnerAst.Find(
     {
         param($node)
@@ -698,8 +749,56 @@ $processMatcherNode = $runnerAst.Find(
 )
 Assert-True -Condition (
     $null -ne $processMatcherNode -and
-    $processMatcherNode.Extent.Text -notmatch '(?i)\$matches\b'
-) -Message 'Process matching collides with PowerShell automatic $Matches state.'
+    $runnerPowerShellText -notmatch '(?im)^\s*\$matches\s*='
+) -Message 'Tester helpers assign to PowerShell automatic $Matches state.'
+$helperLoadProbeRoot = Join-Path (
+    [IO.Path]::GetTempPath()
+) ('mql5-coding-helper-load-' + [guid]::NewGuid().ToString('N'))
+[IO.Directory]::CreateDirectory($helperLoadProbeRoot) | Out-Null
+try {
+    $helperLoadProbeRunner = Join-Path $helperLoadProbeRoot 'Invoke-Mt5TesterSmoke.ps1'
+    [IO.File]::Copy($runner, $helperLoadProbeRunner, $true)
+    $helperLoadProbeStartInfo = New-Object Diagnostics.ProcessStartInfo
+    $helperLoadProbeStartInfo.FileName = $hostExecutable
+    $helperLoadProbeStartInfo.Arguments = @(
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        (Quote-NativeArgument -Value $helperLoadProbeRunner)
+    ) -join ' '
+    $helperLoadProbeStartInfo.UseShellExecute = $false
+    $helperLoadProbeStartInfo.CreateNoWindow = $true
+    $helperLoadProbeStartInfo.RedirectStandardOutput = $true
+    $helperLoadProbeStartInfo.RedirectStandardError = $true
+    $helperLoadProbeProcess = New-Object Diagnostics.Process
+    $helperLoadProbeProcess.StartInfo = $helperLoadProbeStartInfo
+    try {
+        $null = $helperLoadProbeProcess.Start()
+        $helperLoadProbeOutput = $helperLoadProbeProcess.StandardOutput.ReadToEnd()
+        $helperLoadProbeError = $helperLoadProbeProcess.StandardError.ReadToEnd()
+        $helperLoadProbeProcess.WaitForExit()
+        $helperLoadProbeExitCode = $helperLoadProbeProcess.ExitCode
+    }
+    finally {
+        $helperLoadProbeProcess.Dispose()
+    }
+    Assert-True -Condition (
+        $helperLoadProbeExitCode -eq 2 -and
+        $helperLoadProbeError -match
+            'Tester helper scripts could not be loaded\.' -and
+        $helperLoadProbeError -notmatch
+            [regex]::Escape($helperLoadProbeRoot) -and
+        [string]::IsNullOrWhiteSpace($helperLoadProbeOutput)
+    ) -Message 'A missing tester helper disclosed its unredacted local path.'
+}
+finally {
+    if ([IO.Directory]::Exists($helperLoadProbeRoot)) {
+        [IO.Directory]::Delete($helperLoadProbeRoot, $true)
+    }
+}
 Assert-True -Condition (
     $runnerText -notmatch 'function Get-StagingIntegrityFailures' -and
     $runnerText -match 'TryOpenFileLeafLease' -and
@@ -712,7 +811,7 @@ Assert-True -Condition (
     $runnerText -notmatch '\[IO\.File\]::Copy'
 ) -Message 'Generated report reservation or no-follow output publication is missing.'
 $mutableOutputMethod = [regex]::Match(
-    [string]$runnerTypeMatch.Groups['source'].Value,
+    $testerProcessJobText,
     '(?s)public static PathEntryLease CreateMutableOutputFileLease\(string path\).*?(?=public static FileStream CreatePinnedOutputFileStream)'
 )
 Assert-True -Condition (

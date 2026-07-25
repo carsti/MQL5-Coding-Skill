@@ -66,6 +66,9 @@ skills/mql5-coding/
   scripts/Compile-Mql5.ps1
   scripts/CompilerProcessJob.cs
   scripts/Invoke-Mt5TesterSmoke.ps1
+  scripts/TesterProcessJob.cs
+  scripts/TesterPathIntegrity.ps1
+  scripts/TesterEvidence.ps1
 ```
 
 Repository-level tests use synthetic MetaEditor and terminal executables. They do not require or launch real MetaTrader 5.
