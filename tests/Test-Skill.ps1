@@ -2094,7 +2094,15 @@ try {
             $testerLeaseProbeDirectory
         )
         $testerDirectoryGuard = & {
-            param($DefinitionText, $Path, $DirectoryLease, $Tracker, $GuardsByPath)
+            param(
+                $NormalizeDefinitionText,
+                $DefinitionText,
+                $Path,
+                $DirectoryLease,
+                $Tracker,
+                $GuardsByPath
+            )
+            . ([scriptblock]::Create($NormalizeDefinitionText))
             . ([scriptblock]::Create($DefinitionText))
             Open-DirectoryMutationGuard `
                 -Path $Path `
@@ -2103,6 +2111,7 @@ try {
                 -GuardsByPath $GuardsByPath `
                 -RunId 'lease-probe'
         } `
+            $normalizeDirectoryNode.Extent.Text `
             $directoryMutationGuardNode.Extent.Text `
             $testerLeaseProbeDirectory `
             $testerDirectoryLease `
