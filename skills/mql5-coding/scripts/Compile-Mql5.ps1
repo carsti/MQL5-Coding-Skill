@@ -56,6 +56,7 @@ $pathMutexHeld = $false
 $identityMutex = $null
 $identityMutexHeld = $false
 $sourceParentLease = $null
+$sourceReadLease = $null
 $compileLaunch = $null
 $compileJobEmpty = $true
 
@@ -433,6 +434,26 @@ try {
         throw "Source must be an .mq5 file: $resolvedSource"
     }
 
+    # Detect the logical MQL5 root before canonicalizing a source reached
+    # through a junction. The include root and source target are independent.
+    if (-not [string]::IsNullOrWhiteSpace($IncludePath)) {
+        $includeItem = Get-Item -LiteralPath $IncludePath -ErrorAction Stop
+        if (-not $includeItem.PSIsContainer) {
+            throw "Include path must be an MQL5 root directory: $IncludePath"
+        }
+        $resolvedInclude = $includeItem.FullName
+    }
+    else {
+        $logicalDirectory = (Get-Item -LiteralPath $resolvedSource).Directory
+        while ($null -ne $logicalDirectory) {
+            if ($logicalDirectory.Name -eq 'MQL5') {
+                $resolvedInclude = $logicalDirectory.FullName
+                break
+            }
+            $logicalDirectory = $logicalDirectory.Parent
+        }
+    }
+
     $initialSourceIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity(
         $resolvedSource
     )
@@ -449,24 +470,6 @@ try {
     }
     $resolvedSource = [System.IO.Path]::GetFullPath($canonicalSource)
     $sourceParentPath = [System.IO.Path]::GetDirectoryName($resolvedSource)
-
-    if (-not [string]::IsNullOrWhiteSpace($IncludePath)) {
-        $includeItem = Get-Item -LiteralPath $IncludePath -ErrorAction Stop
-        if (-not $includeItem.PSIsContainer) {
-            throw "Include path must be an MQL5 root directory: $IncludePath"
-        }
-        $resolvedInclude = $includeItem.FullName
-    }
-    else {
-        $directory = (Get-Item -LiteralPath $resolvedSource).Directory
-        while ($null -ne $directory) {
-            if ($directory.Name -eq 'MQL5') {
-                $resolvedInclude = $directory.FullName
-                break
-            }
-            $directory = $directory.Parent
-        }
-    }
 
     $resolvedMetaEditor = Resolve-MetaEditorExecutable -RequestedPath $MetaEditorPath
     $artifactPath = [System.IO.Path]::ChangeExtension($resolvedSource, '.ex5')
@@ -489,11 +492,12 @@ try {
         $false,
         "Global\CodexMqlCompile_$identityHash"
     )
-    $lockDeadline = [datetime]::UtcNow.AddSeconds(
+    $lockBudget = [TimeSpan]::FromSeconds(
         [Math]::Min(30, $TimeoutSeconds)
     )
+    $lockTimer = [Diagnostics.Stopwatch]::StartNew()
 
-    $pathWait = $lockDeadline - [datetime]::UtcNow
+    $pathWait = $lockBudget - $lockTimer.Elapsed
     if ($pathWait -lt [TimeSpan]::Zero) {
         $pathWait = [TimeSpan]::Zero
     }
@@ -507,7 +511,7 @@ try {
         throw "Another compilation is already using this source file: $resolvedSource"
     }
 
-    $identityWait = $lockDeadline - [datetime]::UtcNow
+    $identityWait = $lockBudget - $lockTimer.Elapsed
     if ($identityWait -lt [TimeSpan]::Zero) {
         $identityWait = [TimeSpan]::Zero
     }
@@ -521,23 +525,16 @@ try {
         throw "Another compilation is already using this source file: $resolvedSource"
     }
 
-    $revalidationLease = $null
-    try {
-        $revalidationLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
-            $sourceParentPath
-        )
-        if ($revalidationLease.Identity -cne $sourceParentLease.Identity -or
-            -not $revalidationLease.FinalPath.Equals(
-                $sourceParentLease.FinalPath,
-                [StringComparison]::OrdinalIgnoreCase
-            )) {
-            throw 'Source directory changed while compilation locks were being acquired.'
-        }
-    }
-    finally {
-        if ($null -ne $revalidationLease) {
-            $revalidationLease.Dispose()
-        }
+    $sourceReadLease = [IO.File]::Open(
+        $resolvedSource,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::Read,
+        [IO.FileShare]::Read
+    )
+    if ([Mql5Coding.CompilerProcessJob]::GetHandleIdentity(
+            $sourceReadLease.SafeFileHandle
+        ) -cne $initialSourceIdentity) {
+        throw 'Source file changed while compilation locks were being acquired.'
     }
 
     $artifactSnapshot = Get-ArtifactState -LiteralPath $artifactPath
@@ -793,6 +790,20 @@ finally {
                 $errorMessage = "$errorMessage Log handling error: $logCompletionError"
             }
         }
+    }
+
+    if ($null -ne $sourceReadLease) {
+        try {
+            $sourceReadLease.Dispose()
+        }
+        catch {
+            $exitCode = $ExitToolError
+            $status = 'tool_error'
+            if ([string]::IsNullOrWhiteSpace($errorMessage)) {
+                $errorMessage = "Could not release the source-file read lease: $($_.Exception.Message)"
+            }
+        }
+        $sourceReadLease = $null
     }
 
     if ($null -ne $sourceParentLease) {

@@ -273,6 +273,16 @@ Assert-PowerShellParses -Path $compiler
 if (-not ('Mql5Coding.CompilerProcessJob' -as [type])) {
     Add-Type -Path $compilerProcessJobSource
 }
+if (-not ('Mql5Coding.JobProcessLaunch' -as [type])) {
+    $runnerTextForNativeType = Get-Content -LiteralPath $runner -Raw
+    $runnerTypeMatch = [regex]::Match(
+        $runnerTextForNativeType,
+        "(?s)Add-Type\s+-TypeDefinition\s+@'\r?\n(?<source>.*?)\r?\n'@"
+    )
+    Assert-True -Condition $runnerTypeMatch.Success `
+        -Message 'The tester native helper source could not be extracted for lease tests.'
+    Add-Type -TypeDefinition $runnerTypeMatch.Groups['source'].Value
+}
 
 $skillText = Get-Content -LiteralPath (Join-Path $skillRoot 'SKILL.md') -Raw
 $referenceText = Get-Content -LiteralPath (Join-Path $skillRoot 'references\strategy-tester.md') -Raw
@@ -1085,6 +1095,92 @@ try {
     [IO.Directory]::Move($leaseProbeRenamed, $leaseProbeDirectory)
     Remove-Item -LiteralPath $leaseProbeDirectory -Force
 
+    $ancestorLeaseRoot = Join-Path $testRoot 'compile-ancestor-probe'
+    $ancestorLeaseChild = Join-Path $ancestorLeaseRoot 'child'
+    $ancestorLeaseRenamed = Join-Path $testRoot 'compile-ancestor-probe-renamed'
+    [IO.Directory]::CreateDirectory($ancestorLeaseChild) | Out-Null
+    $ancestorDirectoryLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
+        $ancestorLeaseChild
+    )
+    $ancestorLeaseBlockedRename = $false
+    try {
+        try {
+            [IO.Directory]::Move($ancestorLeaseRoot, $ancestorLeaseRenamed)
+        }
+        catch {
+            $ancestorLeaseBlockedRename = $true
+        }
+        Assert-True -Condition $ancestorLeaseBlockedRename `
+            -Message 'A compiler lease on a descendant allowed an ancestor directory to be renamed.'
+    }
+    finally {
+        $ancestorDirectoryLease.Dispose()
+    }
+    [IO.Directory]::Move($ancestorLeaseRoot, $ancestorLeaseRenamed)
+    [IO.Directory]::Move($ancestorLeaseRenamed, $ancestorLeaseRoot)
+    Remove-Item -LiteralPath $ancestorLeaseRoot -Recurse -Force
+
+    $testerLeaseProbeDirectory = Join-Path $testRoot 'tester-lease-probe'
+    $testerLeaseProbeRenamed = Join-Path $testRoot 'tester-lease-probe-renamed'
+    [IO.Directory]::CreateDirectory($testerLeaseProbeDirectory) | Out-Null
+    $testerDirectoryLease = [Mql5Coding.JobProcessLaunch]::OpenDirectoryComponentLease(
+        $testerLeaseProbeDirectory
+    )
+    $testerLeaseBlockedRename = $false
+    try {
+        try {
+            [IO.Directory]::Move(
+                $testerLeaseProbeDirectory,
+                $testerLeaseProbeRenamed
+            )
+        }
+        catch {
+            $testerLeaseBlockedRename = $true
+        }
+        Assert-True -Condition $testerLeaseBlockedRename `
+            -Message 'A held tester path-entry lease allowed its directory to be renamed.'
+    }
+    finally {
+        $testerDirectoryLease.Dispose()
+    }
+    [IO.Directory]::Move(
+        $testerLeaseProbeDirectory,
+        $testerLeaseProbeRenamed
+    )
+    [IO.Directory]::Move(
+        $testerLeaseProbeRenamed,
+        $testerLeaseProbeDirectory
+    )
+    Remove-Item -LiteralPath $testerLeaseProbeDirectory -Force
+
+    $testerFileProbe = Join-Path $testRoot 'tester-file-lease-probe.log'
+    $testerFileProbeRenamed = Join-Path $testRoot 'tester-file-lease-probe-renamed.log'
+    [IO.File]::WriteAllText(
+        $testerFileProbe,
+        'probe',
+        [Text.Encoding]::ASCII
+    )
+    $testerFileLease = [Mql5Coding.JobProcessLaunch]::OpenFileLeafLease(
+        $testerFileProbe
+    )
+    $testerFileLeaseBlockedRename = $false
+    try {
+        try {
+            [IO.File]::Move($testerFileProbe, $testerFileProbeRenamed)
+        }
+        catch {
+            $testerFileLeaseBlockedRename = $true
+        }
+        Assert-True -Condition $testerFileLeaseBlockedRename `
+            -Message 'A held tester file-entry lease allowed its file to be renamed.'
+    }
+    finally {
+        $testerFileLease.Dispose()
+    }
+    [IO.File]::Move($testerFileProbe, $testerFileProbeRenamed)
+    [IO.File]::Move($testerFileProbeRenamed, $testerFileProbe)
+    Remove-Item -LiteralPath $testerFileProbe -Force
+
     $backupNameProbe = Join-Path $compileDirectory 'a.log'
     [IO.File]::WriteAllText($backupNameProbe, 'probe', [Text.Encoding]::ASCII)
     $boundedBackupPath = & {
@@ -1312,7 +1408,11 @@ try {
     Assert-True -Condition ($earlyExit.StandardOutput -notmatch 'MQL5_COMPILE_ARTIFACT=') `
         -Message 'Early compiler exit incorrectly reported an artifact.'
 
-    $compileAliasDirectory = Join-Path $testRoot 'compile-junction'
+    $logicalMql5Root = Join-Path $testRoot 'logical-terminal\MQL5'
+    [IO.Directory]::CreateDirectory(
+        (Join-Path $logicalMql5Root 'Experts')
+    ) | Out-Null
+    $compileAliasDirectory = Join-Path $logicalMql5Root 'Experts\compile-junction'
     $null = New-Item -ItemType Junction -Path $compileAliasDirectory -Target $compileDirectory
     try {
         $compileAliasLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
@@ -1432,6 +1532,9 @@ try {
             $aliasCompilerArguments -contains "/compile:$compileSource" -and
             $aliasCompilerArguments -notcontains "/compile:$compileAliasSource"
         ) -Message 'Compiler did not pass its pinned canonical source path to MetaEditor.'
+        Assert-True -Condition (
+            $aliasCompilerArguments -contains "/include:$logicalMql5Root"
+        ) -Message 'Canonical source pinning lost the logical MQL5 include root.'
     }
     finally {
         if (Test-Path -LiteralPath $compileAliasDirectory) {

@@ -59,6 +59,8 @@ namespace Mql5Coding
         private const int JobObjectExtendedLimitInformationClass = 9;
         private const uint WaitObject0 = 0x00000000;
         private const uint WaitFailed = 0xFFFFFFFF;
+        private const uint FileListDirectory = 0x00000001;
+        private const uint GenericRead = 0x80000000;
         private const uint ShareReadWrite = 0x00000003;
         private const uint OpenExisting = 3;
         private const uint FileAttributeDirectory = 0x00000010;
@@ -474,7 +476,7 @@ namespace Mql5Coding
 
             SafeFileHandle handle = OpenPathHandle(
                 path,
-                0,
+                requireDirectory ? FileListDirectory : GenericRead,
                 ShareReadWrite,
                 IntPtr.Zero,
                 OpenExisting,
@@ -1374,15 +1376,13 @@ function Open-NewOutputDirectoryClaim {
         [Parameter(Mandatory)][string]$RunId
     )
 
-    if (Test-Path -LiteralPath $Path) {
-        throw "OutputDirectory must not already exist: $Path"
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+        throw "OutputDirectory must be created and path-lease validated before it is claimed: $Path"
     }
-    $parent = Split-Path -Parent $Path
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
-        throw "OutputDirectory parent does not exist: $parent"
+    if (@(Get-ChildItem -LiteralPath $Path -Force).Count -ne 0) {
+        throw "OutputDirectory was populated before exclusive ownership was established: $Path"
     }
 
-    [IO.Directory]::CreateDirectory($Path) | Out-Null
     $claimPath = Join-Path $Path '.mql5-coding-smoke.claim'
     $ownerPath = Join-Path $Path '.mql5-coding-smoke.owner'
     $stream = $null
@@ -2488,9 +2488,10 @@ try {
         throw "OutputDirectory parent does not exist: $outputParent"
     }
     $null = Open-NonReparseDirectoryChain -Path $outputParent -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
-    $outputClaim = Open-NewOutputDirectoryClaim -Path $output -RunId $runId
+    [IO.Directory]::CreateDirectory($output) | Out-Null
     $outputCreated = $true
     $null = Open-NonReparseDirectoryChain -Path $output -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
+    $outputClaim = Open-NewOutputDirectoryClaim -Path $output -RunId $runId
     $resultPath = Join-Path $output 'smoke-result.json'
 
     $binding = Resolve-TerminalBinding -RequestedTerminalPath $TerminalPath -RequestedDataPath $TerminalDataPath

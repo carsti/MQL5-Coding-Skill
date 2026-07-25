@@ -20,6 +20,7 @@ namespace Mql5Coding
         private const int JobObjectExtendedLimitInformationClass = 9;
         private const uint WaitObject0 = 0x00000000;
         private const uint WaitFailed = 0xFFFFFFFF;
+        private const uint FileListDirectory = 0x00000001;
         private const uint ShareReadWrite = 0x00000003;
         private const uint ShareReadWriteDelete = 0x00000007;
         private const uint OpenExisting = 3;
@@ -320,6 +321,13 @@ namespace Mql5Coding
             }
         }
 
+        public static string GetHandleIdentity(SafeFileHandle handle)
+        {
+            if (handle == null || handle.IsInvalid || handle.IsClosed)
+                throw new ArgumentException("An open file handle is required.", "handle");
+            return ReadFileIdentity(handle);
+        }
+
         public static DirectoryIdentityLease OpenDirectoryIdentityLease(string path)
         {
             if (String.IsNullOrWhiteSpace(path))
@@ -327,7 +335,7 @@ namespace Mql5Coding
 
             SafeFileHandle handle = OpenPathHandle(
                 path,
-                0,
+                FileListDirectory,
                 ShareReadWrite,
                 IntPtr.Zero,
                 OpenExisting,
