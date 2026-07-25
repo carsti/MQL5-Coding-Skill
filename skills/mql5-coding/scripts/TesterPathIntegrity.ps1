@@ -83,6 +83,17 @@ function Resolve-ExistingFile {
 function Assert-StableFixedLocalVolumePath {
     param([Parameter(Mandatory)][string]$Path)
 
+    $volumeIdentityCacheVariable = Get-Variable `
+        -Name 'fixedLocalVolumeIdentities' `
+        -Scope Script `
+        -ErrorAction SilentlyContinue
+    if (
+        $null -eq $volumeIdentityCacheVariable -or
+        $null -eq $volumeIdentityCacheVariable.Value
+    ) {
+        $script:fixedLocalVolumeIdentities = @{}
+    }
+
     $full = [IO.Path]::GetFullPath($Path)
     try {
         $identity = [Mql5Coding.JobProcessLaunch]::GetFixedLocalVolumeIdentity(

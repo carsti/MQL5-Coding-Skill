@@ -460,6 +460,12 @@ Assert-True -Condition (
     $runnerScriptText -match "TesterPathIntegrity\.ps1" -and
     $runnerScriptText -match "TesterEvidence\.ps1"
 ) -Message 'The Strategy Tester runner has regressed to a monolithic implementation.'
+Assert-True -Condition (
+    $testerPathIntegrityText -match "-Name 'fixedLocalVolumeIdentities'" -and
+    $testerPathIntegrityText -match '-Scope Script' -and
+    $testerPathIntegrityText -match
+        '\$script:fixedLocalVolumeIdentities\s*=\s*@\{\}'
+) -Message 'The path-integrity helper does not initialize its script-scope volume cache.'
 $protectJournalNode = $runnerAst.Find(
     {
         param($node)
