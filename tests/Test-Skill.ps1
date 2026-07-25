@@ -462,6 +462,37 @@ $directoryMutationGuardNode = $runnerAst.Find(
 )
 Assert-True -Condition ($null -ne $directoryMutationGuardNode) `
     -Message 'The directory mutation-guard function was not found for regression testing.'
+$absolutePathNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Test-IsAbsoluteLocalDrivePath'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $absolutePathNode) `
+    -Message 'The absolute local-drive path predicate was not found.'
+$absolutePathProbe = & {
+    param([Parameter(Mandatory = $true)][string]$DefinitionText)
+    . ([scriptblock]::Create($DefinitionText))
+    $valid = @('C:\absolute\path', 'z:/absolute/path')
+    $invalid = @('C:relative', 'C:', '\root-relative', '\\server\share', 'relative')
+    return [pscustomobject]@{
+        valid_count = @($valid | Where-Object {
+                Test-IsAbsoluteLocalDrivePath -Path $_
+            }).Count
+        invalid_accepted = @($invalid | Where-Object {
+                Test-IsAbsoluteLocalDrivePath -Path $_
+            }).Count
+    }
+} $absolutePathNode.Extent.Text
+Assert-True -Condition (
+    $absolutePathProbe.valid_count -eq 2 -and
+    $absolutePathProbe.invalid_accepted -eq 0 -and
+    $runnerText -notmatch '\[IO\.Path\]::IsPathRooted'
+) -Message 'Drive-relative, root-relative, or UNC input passed the absolute-path contract.'
 $resultWriteIndex = $runnerText.LastIndexOf(
     'Write-JsonFile -Value $result -Path $resultPath',
     [StringComparison]::Ordinal
@@ -522,7 +553,15 @@ $redactionProbe = & {
         'ERROR password="quoted\"leaked-tail"',
         'ERROR -password:colon-password',
         'ERROR --token:colon-token',
-        'ERROR --authorization:Basic colon-authorization'
+        'ERROR --authorization:Basic colon-authorization',
+        'ERROR {\"password\":\"json-password\"}',
+        'ERROR {\"token\":\"json-token\"}',
+        'ERROR {\"apiKey\":\"json-api-key\"}',
+        'ERROR dbPassword=camel-password',
+        'ERROR clientSecret=camel-client-secret',
+        'ERROR authToken=camel-auth-token',
+        'ERROR oauthToken=camel-oauth-token',
+        'ERROR authorizationHeader: Basic header-secret'
     )
     $negative = @(
         'ERROR token refresh failed',
@@ -567,7 +606,9 @@ foreach ($redactedLine in @($redactionProbe.positive)) {
             'cli-token|dotted-secret|hunter2|sk-secret|sk-double-space|sk-tab|' +
             'multi word secret|client-secret-value|invalid-secret|rejected-P@ssw0rd|' +
             'missing-value|token-value|secret-value|auth-value|dXNlcjpwYXNz|leaked-tail|' +
-            'colon-password|colon-token|colon-authorization'
+            'colon-password|colon-token|colon-authorization|json-password|json-token|' +
+            'json-api-key|camel-password|camel-client-secret|camel-auth-token|' +
+            'camel-oauth-token|header-secret'
         )
     ) -Message "A prefixed secret was not redacted: $redactedLine"
 }

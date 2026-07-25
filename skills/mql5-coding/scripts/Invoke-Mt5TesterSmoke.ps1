@@ -909,12 +909,21 @@ function Assert-SafeIniValue {
     }
 }
 
+function Test-IsAbsoluteLocalDrivePath {
+    param([Parameter(Mandatory)][string]$Path)
+
+    return (
+        -not [string]::IsNullOrWhiteSpace($Path) -and
+        $Path -cmatch '\A[A-Za-z]:[\\/]'
+    )
+}
+
 function Resolve-ExistingFile {
     param(
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)][string]$Name
     )
-    if (-not [IO.Path]::IsPathRooted($Path)) {
+    if (-not (Test-IsAbsoluteLocalDrivePath -Path $Path)) {
         throw "$Name must be an absolute path."
     }
     $full = [IO.Path]::GetFullPath($Path)
@@ -959,7 +968,7 @@ function Open-NonReparseDirectoryChain {
         [Parameter(Mandatory)][hashtable]$LeasesByPath
     )
 
-    if (-not [IO.Path]::IsPathRooted($Path)) {
+    if (-not (Test-IsAbsoluteLocalDrivePath -Path $Path)) {
         throw "BLOCKED: Security-sensitive directories must use absolute local-drive paths: $Path"
     }
     $full = [IO.Path]::GetFullPath($Path)
@@ -1030,7 +1039,7 @@ function Open-NonReparseFileLeaf {
         [Parameter(Mandatory)][hashtable]$LeasesByPath
     )
 
-    if (-not [IO.Path]::IsPathRooted($Path)) {
+    if (-not (Test-IsAbsoluteLocalDrivePath -Path $Path)) {
         throw "BLOCKED: Security-sensitive files must use absolute local-drive paths: $Path"
     }
     $full = [IO.Path]::GetFullPath($Path)
@@ -1171,7 +1180,7 @@ function ConvertFrom-TerminalOriginText {
     $origin = $Text.Trim()
     if ([string]::IsNullOrWhiteSpace($origin) -or
         $origin -match '[\r\n]' -or
-        -not [IO.Path]::IsPathRooted($origin)) {
+        -not (Test-IsAbsoluteLocalDrivePath -Path $origin)) {
         throw "Terminal origin file must contain exactly one absolute install-directory path: $SourcePath"
     }
     return [IO.Path]::GetFullPath($origin)
@@ -1206,7 +1215,7 @@ function Resolve-TerminalBinding {
     }
 
     if (-not [string]::IsNullOrWhiteSpace($RequestedDataPath)) {
-        if (-not [IO.Path]::IsPathRooted($RequestedDataPath)) {
+        if (-not (Test-IsAbsoluteLocalDrivePath -Path $RequestedDataPath)) {
             throw 'TerminalDataPath must be an absolute path.'
         }
         $requestedDataFull = [IO.Path]::GetFullPath($RequestedDataPath)
@@ -2382,6 +2391,15 @@ function Protect-JournalLine {
         [string[]]$SensitiveValues = @()
     )
     $redacted = $Line
+    $secretLabelPattern =
+        '(?:[A-Za-z0-9]+[._-])*' +
+            '(?:' +
+                '[A-Za-z0-9]*(?:password|passwd|pwd|token|secret|authorization|auth|' +
+                    'apikey|authorizationheader)' +
+                '|access[ \t._-]+token|refresh[ \t._-]+token|' +
+                    'api[ \t._-]+key|client[ \t._-]+secret' +
+            ')'
+    $secretLabelClosingQuotePattern = '(?:\\*["''])?'
     $orderedSensitiveValues = @(
         $SensitiveValues |
             Where-Object { -not [string]::IsNullOrEmpty($_) } |
@@ -2424,30 +2442,21 @@ function Protect-JournalLine {
     )
     $redacted = [regex]::Replace(
         $redacted,
-        '(?i)(?<![A-Za-z0-9_.-])' +
-            '(?:' +
-                '(?:[A-Za-z0-9]+[._-])*' +
-                '(?:password|passwd|pwd|access(?:[ \t._-]+)?token|refresh(?:[ \t._-]+)?token|' +
-                    'token|api(?:[ \t._-]+)?key|client(?:[ \t._-]+)?secret|authorization|auth|secret)' +
-                '["'']?\s*[:=]\s*' +
-                '[^\r\n]*' +
-                '|' +
-                '--?(?:[A-Za-z0-9]+[._-])*' +
-                '(?:password|passwd|pwd|access(?:[ \t._-]+)?token|refresh(?:[ \t._-]+)?token|' +
-                    'token|api(?:[ \t._-]+)?key|client(?:[ \t._-]+)?secret|authorization|auth|secret)' +
-                '(?:\s+|\s*[:=]\s*)' +
-                '[^\r\n]*' +
-            ')',
+        '(?i)(?<![A-Za-z0-9_.-])(?:' +
+            $secretLabelPattern +
+            $secretLabelClosingQuotePattern +
+            '\s*[:=]\s*[^\r\n]*' +
+            '|--?' +
+            $secretLabelPattern +
+            '(?:\s+|\s*[:=]\s*)[^\r\n]*' +
+        ')',
         '<SECRET>=<REDACTED>'
     )
     $bareSecretPattern =
         '(?i)(?<![A-Za-z0-9_.-])' +
-            '(?:[A-Za-z0-9]+[._-])*' +
-            '(?:password|passwd|pwd|access(?:[ \t._-]+)?token|refresh(?:[ \t._-]+)?token|' +
-                'token|api(?:[ \t._-]+)?key|client(?:[ \t._-]+)?secret|authorization|' +
-                'auth|secret)' +
-            '["'']?\s+' +
-            '(?<bareSecretValue>[^\r\n]+)'
+            $secretLabelPattern +
+            $secretLabelClosingQuotePattern +
+            '\s+(?<bareSecretValue>[^\r\n]+)'
     $knownBareSecretDiagnosticPattern =
         '(?i)^(?:is\s+)?(?:authentication\s+failed|refresh\s+failed|not\s+configured|' +
             'missing|required|invalid|expired|rejected|failed|failure|denied|disabled|' +
@@ -2926,7 +2935,7 @@ try {
         $presetHash = Get-FileSha256 -Path $preset
     }
 
-    if (-not [IO.Path]::IsPathRooted($OutputDirectory)) {
+    if (-not (Test-IsAbsoluteLocalDrivePath -Path $OutputDirectory)) {
         throw 'OutputDirectory must be an absolute path.'
     }
     $output = [IO.Path]::GetFullPath($OutputDirectory)
