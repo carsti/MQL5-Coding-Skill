@@ -349,9 +349,9 @@ $redactionProbe = & {
         selected = @(
             Select-JournalEvidence `
                 -Text (
-                    "ERROR OPENAI_API_KEY=selected-secret`r`n" +
-                    "ERROR password selected-password`r`n" +
-                    'ERROR "api key": "selected-api-key"' + "`r`n" +
+                    "ERROR A OPENAI_API_KEY=selected-secret`r`n" +
+                    "ERROR B password selected-password`r`n" +
+                    'ERROR C "api key": "selected-api-key"' + "`r`n" +
                     'OK'
                 ) `
                 -Patterns @('(?i)error')
