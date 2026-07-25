@@ -72,6 +72,44 @@ function Assert-PowerShellParses {
     }
 }
 
+function Test-PathInChildPowerShell {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Leaf', 'Container')]
+        [string]$PathType
+    )
+
+    $escapedPath = $Path.Replace("'", "''")
+    $commandText = (
+        "if (Test-Path -LiteralPath '$escapedPath' -PathType $PathType) { exit 0 } " +
+        'else { exit 1 }'
+    )
+    $encodedCommand = [Convert]::ToBase64String(
+        [Text.Encoding]::Unicode.GetBytes($commandText)
+    )
+    $startInfo = New-Object Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $hostExecutable
+    $startInfo.Arguments = (
+        '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' +
+        $encodedCommand
+    )
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $startInfo
+    try {
+        $null = $process.Start()
+        $process.WaitForExit()
+        return $process.ExitCode -eq 0
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
 function Invoke-RunnerCase {
     param(
         [Parameter(Mandatory = $true)]
@@ -382,6 +420,7 @@ namespace Mql5Coding
 $skillText = Get-Content -LiteralPath (Join-Path $skillRoot 'SKILL.md') -Raw
 $referenceText = Get-Content -LiteralPath (Join-Path $skillRoot 'references\strategy-tester.md') -Raw
 $compilerText = Get-Content -LiteralPath $compiler -Raw
+$runnerText = Get-Content -LiteralPath $runner -Raw
 $runnerTokens = $null
 $runnerParseErrors = $null
 $runnerAst = [Management.Automation.Language.Parser]::ParseFile(
@@ -423,6 +462,37 @@ $directoryMutationGuardNode = $runnerAst.Find(
 )
 Assert-True -Condition ($null -ne $directoryMutationGuardNode) `
     -Message 'The directory mutation-guard function was not found for regression testing.'
+$resultWriteIndex = $runnerText.LastIndexOf(
+    'Write-JsonFile -Value $result -Path $resultPath',
+    [StringComparison]::Ordinal
+)
+$outputLeaseReverifyIndex = $runnerText.LastIndexOf(
+    '$outputDirectoryLease.VerifyStillNonReparseDirectory()',
+    [StringComparison]::Ordinal
+)
+$mutationGuardReleaseIndex = $runnerText.LastIndexOf(
+    '$directoryMutationGuards[$index].stream.Dispose()',
+    [StringComparison]::Ordinal
+)
+$outputClaimReleaseIndex = $runnerText.LastIndexOf(
+    '$outputClaim.stream.Dispose()',
+    [StringComparison]::Ordinal
+)
+$stagingPreservationProbeIndex = $runnerText.LastIndexOf(
+    'if (Test-Path -LiteralPath $directory -PathType Container)',
+    [StringComparison]::Ordinal
+)
+Assert-True -Condition (
+    $resultWriteIndex -ge 0 -and
+    $outputLeaseReverifyIndex -ge 0 -and
+    $outputLeaseReverifyIndex -lt $resultWriteIndex
+) -Message 'The output-directory lease is not reverified immediately before result creation.'
+Assert-True -Condition (
+    $mutationGuardReleaseIndex -gt $resultWriteIndex -and
+    $mutationGuardReleaseIndex -gt $stagingPreservationProbeIndex
+) -Message 'Directory mutation guards are released before pathname work is complete.'
+Assert-True -Condition ($outputClaimReleaseIndex -gt $resultWriteIndex) `
+    -Message 'The output-directory claim is released before the result is created.'
 $redactionProbe = & {
     param($ProtectDefinition, $SelectDefinition)
     . ([scriptblock]::Create($ProtectDefinition))
@@ -441,7 +511,10 @@ $redactionProbe = & {
         'ERROR api  key: sk-double-space',
         "ERROR api`tkey=sk-tab",
         'ERROR DB_PASSWORD=multi word secret',
-        'ERROR client secret client-secret-value'
+        'ERROR client secret client-secret-value',
+        'ERROR password invalid-secret',
+        'ERROR password rejected-P@ssw0rd',
+        'ERROR client secret missing-value'
     )
     $negative = @(
         'ERROR token refresh failed',
@@ -449,6 +522,8 @@ $redactionProbe = & {
         'ERROR password authentication failed',
         'ERROR client secret missing',
         'ERROR api key not configured',
+        'ERROR password is not configured',
+        'ERROR api key is not configured',
         'ERROR passwordless mode active',
         'ERROR tokenizer=value'
     )
@@ -480,7 +555,8 @@ foreach ($redactedLine in @($redactionProbe.positive)) {
         $redactedLine -notmatch (
             '(?i)sk-openai-secret|azure-secret|db-secret|authorization-secret|' +
             'cli-token|dotted-secret|hunter2|sk-secret|sk-double-space|sk-tab|' +
-            'multi word secret|client-secret-value'
+            'multi word secret|client-secret-value|invalid-secret|rejected-P@ssw0rd|' +
+            'missing-value'
         )
     ) -Message "A prefixed secret was not redacted: $redactedLine"
 }
@@ -1284,23 +1360,45 @@ try {
         $rawAliasDataPath = $rawAliasRoot + $dataPath.Substring($testVolumeRoot.Length)
         $rawAliasExpert = $rawAliasRoot + $expert.Substring($testVolumeRoot.Length)
         $rawAliasPreset = $rawAliasRoot + $preset.Substring($testVolumeRoot.Length)
+        foreach ($probe in @(
+                [pscustomobject]@{ path = $rawAliasTerminal; type = 'Leaf'; name = 'terminal' },
+                [pscustomobject]@{ path = $rawAliasDataPath; type = 'Container'; name = 'data directory' },
+                [pscustomobject]@{ path = $rawAliasExpert; type = 'Leaf'; name = 'expert' },
+                [pscustomobject]@{ path = $rawAliasPreset; type = 'Leaf'; name = 'preset' }
+            )) {
+            Assert-True -Condition (
+                Test-PathInChildPowerShell -Path $probe.path -PathType $probe.type
+            ) -Message (
+                "The raw DOS-device $($probe.name) path did not resolve in the child " +
+                'PowerShell context, so the mount-manager policy was not exercised.'
+            )
+        }
         $rawAliasRunnerBlocked = Invoke-RunnerCase `
             -Name 'preflight-raw-dos-device-alias' `
             -Mode PreflightOnly `
             -TerminalPath $rawAliasTerminal `
             -TerminalDataPath $rawAliasDataPath `
-            -ExpertPath $rawAliasExpert `
-            -PresetPath $rawAliasPreset `
+            -ExpertPath $expert `
+            -PresetPath $preset `
             -ExpertSha256 $expertHash
-        Assert-True -Condition ($rawAliasRunnerBlocked.ExitCode -in @(2, 4)) `
+        Assert-True -Condition ($rawAliasRunnerBlocked.ExitCode -eq 4) `
             -Message (
-                'A raw DOS-device alias reached tester preflight. ' +
+                'A raw DOS-device alias did not produce the required blocked exit. ' +
+                "exit=$($rawAliasRunnerBlocked.ExitCode); " +
                 "stderr=$($rawAliasRunnerBlocked.StandardError)"
             )
         Assert-True -Condition (
-            $rawAliasRunnerBlocked.StandardError -match
-                '(?i)mount manager|direct fixed local volume|mapped|redirected|cannot find path|does not exist'
-        ) -Message 'Raw DOS-device rejection did not explain the unsafe drive mapping.'
+            $null -ne $rawAliasRunnerBlocked.Result -and
+            [string]$rawAliasRunnerBlocked.Result.status -ceq 'blocked' -and
+            -not [bool]$rawAliasRunnerBlocked.Result.process.execution_attempted
+        ) -Message 'Raw DOS-device rejection did not produce a pre-execution blocked result.'
+        $rawAliasDiagnostic = @(
+            $rawAliasRunnerBlocked.StandardError,
+            @($rawAliasRunnerBlocked.Result.errors) -join ' '
+        ) -join ' '
+        Assert-True -Condition (
+            $rawAliasDiagnostic -match '(?i)mount manager|direct fixed local volume'
+        ) -Message 'Raw DOS-device rejection did not identify the unsafe volume mapping.'
     }
     finally {
         [Mql5Coding.RawDosDeviceProbe]::Remove(

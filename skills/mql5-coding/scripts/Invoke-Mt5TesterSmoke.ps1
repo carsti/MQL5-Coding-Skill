@@ -2434,19 +2434,31 @@ function Protect-JournalLine {
             ')',
         '<SECRET>=<REDACTED>'
     )
-    $redacted = [regex]::Replace(
-        $redacted,
+    $bareSecretPattern =
         '(?i)(?<![A-Za-z0-9_.-])' +
             '(?:[A-Za-z0-9]+[._-])*' +
             '(?:password|passwd|pwd|access(?:[ \t._-]+)?token|refresh(?:[ \t._-]+)?token|' +
                 'api(?:[ \t._-]+)?key|client(?:[ \t._-]+)?secret)' +
             '["'']?\s+' +
-            '(?:(?:is\s+)(?!(?:authentication|missing|required|invalid|expired|' +
-                'rejected|failed|failure|disabled|enabled|unavailable|empty|absent)\b)|' +
-                '(?!(?:is|authentication|missing|required|invalid|expired|rejected|' +
-                    'failed|failure|disabled|enabled|unavailable|empty|absent|not)\b))' +
-            '(?:"[^"\r\n]*"|''[^''\r\n]*''|[^\r\n,;]+)',
-        '<SECRET>=<REDACTED>'
+            '(?<bareSecretValue>"[^"\r\n]*"|''[^''\r\n]*''|[^\r\n,;]+)'
+    $knownBareSecretDiagnosticPattern =
+        '(?i)^(?:is\s+)?(?:authentication\s+failed|not\s+configured|missing|required|' +
+            'invalid|expired|rejected|failed|failure|disabled|enabled|unavailable|empty|absent)$'
+    $redacted = [regex]::Replace(
+        $redacted,
+        $bareSecretPattern,
+        [Text.RegularExpressions.MatchEvaluator]{
+            param($match)
+            $normalizedValue = [regex]::Replace(
+                $match.Groups['bareSecretValue'].Value.Trim(),
+                '\s+',
+                ' '
+            )
+            if ($normalizedValue -match $knownBareSecretDiagnosticPattern) {
+                return $match.Value
+            }
+            return '<SECRET>=<REDACTED>'
+        }
     )
     $redacted = [regex]::Replace(
         $redacted,
@@ -3997,16 +4009,6 @@ finally {
         }
     }
 
-    for ($index = $directoryMutationGuards.Count - 1; $index -ge 0; $index--) {
-        try {
-            $directoryMutationGuards[$index].stream.Dispose()
-        }
-        catch {
-            $cleanupErrors.Add(
-                "Could not release the directory mutation guard '$($directoryMutationGuards[$index].path)': $($_.Exception.Message)"
-            )
-        }
-    }
 
     $stagingArtifactsExist = (
         $hashBoundStaging.Count -gt 0 -or
@@ -4071,14 +4073,6 @@ finally {
         }
     }
 
-    if ($null -ne $outputClaim) {
-        try {
-            $outputClaim.stream.Dispose()
-        }
-        catch {
-            $cleanupErrors.Add("Could not release the output-directory claim '$($outputClaim.path)': $($_.Exception.Message)")
-        }
-    }
 
     if ($cleanupErrors.Count -gt 0) {
         if ($result.status -ne 'tooling_error') {
@@ -4095,6 +4089,12 @@ finally {
 
     if ($outputCreated -and $null -ne $resultPath) {
         try {
+            Assert-StableFixedLocalVolumePath -Path $output
+            [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
+                $output,
+                $outputDirectoryLease
+            )
+            $outputDirectoryLease.VerifyStillNonReparseDirectory()
             Write-JsonFile -Value $result -Path $resultPath
             $resultWritten = $true
         }
@@ -4109,6 +4109,38 @@ finally {
         [Console]::Error.WriteLine(
             (Protect-JournalLine -Line "MQL5 tester smoke $($result.status): $($errors[$errors.Count - 1])")
         )
+    }
+
+    $postResultReleaseErrors = New-Object 'System.Collections.Generic.List[string]'
+    for ($index = $directoryMutationGuards.Count - 1; $index -ge 0; $index--) {
+        try {
+            $directoryMutationGuards[$index].stream.Dispose()
+        }
+        catch {
+            $postResultReleaseErrors.Add(
+                "Could not release the directory mutation guard '$($directoryMutationGuards[$index].path)': $($_.Exception.Message)"
+            )
+        }
+    }
+    if ($null -ne $outputClaim) {
+        try {
+            $outputClaim.stream.Dispose()
+        }
+        catch {
+            $postResultReleaseErrors.Add(
+                "Could not release the output-directory claim '$($outputClaim.path)': $($_.Exception.Message)"
+            )
+        }
+    }
+    if ($postResultReleaseErrors.Count -gt 0) {
+        if (-not $resultWritten) {
+            $exitCode = 2
+        }
+        foreach ($releaseError in $postResultReleaseErrors) {
+            [Console]::Error.WriteLine(
+                (Protect-JournalLine -Line "MQL5 tester smoke warning: $releaseError")
+            )
+        }
     }
 
     $pathLeaseReleaseError = $null
