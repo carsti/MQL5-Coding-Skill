@@ -770,10 +770,49 @@ Assert-True -Condition (
     $compilerProcessJobText -match 'TryOpenPinnedOutputFileIdentityLease' -and
     $compilerProcessJobText -match 'SetFileInformationByHandle' -and
     $compilerProcessJobText -match 'public void RenameTo' -and
+    $compilerProcessJobText -match 'structureLength = IntPtr\.Size == 8 \? 24 : 16' -and
+    $compilerProcessJobText -match 'bufferLength = checked\(structureLength \+ nameBytes\)' -and
+    $compilerProcessJobText -match 'Marshal\.WriteInt16\(\s*buffer,\s*nameOffset \+ nameBytes,\s*0\)' -and
     $compilerProcessJobText -match 'public void Delete' -and
     $compilerText -notmatch 'Test-Path -LiteralPath \$artifactPath' -and
     $compilerText -notmatch '\[System\.IO\.File\]::(?:Move|Delete)'
 ) -Message 'Compiler outputs are not protected by no-follow, handle-bound lifecycle operations.'
+$quoteHelperIndex = $compilerText.IndexOf(
+    'function ConvertTo-WindowsCommandLineArgument',
+    [StringComparison]::Ordinal
+)
+$quoteHelperUseIndex = $compilerText.IndexOf(
+    'ConvertTo-WindowsCommandLineArgument -Value $_',
+    [StringComparison]::Ordinal
+)
+Assert-True -Condition (
+    $quoteHelperIndex -ge 0 -and
+    $quoteHelperUseIndex -gt $quoteHelperIndex
+) -Message 'The compiler command-line quote helper is missing or defined after its use.'
+$artifactPreMovePinIndex = $compilerText.IndexOf(
+    '$artifactProbePinnedLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(',
+    [StringComparison]::Ordinal
+)
+$artifactMoveIndex = $compilerText.IndexOf(
+    '$artifactBackupPath = Move-OriginalArtifactAside',
+    [StringComparison]::Ordinal
+)
+$logPreMovePinIndex = $compilerText.IndexOf(
+    '$logProbePinnedLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(',
+    [StringComparison]::Ordinal
+)
+$logMoveIndex = $compilerText.IndexOf(
+    '$logBackupPath = Move-OriginalLogAside',
+    [StringComparison]::Ordinal
+)
+Assert-True -Condition (
+    $artifactPreMovePinIndex -ge 0 -and
+    $artifactMoveIndex -gt $artifactPreMovePinIndex -and
+    $logPreMovePinIndex -ge 0 -and
+    $logMoveIndex -gt $logPreMovePinIndex -and
+    $compilerText -notmatch '(?s)Move-OriginalArtifactAside.*?TryOpenPinnedOutputFileIdentityLease\(\s*\$artifactBackupPath' -and
+    $compilerText -notmatch '(?s)Move-OriginalLogAside.*?TryOpenPinnedOutputFileIdentityLease\(\s*\$logBackupPath'
+) -Message 'Original compiler outputs are not pinned before their handle-bound backup rename.'
 $resultWriteIndex = $runnerText.LastIndexOf(
     'Write-JsonFile -Value $result -Path $resultPath',
     [StringComparison]::Ordinal
@@ -1668,6 +1707,19 @@ $resolverNode = $compilerAst.Find(
 Assert-True -Condition ($null -ne $resolverNode) `
     -Message 'Resolve-MetaEditorExecutable was not found for discovery regression testing.'
 $resolverDefinitionText = $resolverNode.Extent.Text
+$quoteHelperNode = $compilerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'ConvertTo-WindowsCommandLineArgument'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $quoteHelperNode) `
+    -Message 'ConvertTo-WindowsCommandLineArgument was not found for command-line regression testing.'
+$quoteHelperDefinitionText = $quoteHelperNode.Extent.Text
 $moveLeasedOutputNode = $compilerAst.Find(
     {
         param($node)
@@ -1732,6 +1784,23 @@ Assert-True -Condition (
     $markLaunchUnsafeIndex -ge 0 -and
     $nativeStartIndex -gt $markLaunchUnsafeIndex
 ) -Message 'Compiler launch was not marked unsafe before native process creation.'
+$quoteCases = @(
+    [pscustomobject]@{ Value = ''; Expected = '""' },
+    [pscustomobject]@{ Value = 'plain'; Expected = 'plain' },
+    [pscustomobject]@{
+        Value = '/include:C:\path with space\'
+        Expected = '"/include:C:\path with space\\"'
+    }
+)
+foreach ($quoteCase in $quoteCases) {
+    $quotedValue = & {
+        param($DefinitionText, $Value)
+        . ([scriptblock]::Create($DefinitionText))
+        ConvertTo-WindowsCommandLineArgument -Value $Value
+    } $quoteHelperDefinitionText $quoteCase.Value
+    Assert-True -Condition ([string]$quotedValue -ceq [string]$quoteCase.Expected) `
+        -Message "Compiler command-line quoting changed for '$($quoteCase.Value)'."
+}
 $discoveryResult = & {
     param([Parameter(Mandatory = $true)][string]$DefinitionText)
 
@@ -2399,6 +2468,71 @@ try {
     }
     Remove-Item -LiteralPath $pinnedOutputProbe -Force
 
+    for ($renameLength = 1; $renameLength -le 40; $renameLength++) {
+        $renameSentinel = Join-Path $compileDirectory (
+            'rename-sentinel-{0}.bin' -f $renameLength
+        )
+        $renameSource = Join-Path $compileDirectory (
+            'rename-source-{0}.ex5' -f $renameLength
+        )
+        $renameLeaf = (('z' * $renameLength) + '.lease')
+        $renameDestination = Join-Path $compileDirectory $renameLeaf
+        [IO.File]::WriteAllText(
+            $renameSentinel,
+            ('preserved-{0}' -f $renameLength),
+            [Text.Encoding]::ASCII
+        )
+        $null = New-Item -ItemType HardLink -Path $renameSource -Target $renameSentinel
+        $renameIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity(
+            $renameSentinel
+        )
+        $renameMovableLease = $null
+        $renamePinnedLease = $null
+        try {
+            $renameMovableLease = [Mql5Coding.CompilerProcessJob]::TryOpenMovableOutputFileIdentityLease(
+                $renameSource
+            )
+            $renamePinnedLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(
+                $renameSource
+            )
+            Assert-True -Condition (
+                $null -ne $renameMovableLease -and
+                $null -ne $renamePinnedLease -and
+                [string]$renameMovableLease.Identity -ceq $renameIdentity -and
+                [string]$renamePinnedLease.Identity -ceq $renameIdentity
+            ) -Message 'The varied-length rename fixture could not pin its hard-linked source.'
+            $renameMovableLease.RenameTo($renameDestination)
+            $renamedLeaves = @(
+                Get-ChildItem -LiteralPath $compileDirectory -File |
+                    Where-Object { $_.Name.StartsWith($renameLeaf, [StringComparison]::Ordinal) }
+            )
+            Assert-True -Condition (
+                $renamedLeaves.Count -eq 1 -and
+                [string]$renamedLeaves[0].Name -ceq $renameLeaf -and
+                [Mql5Coding.CompilerProcessJob]::GetFileIdentity($renameDestination) -ceq
+                    $renameIdentity -and
+                [string]$renamePinnedLease.GetCurrentIdentity() -ceq $renameIdentity
+            ) -Message "Handle rename produced an inexact destination for leaf length $renameLength."
+        }
+        finally {
+            if ($null -ne $renamePinnedLease) {
+                $renamePinnedLease.Dispose()
+            }
+            if ($null -ne $renameMovableLease) {
+                $renameMovableLease.Dispose()
+            }
+            foreach ($cleanupPath in @(
+                    $renameSource,
+                    $renameDestination,
+                    $renameSentinel
+                )) {
+                if (Test-Path -LiteralPath $cleanupPath -PathType Leaf) {
+                    Remove-Item -LiteralPath $cleanupPath -Force
+                }
+            }
+        }
+    }
+
     $backupNameProbe = Join-Path $compileDirectory 'a.log'
     [IO.File]::WriteAllText($backupNameProbe, 'probe', [Text.Encoding]::ASCII)
     $boundedBackupPath = & {
@@ -2408,10 +2542,25 @@ try {
         $probeLease = [Mql5Coding.CompilerProcessJob]::TryOpenMovableOutputFileIdentityLease(
             $ProbePath
         )
+        $probePinnedLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(
+            $ProbePath
+        )
         try {
-            return Move-OriginalLogAside -LiteralPath $ProbePath -Lease $probeLease
+            Assert-True -Condition (
+                $null -ne $probeLease -and
+                $null -ne $probePinnedLease -and
+                [string]$probePinnedLease.Identity -ceq [string]$probeLease.Identity
+            ) -Message 'The backup-name probe did not acquire both preservation leases before rename.'
+            $renamedPath = Move-OriginalLogAside -LiteralPath $ProbePath -Lease $probeLease
+            Assert-True -Condition (
+                [string]$probePinnedLease.GetCurrentIdentity() -ceq [string]$probeLease.Identity
+            ) -Message 'The pre-move pinned lease did not retain the renamed output identity.'
+            return $renamedPath
         }
         finally {
+            if ($null -ne $probePinnedLease) {
+                $probePinnedLease.Dispose()
+            }
             if ($null -ne $probeLease) {
                 $probeLease.Dispose()
             }
