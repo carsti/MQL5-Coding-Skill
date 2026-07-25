@@ -315,14 +315,14 @@ Assert-PowerShellParses -Path $compiler
 if (-not ('Mql5Coding.CompilerProcessJob' -as [type])) {
     Add-Type -Path $compilerProcessJobSource
 }
+$runnerTextForNativeType = Get-Content -LiteralPath $runner -Raw
+$runnerTypeMatch = [regex]::Match(
+    $runnerTextForNativeType,
+    "(?s)Add-Type\s+-TypeDefinition\s+@'\r?\n(?<source>.*?)\r?\n'@"
+)
+Assert-True -Condition $runnerTypeMatch.Success `
+    -Message 'The tester native helper source could not be extracted for lease tests.'
 if (-not ('Mql5Coding.JobProcessLaunch' -as [type])) {
-    $runnerTextForNativeType = Get-Content -LiteralPath $runner -Raw
-    $runnerTypeMatch = [regex]::Match(
-        $runnerTextForNativeType,
-        "(?s)Add-Type\s+-TypeDefinition\s+@'\r?\n(?<source>.*?)\r?\n'@"
-    )
-    Assert-True -Condition $runnerTypeMatch.Success `
-        -Message 'The tester native helper source could not be extracted for lease tests.'
     Add-Type -TypeDefinition $runnerTypeMatch.Groups['source'].Value
 }
 if (-not ('Mql5Coding.RawDosDeviceProbe' -as [type])) {
@@ -910,6 +910,37 @@ Assert-True -Condition (
     $outputPublicationReleaseIndex -gt $resultWriteIndex -and
     $mutationGuardReleaseIndex -gt $outputPublicationReleaseIndex
 ) -Message 'Copied-report destination streams are not retained through smoke-result publication.'
+$optionalFileLeaseNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Try-OpenNonReparseFileLeaf'
+        )
+    },
+    $true
+)
+Assert-True -Condition (
+    $null -ne $optionalFileLeaseNode -and
+    $optionalFileLeaseNode.Extent.Text -match
+        '(?s)VerifyPathEntryLeaseVolume.*?catch\s*\{.*?BLOCKED: File volume binding changed'
+) -Message 'Cached optional-file volume changes are not classified as blocked.'
+Assert-True -Condition (
+    $runnerText.IndexOf(
+        '$ownerText = $RunId + "`n"',
+        [StringComparison]::Ordinal
+    ) -ge 0
+) -Message 'The output owner record contains text before the intended newline.'
+Assert-True -Condition (
+    $runnerText.IndexOf(
+        '$result.artifacts -is [System.Collections.IDictionary]',
+        [StringComparison]::Ordinal
+    ) -ge 0 -and
+    $runnerText.IndexOf(
+        "$result.artifacts.Contains('staging_integrity')",
+        [StringComparison]::Ordinal
+    ) -ge 0
+) -Message 'Final staging-integrity failures do not update the ordered artifact record.'
 Assert-True -Condition (
     $runnerText -match
         '\$leasedPathEntries = \[System\.Collections\.Hashtable\]::new\(\s*\[System\.StringComparer\]::Ordinal\s*\)' -and

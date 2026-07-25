@@ -1375,10 +1375,15 @@ function Try-OpenNonReparseFileLeaf {
             throw "BLOCKED: A cached optional-file lease does not exactly match '$full'."
         }
         Assert-StableFixedLocalVolumePath -Path $full
-        [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
-            $full,
-            $existingLease
-        )
+        try {
+            [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
+                $full,
+                $existingLease
+            )
+        }
+        catch {
+            throw "BLOCKED: File volume binding changed for '$full': $($_.Exception.Message)"
+        }
         return $existingLease
     }
 
@@ -2466,7 +2471,7 @@ function Open-NewOutputDirectoryClaim {
         }
         $DirectoryLease.VerifyStillNonReparseDirectory()
 
-        $ownerText = $RunId + "\`n"
+        $ownerText = $RunId + "`n"
         $ownerRecord = Open-NewTextArtifactReadLock -Text $ownerText -Path $ownerPath -Encoding (New-Object Text.UTF8Encoding($false)) -Kind 'output owner' -Tracker $IntegrityTracker -PathEntryLeases $PathEntryLeases -LeasesByPath $LeasesByPath
         return [pscustomobject]@{
             path = $claimPath
@@ -4805,8 +4810,8 @@ finally {
         if ([bool]$Execute) {
             $finalIntegrityFailures = @(Get-PinnedStagingIntegrityFailures -Locks $stagingReadLocks)
             if ($finalIntegrityFailures.Count -gt 0) {
-                if ($null -ne $result.artifacts -and
-                    $null -ne $result.artifacts.PSObject.Properties['staging_integrity']) {
+                if ($result.artifacts -is [System.Collections.IDictionary] -and
+                    $result.artifacts.Contains('staging_integrity')) {
                     $result.artifacts.staging_integrity.postrun_verified = $false
                 }
                 foreach ($failure in $finalIntegrityFailures) {
