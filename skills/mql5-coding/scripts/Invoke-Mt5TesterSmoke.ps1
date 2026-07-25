@@ -2450,17 +2450,35 @@ function Copy-NewHashBoundFile {
         [Parameter(Mandatory)][string]$Kind,
         [Parameter(Mandatory)]$Tracker,
         [Parameter(Mandatory)]$PathEntryLeases,
-        [Parameter(Mandatory)][hashtable]$LeasesByPath
+        [Parameter(Mandatory)][hashtable]$LeasesByPath,
+        [AllowNull()][IO.FileStream]$RetainedSourceStream
     )
 
     $sourceLease = Open-NonReparseFileLeaf -Path $Source -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
     $parent = Split-Path -Parent $Destination
     $null = Open-NonReparseDirectoryChain -Path $parent -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
     $input = $null
+    $disposeInput = $false
     $output = $null
     $record = $null
     try {
-        $input = [IO.File]::Open($Source, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        if ($null -eq $RetainedSourceStream) {
+            $input = [IO.File]::Open(
+                $Source,
+                [IO.FileMode]::Open,
+                [IO.FileAccess]::Read,
+                [IO.FileShare]::Read
+            )
+            $disposeInput = $true
+        }
+        else {
+            if (-not $RetainedSourceStream.CanRead -or
+                -not $RetainedSourceStream.CanSeek) {
+                throw "$Kind retained source stream is not readable and seekable: $Source"
+            }
+            $input = $RetainedSourceStream
+            $input.Position = 0
+        }
         if ([Mql5Coding.JobProcessLaunch]::GetFileIdentity($input.SafeFileHandle) -cne
             [string]$sourceLease.Identity) {
             throw "$Kind source path changed before staging: $Source"
@@ -2502,8 +2520,11 @@ function Copy-NewHashBoundFile {
         if ($null -ne $output) {
             $output.Dispose()
         }
-        if ($null -ne $input) {
+        if ($disposeInput -and $null -ne $input) {
             $input.Dispose()
+        }
+        elseif ($null -ne $input -and $input.CanSeek) {
+            $input.Position = 0
         }
     }
 }
@@ -3859,6 +3880,16 @@ try {
     $canonicalConfig = Join-Path $output 'tester-start.ini'
     $utf16 = New-Object Text.UnicodeEncoding($false, $true)
     $canonicalConfigRecord = Open-NewTextArtifactReadLock -Text $configContent -Path $canonicalConfig -Encoding $utf16 -Kind 'canonical startup config' -Tracker $stagingReadLocks -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries
+    if ($stagingReadLocks.Count -eq 0) {
+        throw 'Canonical startup config creation did not retain its exact output stream.'
+    }
+    $canonicalConfigLock = $stagingReadLocks[$stagingReadLocks.Count - 1]
+    if (-not [object]::ReferenceEquals(
+            $canonicalConfigLock.record,
+            $canonicalConfigRecord
+        )) {
+        throw 'Canonical startup config creation returned a mismatched retained stream.'
+    }
     $canonicalConfigHash = $canonicalConfigRecord.sha256
 
     $result.artifacts = [ordered]@{
@@ -3960,7 +3991,14 @@ try {
             $result.artifacts.preset.executed_copy = $result.artifacts.preset.staged_copy
         }
     }
-    $configRecord = Copy-NewHashBoundFile -Source $canonicalConfig -Destination $configStage -Kind 'startup config' -Tracker $hashBoundStaging -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries
+    $configRecord = Copy-NewHashBoundFile `
+        -Source $canonicalConfig `
+        -Destination $configStage `
+        -Kind 'startup config' `
+        -Tracker $hashBoundStaging `
+        -PathEntryLeases $pathEntryLeases `
+        -LeasesByPath $leasedPathEntries `
+        -RetainedSourceStream $canonicalConfigLock.stream
     if ($configRecord.sha256 -cne $canonicalConfigHash -or [long]$configRecord.byte_length -ne [long]$canonicalConfigRecord.byte_length) {
         throw 'Canonical startup config bytes changed while the staging copy was prepared.'
     }
