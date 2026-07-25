@@ -20,6 +20,7 @@ namespace Mql5Coding
         private const int JobObjectExtendedLimitInformationClass = 9;
         private const uint WaitObject0 = 0x00000000;
         private const uint WaitFailed = 0xFFFFFFFF;
+        private const uint ShareReadWrite = 0x00000003;
         private const uint ShareReadWriteDelete = 0x00000007;
         private const uint OpenExisting = 3;
         private const uint FileFlagBackupSemantics = 0x02000000;
@@ -170,6 +171,13 @@ namespace Mql5Coding
             IntPtr templateFile);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern uint GetFinalPathNameByHandle(
+            SafeFileHandle file,
+            StringBuilder path,
+            uint pathLength,
+            uint flags);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool CreateProcessW(
             string applicationName,
@@ -227,6 +235,34 @@ namespace Mql5Coding
 
         public int ProcessId { get; private set; }
 
+        public sealed class DirectoryIdentityLease : IDisposable
+        {
+            private SafeFileHandle handle;
+
+            internal DirectoryIdentityLease(
+                SafeFileHandle directoryHandle,
+                string identity,
+                string finalPath)
+            {
+                handle = directoryHandle;
+                Identity = identity;
+                FinalPath = finalPath;
+            }
+
+            public string Identity { get; private set; }
+
+            public string FinalPath { get; private set; }
+
+            public void Dispose()
+            {
+                if (handle != null)
+                {
+                    handle.Dispose();
+                    handle = null;
+                }
+            }
+        }
+
         private static string ReadFileIdentity(SafeFileHandle handle)
         {
             ByHandleFileInformation information;
@@ -240,6 +276,33 @@ namespace Mql5Coding
                 information.VolumeSerialNumber,
                 information.FileIndexHigh,
                 information.FileIndexLow);
+        }
+
+        private static string ReadFinalPath(SafeFileHandle handle)
+        {
+            const int MaximumPathCharacters = 32768;
+            StringBuilder path = new StringBuilder(MaximumPathCharacters);
+            uint length = GetFinalPathNameByHandle(
+                handle,
+                path,
+                unchecked((uint)path.Capacity),
+                0);
+            if (length == 0)
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "GetFinalPathNameByHandle failed.");
+            if (length >= path.Capacity)
+                throw new InvalidOperationException(
+                    "The resolved directory path exceeds the supported Windows path length.");
+
+            string result = path.ToString();
+            const string UncPrefix = @"\\?\UNC\";
+            const string ExtendedPrefix = @"\\?\";
+            if (result.StartsWith(UncPrefix, StringComparison.OrdinalIgnoreCase))
+                return @"\\" + result.Substring(UncPrefix.Length);
+            if (result.StartsWith(ExtendedPrefix, StringComparison.OrdinalIgnoreCase))
+                return result.Substring(ExtendedPrefix.Length);
+            return result;
         }
 
         public static string GetFileIdentity(string path)
@@ -257,25 +320,49 @@ namespace Mql5Coding
             }
         }
 
-        public static string GetDirectoryIdentity(string path)
+        public static DirectoryIdentityLease OpenDirectoryIdentityLease(string path)
         {
             if (String.IsNullOrWhiteSpace(path))
                 throw new ArgumentException("A directory path is required.", "path");
 
-            using (SafeFileHandle handle = OpenPathHandle(
+            SafeFileHandle handle = OpenPathHandle(
                 path,
                 0,
-                ShareReadWriteDelete,
+                ShareReadWrite,
                 IntPtr.Zero,
                 OpenExisting,
                 FileFlagBackupSemantics,
-                IntPtr.Zero))
+                IntPtr.Zero);
+            if (handle == null || handle.IsInvalid)
             {
-                if (handle == null || handle.IsInvalid)
-                    throw new Win32Exception(
-                        Marshal.GetLastWin32Error(),
-                        "Opening the directory identity handle failed.");
-                return ReadFileIdentity(handle);
+                if (handle != null)
+                    handle.Dispose();
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "Opening the directory identity lease failed.");
+            }
+
+            try
+            {
+                DirectoryIdentityLease lease = new DirectoryIdentityLease(
+                    handle,
+                    ReadFileIdentity(handle),
+                    ReadFinalPath(handle));
+                handle = null;
+                return lease;
+            }
+            finally
+            {
+                if (handle != null)
+                    handle.Dispose();
+            }
+        }
+
+        public static string GetDirectoryIdentity(string path)
+        {
+            using (DirectoryIdentityLease lease = OpenDirectoryIdentityLease(path))
+            {
+                return lease.Identity;
             }
         }
 

@@ -51,8 +51,11 @@ $logPath = $null
 $logSnapshot = $null
 $artifactSnapshot = $null
 $logPrepared = $false
-$mutex = $null
-$mutexHeld = $false
+$pathMutex = $null
+$pathMutexHeld = $false
+$identityMutex = $null
+$identityMutexHeld = $false
+$sourceParentLease = $null
 $compileLaunch = $null
 $compileJobEmpty = $true
 
@@ -405,6 +408,20 @@ function Test-CompilerLaunchCleanupVerified {
     return $false
 }
 
+function Get-CompilerLockHash {
+    param([Parameter(Mandatory = $true)][string]$Namespace)
+
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return [System.BitConverter]::ToString(
+            $algorithm.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Namespace))
+        ).Replace('-', '').Substring(0, 24)
+    }
+    finally {
+        $algorithm.Dispose()
+    }
+}
+
 try {
     if (-not [string]::IsNullOrWhiteSpace($nativeTypeLoadError)) {
         throw "The compiler process-isolation helper could not be loaded: $nativeTypeLoadError"
@@ -415,6 +432,23 @@ try {
     if ($extension -ne '.mq5') {
         throw "Source must be an .mq5 file: $resolvedSource"
     }
+
+    $initialSourceIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity(
+        $resolvedSource
+    )
+    $sourceLeaf = [System.IO.Path]::GetFileName($resolvedSource)
+    $sourceParentPath = [System.IO.Path]::GetDirectoryName($resolvedSource)
+    $sourceParentLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
+        $sourceParentPath
+    )
+    $canonicalSource = Join-Path $sourceParentLease.FinalPath $sourceLeaf
+    if (-not (Test-Path -LiteralPath $canonicalSource -PathType Leaf) -or
+        [Mql5Coding.CompilerProcessJob]::GetFileIdentity($canonicalSource) -cne
+            $initialSourceIdentity) {
+        throw 'Source path changed while its physical directory was being pinned.'
+    }
+    $resolvedSource = [System.IO.Path]::GetFullPath($canonicalSource)
+    $sourceParentPath = [System.IO.Path]::GetDirectoryName($resolvedSource)
 
     if (-not [string]::IsNullOrWhiteSpace($IncludePath)) {
         $includeItem = Get-Item -LiteralPath $IncludePath -ErrorAction Stop
@@ -438,33 +472,72 @@ try {
     $artifactPath = [System.IO.Path]::ChangeExtension($resolvedSource, '.ex5')
     $logPath = [System.IO.Path]::ChangeExtension($resolvedSource, '.log')
 
-    $sourceParentPath = [System.IO.Path]::GetDirectoryName($resolvedSource)
-    $sourceParentIdentity = [Mql5Coding.CompilerProcessJob]::GetDirectoryIdentity(
-        $sourceParentPath
+    $outputLeaf = [System.IO.Path]::GetFileName($logPath).ToUpperInvariant()
+    $pathNamespace = (
+        $sourceParentLease.FinalPath.TrimEnd('\', '/').ToUpperInvariant() +
+        '|' + $outputLeaf
     )
-    $outputNamespace = (
-        $sourceParentIdentity + '|' +
-        [System.IO.Path]::GetFileName($logPath).ToUpperInvariant()
-    )
-    $sha256 = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        $outputHash = [System.BitConverter]::ToString(
-            $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($outputNamespace))
-        ).Replace('-', '').Substring(0, 24)
-    }
-    finally {
-        $sha256.Dispose()
-    }
+    $identityNamespace = $sourceParentLease.Identity + '|' + $outputLeaf
+    $pathHash = Get-CompilerLockHash -Namespace $pathNamespace
+    $identityHash = Get-CompilerLockHash -Namespace $identityNamespace
 
-    $mutex = [System.Threading.Mutex]::new($false, "Global\CodexMqlCompile_$outputHash")
+    $pathMutex = [System.Threading.Mutex]::new(
+        $false,
+        "Global\CodexMqlCompilePath_$pathHash"
+    )
+    $identityMutex = [System.Threading.Mutex]::new(
+        $false,
+        "Global\CodexMqlCompile_$identityHash"
+    )
+    $lockDeadline = [datetime]::UtcNow.AddSeconds(
+        [Math]::Min(30, $TimeoutSeconds)
+    )
+
+    $pathWait = $lockDeadline - [datetime]::UtcNow
+    if ($pathWait -lt [TimeSpan]::Zero) {
+        $pathWait = [TimeSpan]::Zero
+    }
     try {
-        $mutexHeld = $mutex.WaitOne([TimeSpan]::FromSeconds([Math]::Min(30, $TimeoutSeconds)))
+        $pathMutexHeld = $pathMutex.WaitOne($pathWait)
     }
     catch [System.Threading.AbandonedMutexException] {
-        $mutexHeld = $true
+        $pathMutexHeld = $true
     }
-    if (-not $mutexHeld) {
+    if (-not $pathMutexHeld) {
         throw "Another compilation is already using this source file: $resolvedSource"
+    }
+
+    $identityWait = $lockDeadline - [datetime]::UtcNow
+    if ($identityWait -lt [TimeSpan]::Zero) {
+        $identityWait = [TimeSpan]::Zero
+    }
+    try {
+        $identityMutexHeld = $identityMutex.WaitOne($identityWait)
+    }
+    catch [System.Threading.AbandonedMutexException] {
+        $identityMutexHeld = $true
+    }
+    if (-not $identityMutexHeld) {
+        throw "Another compilation is already using this source file: $resolvedSource"
+    }
+
+    $revalidationLease = $null
+    try {
+        $revalidationLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
+            $sourceParentPath
+        )
+        if ($revalidationLease.Identity -cne $sourceParentLease.Identity -or
+            -not $revalidationLease.FinalPath.Equals(
+                $sourceParentLease.FinalPath,
+                [StringComparison]::OrdinalIgnoreCase
+            )) {
+            throw 'Source directory changed while compilation locks were being acquired.'
+        }
+    }
+    finally {
+        if ($null -ne $revalidationLease) {
+            $revalidationLease.Dispose()
+        }
     }
 
     $artifactSnapshot = Get-ArtifactState -LiteralPath $artifactPath
@@ -722,11 +795,31 @@ finally {
         }
     }
 
-    if ($mutexHeld -and $null -ne $mutex) {
-        try { $mutex.ReleaseMutex() } catch { }
+    if ($null -ne $sourceParentLease) {
+        try {
+            $sourceParentLease.Dispose()
+        }
+        catch {
+            $exitCode = $ExitToolError
+            $status = 'tool_error'
+            if ([string]::IsNullOrWhiteSpace($errorMessage)) {
+                $errorMessage = "Could not release the source-directory identity lease: $($_.Exception.Message)"
+            }
+        }
+        $sourceParentLease = $null
     }
-    if ($null -ne $mutex) {
-        $mutex.Dispose()
+
+    if ($identityMutexHeld -and $null -ne $identityMutex) {
+        try { $identityMutex.ReleaseMutex() } catch { }
+    }
+    if ($null -ne $identityMutex) {
+        $identityMutex.Dispose()
+    }
+    if ($pathMutexHeld -and $null -ne $pathMutex) {
+        try { $pathMutex.ReleaseMutex() } catch { }
+    }
+    if ($null -ne $pathMutex) {
+        $pathMutex.Dispose()
     }
 }
 

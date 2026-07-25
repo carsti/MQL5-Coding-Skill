@@ -10,6 +10,7 @@ The skill covers Expert Advisors, indicators, scripts, services, libraries, `.mq
 - Codex with skill support.
 - The `mql5-chm` MCP server installed and enabled.
 - MetaTrader 5 and MetaEditor only when compilation or Strategy Tester execution is requested.
+- Ordinary local-drive paths without reparse-point components for Strategy Tester staging and evidence.
 - The shared MQL5 Python launcher under `CODEX_HOME\tools\mql5-python` only for optional Python analysis.
 
 Ordinary source review and explanation do not start MetaTrader, MetaEditor, or Strategy Tester.
@@ -75,7 +76,7 @@ GitHub Actions and the local test commands validate:
 - skill metadata, dependency declaration, links, and portable paths;
 - PowerShell syntax under PowerShell 7 and Windows PowerShell 5.1;
 - compiler-wrapper completion, artifact, and exit-code contracts without starting MetaEditor;
-- Strategy Tester preflight, stable terminal-image identity checks, unambiguous correlated completion, adversarial log rejection, and timeout cleanup without starting real MT5.
+- Strategy Tester preflight, non-reparse path-chain leases, pinned journal evidence, stable terminal-image identity checks, unambiguous correlated completion, adversarial log rejection, and timeout cleanup without starting real MT5.
 
 Run locally inside an isolated Python 3.12 x64 environment with `PyYAML==6.0.3` available:
 

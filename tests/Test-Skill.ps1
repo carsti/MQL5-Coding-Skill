@@ -284,6 +284,80 @@ $runnerAst = [Management.Automation.Language.Parser]::ParseFile(
     [ref]$runnerTokens,
     [ref]$runnerParseErrors
 )
+$protectJournalNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Protect-JournalLine'
+        )
+    },
+    $true
+)
+$selectEvidenceNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Select-JournalEvidence'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $protectJournalNode -and $null -ne $selectEvidenceNode) `
+    -Message 'Journal redaction functions were not found for regression testing.'
+$redactionProbe = & {
+    param($ProtectDefinition, $SelectDefinition)
+    . ([scriptblock]::Create($ProtectDefinition))
+    . ([scriptblock]::Create($SelectDefinition))
+
+    $positive = @(
+        'ERROR OPENAI_API_KEY=sk-openai-secret',
+        'ERROR AZURE_CLIENT_SECRET:azure-secret',
+        'ERROR DB_PASSWORD=db-secret',
+        'ERROR HTTP_AUTHORIZATION=Basic authorization-secret',
+        'ERROR --refresh-token cli-token',
+        'ERROR service.api-key: dotted-secret'
+    )
+    $negative = @(
+        'ERROR token refresh failed',
+        'ERROR authorization denied',
+        'ERROR passwordless mode active',
+        'ERROR tokenizer=value'
+    )
+    return [pscustomobject]@{
+        positive = @($positive | ForEach-Object {
+                Protect-JournalLine -Line $_
+            })
+        negative = @($negative | ForEach-Object {
+                Protect-JournalLine -Line $_
+            })
+        expected_negative = $negative
+        selected = @(
+            Select-JournalEvidence `
+                -Text "ERROR OPENAI_API_KEY=selected-secret`r`nOK" `
+                -Patterns @('(?i)error')
+        )
+    }
+} $protectJournalNode.Extent.Text $selectEvidenceNode.Extent.Text
+foreach ($redactedLine in @($redactionProbe.positive)) {
+    Assert-True -Condition (
+        $redactedLine -match '<(?:SECRET|REDACTED)>' -and
+        $redactedLine -notmatch '(?i)sk-openai-secret|azure-secret|db-secret|authorization-secret|cli-token|dotted-secret'
+    ) -Message "A prefixed secret was not redacted: $redactedLine"
+}
+for ($index = 0; $index -lt $redactionProbe.negative.Count; $index++) {
+    Assert-True -Condition (
+        [string]$redactionProbe.negative[$index] -ceq
+            [string]$redactionProbe.expected_negative[$index]
+    ) -Message "Ordinary prose was over-redacted: $($redactionProbe.negative[$index])"
+}
+Assert-True -Condition (
+    $redactionProbe.selected.Count -eq 1 -and
+    [string]$redactionProbe.selected[0] -notmatch 'selected-secret' -and
+    [string]$redactionProbe.selected[0] -match '<(?:SECRET|REDACTED)>'
+) -Message 'Selected journal evidence retained a prefixed secret.'
+
 $postExitWaitNode = $runnerAst.Find(
     {
         param($node)
@@ -987,6 +1061,30 @@ try {
     $compileDirectory = Join-Path $testRoot 'compile'
     [IO.Directory]::CreateDirectory($compileDirectory) | Out-Null
 
+    $leaseProbeDirectory = Join-Path $testRoot 'compile-lease-probe'
+    $leaseProbeRenamed = Join-Path $testRoot 'compile-lease-probe-renamed'
+    [IO.Directory]::CreateDirectory($leaseProbeDirectory) | Out-Null
+    $directoryLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
+        $leaseProbeDirectory
+    )
+    $leaseBlockedRename = $false
+    try {
+        try {
+            [IO.Directory]::Move($leaseProbeDirectory, $leaseProbeRenamed)
+        }
+        catch {
+            $leaseBlockedRename = $true
+        }
+        Assert-True -Condition $leaseBlockedRename `
+            -Message 'A held compiler directory-identity lease allowed its directory to be renamed.'
+    }
+    finally {
+        $directoryLease.Dispose()
+    }
+    [IO.Directory]::Move($leaseProbeDirectory, $leaseProbeRenamed)
+    [IO.Directory]::Move($leaseProbeRenamed, $leaseProbeDirectory)
+    Remove-Item -LiteralPath $leaseProbeDirectory -Force
+
     $backupNameProbe = Join-Path $compileDirectory 'a.log'
     [IO.File]::WriteAllText($backupNameProbe, 'probe', [Text.Encoding]::ASCII)
     $boundedBackupPath = & {
@@ -1217,6 +1315,35 @@ try {
     $compileAliasDirectory = Join-Path $testRoot 'compile-junction'
     $null = New-Item -ItemType Junction -Path $compileAliasDirectory -Target $compileDirectory
     try {
+        $compileAliasLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
+            $compileAliasDirectory
+        )
+        try {
+            Assert-True -Condition (
+                [IO.Path]::GetFullPath($compileAliasLease.FinalPath).Equals(
+                    [IO.Path]::GetFullPath($compileDirectory),
+                    [StringComparison]::OrdinalIgnoreCase
+                )
+            ) -Message 'Compiler directory lease did not expose the junction target path.'
+
+            $compileRetargetDirectory = Join-Path $testRoot 'compile-retarget'
+            [IO.Directory]::CreateDirectory($compileRetargetDirectory) | Out-Null
+            [IO.Directory]::Delete($compileAliasDirectory)
+            $null = New-Item -ItemType Junction -Path $compileAliasDirectory -Target $compileRetargetDirectory
+            Assert-True -Condition (
+                [IO.Path]::GetFullPath($compileAliasLease.FinalPath).Equals(
+                    [IO.Path]::GetFullPath($compileDirectory),
+                    [StringComparison]::OrdinalIgnoreCase
+                )
+            ) -Message 'Retargeting a junction changed the compiler lease canonical target.'
+            [IO.Directory]::Delete($compileAliasDirectory)
+            $null = New-Item -ItemType Junction -Path $compileAliasDirectory -Target $compileDirectory
+            Remove-Item -LiteralPath $compileRetargetDirectory -Force
+        }
+        finally {
+            $compileAliasLease.Dispose()
+        }
+
         $compileAliasSource = Join-Path $compileAliasDirectory 'fixture.mq5'
         $aliasIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileAliasSource)
         $sourceIdentityBeforeReplace = [Mql5Coding.CompilerProcessJob]::GetFileIdentity(
@@ -1290,6 +1417,21 @@ try {
                 Remove-Item -LiteralPath $replacedSourceBackup -Force
             }
         }
+
+        $aliasArgumentsPath = Join-Path $testRoot 'fake-metaeditor-alias-arguments.txt'
+        $aliasCanonical = Invoke-CompilerCase `
+            -SourcePath $compileAliasSource `
+            -MetaEditorPath $metaEditor `
+            -FakeMode 'success' `
+            -ArgumentsPath $aliasArgumentsPath `
+            -SyntaxOnly
+        Assert-True -Condition ($aliasCanonical.ExitCode -eq 0) `
+            -Message "Canonical junction compile failed with exit code $($aliasCanonical.ExitCode)."
+        $aliasCompilerArguments = @([IO.File]::ReadAllLines($aliasArgumentsPath))
+        Assert-True -Condition (
+            $aliasCompilerArguments -contains "/compile:$compileSource" -and
+            $aliasCompilerArguments -notcontains "/compile:$compileAliasSource"
+        ) -Message 'Compiler did not pass its pinned canonical source path to MetaEditor.'
     }
     finally {
         if (Test-Path -LiteralPath $compileAliasDirectory) {
@@ -1336,6 +1478,82 @@ try {
     Assert-True -Condition (
         (Get-Item -LiteralPath $compileLog).LastWriteTimeUtc -eq $sentinelLogLastWriteUtc
     ) -Message 'Compiler wrapper did not restore the pre-existing log timestamp.'
+
+    $dataJunction = Join-Path $testRoot 'data-junction'
+    $null = New-Item -ItemType Junction -Path $dataJunction -Target $dataPath
+    try {
+        $dataJunctionBlocked = Invoke-RunnerCase `
+            -Name 'preflight-reparse-data-root' `
+            -Mode 'PreflightOnly' `
+            -TerminalPath $terminal `
+            -TerminalDataPath $dataJunction `
+            -ExpertPath $expert `
+            -PresetPath $preset `
+            -ExpertSha256 $expertHash
+    }
+    finally {
+        if (Test-Path -LiteralPath $dataJunction) {
+            [IO.Directory]::Delete($dataJunction)
+        }
+    }
+    Assert-True -Condition ($dataJunctionBlocked.ExitCode -eq 4) `
+        -Message 'A reparse-point terminal data root was not blocked.'
+    Assert-True -Condition (
+        $null -ne $dataJunctionBlocked.Result -and
+        $dataJunctionBlocked.Result.status -eq 'blocked' -and
+        -not [bool]$dataJunctionBlocked.Result.process.execution_attempted
+    ) -Message 'Terminal data reparse rejection did not fail closed before launch.'
+
+    $sourceJunction = Join-Path $testRoot 'source-junction'
+    $null = New-Item -ItemType Junction -Path $sourceJunction -Target $testRoot
+    try {
+        $sourceJunctionBlocked = Invoke-RunnerCase `
+            -Name 'preflight-reparse-source' `
+            -Mode 'PreflightOnly' `
+            -TerminalPath $terminal `
+            -TerminalDataPath $dataPath `
+            -ExpertPath (Join-Path $sourceJunction 'fixture.ex5') `
+            -PresetPath (Join-Path $sourceJunction 'fixture.set') `
+            -ExpertSha256 $expertHash
+    }
+    finally {
+        if (Test-Path -LiteralPath $sourceJunction) {
+            [IO.Directory]::Delete($sourceJunction)
+        }
+    }
+    Assert-True -Condition ($sourceJunctionBlocked.ExitCode -eq 4) `
+        -Message 'A reparse-point source path was not blocked.'
+    Assert-True -Condition (
+        $sourceJunctionBlocked.StandardError -match '(?i)reparse|unsafe or unleaseable'
+    ) -Message 'Source reparse rejection did not explain the unsafe path.'
+
+    $terminalLogsPath = Join-Path $dataPath 'logs'
+    $terminalLogsReal = Join-Path $dataPath 'logs-real'
+    [IO.Directory]::Move($terminalLogsPath, $terminalLogsReal)
+    $null = New-Item -ItemType Junction -Path $terminalLogsPath -Target $terminalLogsReal
+    try {
+        $logJunctionBlocked = Invoke-RunnerCase `
+            -Name 'preflight-reparse-log-root' `
+            -Mode 'PreflightOnly' `
+            -TerminalPath $terminal `
+            -TerminalDataPath $dataPath `
+            -ExpertPath $expert `
+            -PresetPath $preset `
+            -ExpertSha256 $expertHash
+    }
+    finally {
+        if (Test-Path -LiteralPath $terminalLogsPath) {
+            [IO.Directory]::Delete($terminalLogsPath)
+        }
+        [IO.Directory]::Move($terminalLogsReal, $terminalLogsPath)
+    }
+    Assert-True -Condition ($logJunctionBlocked.ExitCode -eq 4) `
+        -Message 'A reparse-point terminal journal directory was not blocked.'
+    Assert-True -Condition (
+        $null -ne $logJunctionBlocked.Result -and
+        $logJunctionBlocked.Result.status -eq 'blocked' -and
+        -not [bool]$logJunctionBlocked.Result.process.execution_attempted
+    ) -Message 'Journal-directory reparse rejection did not fail closed before launch.'
 
     $preflight = Invoke-RunnerCase `
         -Name 'preflight' `
