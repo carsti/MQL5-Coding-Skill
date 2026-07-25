@@ -681,6 +681,18 @@ namespace Mql5Coding
 
             try
             {
+                ByHandleFileInformation information;
+                if (!GetFileInformationByHandle(handle, out information))
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "Reading compiler directory attributes failed.");
+                if ((information.FileAttributes & FileAttributeDirectory) == 0)
+                    throw new InvalidOperationException(
+                        "The compiler directory lease did not resolve to a directory.");
+                if ((information.FileAttributes & FileAttributeReparsePoint) != 0)
+                    throw new InvalidOperationException(
+                        "Compiler directory reparse points are not allowed.");
+
                 DirectoryIdentityLease lease = new DirectoryIdentityLease(
                     handle,
                     ReadFileIdentity(handle),

@@ -1253,9 +1253,14 @@ function Open-NonReparseDirectoryChain {
 
     foreach ($candidate in $candidates) {
         Assert-StableFixedLocalVolumePath -Path $candidate
-        $key = (ConvertTo-NormalizedDirectoryPath -Path $candidate).ToUpperInvariant()
+        $key = ConvertTo-NormalizedDirectoryPath -Path $candidate
         if ($LeasesByPath.ContainsKey($key)) {
             $existingLease = $LeasesByPath[$key]
+            if (-not (ConvertTo-NormalizedDirectoryPath -Path (
+                        [string]$existingLease.Path
+                    )).Equals($candidate, [StringComparison]::Ordinal)) {
+                throw "BLOCKED: A cached directory lease does not exactly match '$candidate'."
+            }
             try {
                 [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
                     $candidate,
@@ -1288,7 +1293,7 @@ function Open-NonReparseDirectoryChain {
         $Tracker.Add($lease)
     }
     Assert-StableFixedLocalVolumePath -Path $full
-    return $LeasesByPath[$full.ToUpperInvariant()]
+    return $LeasesByPath[$full]
 }
 
 function Open-NonReparseFileLeaf {
@@ -1306,9 +1311,14 @@ function Open-NonReparseFileLeaf {
     $parent = [IO.Path]::GetDirectoryName($full)
     $null = Open-NonReparseDirectoryChain -Path $parent -Tracker $Tracker -LeasesByPath $LeasesByPath
 
-    $key = $full.ToUpperInvariant()
+    $key = $full
     if ($LeasesByPath.ContainsKey($key)) {
         $existingLease = $LeasesByPath[$key]
+        if (-not ([IO.Path]::GetFullPath(
+                    [string]$existingLease.Path
+                )).Equals($full, [StringComparison]::Ordinal)) {
+            throw "BLOCKED: A cached file lease does not exactly match '$full'."
+        }
         Assert-StableFixedLocalVolumePath -Path $full
         try {
             [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
@@ -1356,9 +1366,14 @@ function Try-OpenNonReparseFileLeaf {
     $parent = [IO.Path]::GetDirectoryName($full)
     $null = Open-NonReparseDirectoryChain -Path $parent -Tracker $Tracker -LeasesByPath $LeasesByPath
 
-    $key = $full.ToUpperInvariant()
+    $key = $full
     if ($LeasesByPath.ContainsKey($key)) {
         $existingLease = $LeasesByPath[$key]
+        if (-not ([IO.Path]::GetFullPath(
+                    [string]$existingLease.Path
+                )).Equals($full, [StringComparison]::Ordinal)) {
+            throw "BLOCKED: A cached optional-file lease does not exactly match '$full'."
+        }
         Assert-StableFixedLocalVolumePath -Path $full
         [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
             $full,
@@ -1431,7 +1446,7 @@ function Open-NewMutableOutputFileReservation {
     $parent = [IO.Path]::GetDirectoryName($full)
     $null = Open-NonReparseDirectoryChain -Path $parent -Tracker $Tracker -LeasesByPath $LeasesByPath
 
-    $key = $full.ToUpperInvariant()
+    $key = $full
     if ($LeasesByPath.ContainsKey($key)) {
         throw "A mutable output reservation already exists: $full"
     }
@@ -1464,14 +1479,20 @@ function Open-DirectoryMutationGuard {
     )
 
     $full = ConvertTo-NormalizedDirectoryPath -Path $Path
-    $key = $full.ToUpperInvariant()
+    $key = $full
     if ($GuardsByPath.ContainsKey($key)) {
-        return $GuardsByPath[$key]
+        $existingGuard = $GuardsByPath[$key]
+        if (-not (ConvertTo-NormalizedDirectoryPath -Path (
+                    [string]$existingGuard.directory_path
+                )).Equals($full, [StringComparison]::Ordinal)) {
+            throw "BLOCKED: A cached directory mutation guard does not exactly match '$full'."
+        }
+        return $existingGuard
     }
     if (-not [bool]$DirectoryLease.IsDirectory -or
         -not ([IO.Path]::GetFullPath([string]$DirectoryLease.Path)).Equals(
             $full,
-            [StringComparison]::OrdinalIgnoreCase
+            [StringComparison]::Ordinal
         )) {
         throw "BLOCKED: A matching directory lease is required before creating a mutation guard: $full"
     }
@@ -1565,7 +1586,7 @@ function Read-TerminalOrigin {
     if ($null -eq $Lease -or [bool]$Lease.IsDirectory -or
         -not ([IO.Path]::GetFullPath([string]$Lease.Path)).Equals(
             $full,
-            [StringComparison]::OrdinalIgnoreCase
+            [StringComparison]::Ordinal
         )) {
         throw "A matching no-follow file lease is required before reading terminal origin: $full"
     }
@@ -1733,7 +1754,9 @@ function Get-FileIdentityFromPath {
     param([Parameter(Mandatory)][string]$Path)
 
     $temporaryLeases = New-Object 'System.Collections.Generic.List[object]'
-    $temporaryLeasesByPath = @{}
+    $temporaryLeasesByPath = [System.Collections.Hashtable]::new(
+        [System.StringComparer]::Ordinal
+    )
     try {
         $lease = Open-NonReparseFileLeaf -Path $Path -Tracker $temporaryLeases -LeasesByPath $temporaryLeasesByPath
         return [string]$lease.Identity
@@ -2376,7 +2399,7 @@ function Open-NewOutputDirectoryClaim {
         -not [bool]$DirectoryLease.IsDirectory -or
         -not (ConvertTo-NormalizedDirectoryPath -Path ([string]$DirectoryLease.Path)).Equals(
             $full,
-            [StringComparison]::OrdinalIgnoreCase
+            [StringComparison]::Ordinal
         )) {
         throw "OutputDirectory must have a matching live directory lease before it is claimed: $full"
     }
@@ -2870,13 +2893,20 @@ function Get-JournalSnapshot {
         [Parameter(Mandatory)]$PathEntryLeases,
         [Parameter(Mandatory)][hashtable]$LeasesByPath,
         [Parameter(Mandatory)]$StreamTracker,
-        [hashtable]$Existing = @{}
+        [hashtable]$Existing
     )
-    $snapshot = @{}
+    if ($null -eq $Existing) {
+        $Existing = [System.Collections.Hashtable]::new(
+            [System.StringComparer]::Ordinal
+        )
+    }
+    $snapshot = [System.Collections.Hashtable]::new(
+        [System.StringComparer]::Ordinal
+    )
     $null = Open-NonReparseDirectoryChain -Path $RootPath -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
     foreach ($file in Get-ChildItem -LiteralPath $RootPath -File -Filter '*.log') {
         $fullPath = [IO.Path]::GetFullPath($file.FullName)
-        $key = $fullPath.ToLowerInvariant()
+        $key = $fullPath
         $stream = $null
         $lease = $null
         $newStream = $false
@@ -2993,7 +3023,7 @@ function Read-JournalDelta {
     }
 
     foreach ($entry in @($after.Values | Sort-Object path)) {
-        $key = ([string]$entry.path).ToLowerInvariant()
+        $key = [string]$entry.path
         $offset = [long]0
         $beforePrefixHash = $null
         if ($Before.ContainsKey($key)) {
@@ -3348,12 +3378,16 @@ $cleanupRemoved = New-Object 'System.Collections.Generic.List[string]'
 $cleanupPreserved = New-Object 'System.Collections.Generic.List[string]'
 $cleanupErrors = New-Object 'System.Collections.Generic.List[string]'
 $hashBoundStaging = New-Object 'System.Collections.Generic.List[object]'
-$outputArtifactIntegrityRecords = New-Object 'System.Collections.Generic.List[object]'
+$outputArtifactPublicationLocks = New-Object 'System.Collections.Generic.List[object]'
 $stagingReadLocks = New-Object 'System.Collections.Generic.List[object]'
 $pathEntryLeases = New-Object 'System.Collections.Generic.List[object]'
-$leasedPathEntries = @{}
+$leasedPathEntries = [System.Collections.Hashtable]::new(
+    [System.StringComparer]::Ordinal
+)
 $directoryMutationGuards = New-Object 'System.Collections.Generic.List[object]'
-$guardedDirectories = @{}
+$guardedDirectories = [System.Collections.Hashtable]::new(
+    [System.StringComparer]::Ordinal
+)
 $journalReadStreams = New-Object 'System.Collections.Generic.List[object]'
 $generatedOwnedPaths = New-Object 'System.Collections.Generic.List[string]'
 $createdDirectories = New-Object 'System.Collections.Generic.List[string]'
@@ -4550,7 +4584,7 @@ try {
                     -Destination $finalReport `
                     -Kind 'output report' `
                     -SourceLease $reportStageLease `
-                    -Tracker $stagingReadLocks
+                    -Tracker $outputArtifactPublicationLocks
                 $reportCompanions = New-Object 'System.Collections.Generic.List[object]'
                 foreach ($companionStage in $reportCompanionStages) {
                     $companionStageLease = Try-OpenNonReparseFileLeaf -Path $companionStage -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
@@ -4567,7 +4601,7 @@ try {
                         -Destination $companionFinal `
                         -Kind 'output report companion' `
                         -SourceLease $companionStageLease `
-                        -Tracker $stagingReadLocks
+                        -Tracker $outputArtifactPublicationLocks
                     $reportCompanions.Add([pscustomobject][ordered]@{
                         path = $companionFinal
                         byte_length = [long]$companionRecord.byte_length
@@ -4891,6 +4925,16 @@ finally {
     }
 
     $postResultReleaseErrors = New-Object 'System.Collections.Generic.List[string]'
+    for ($index = $outputArtifactPublicationLocks.Count - 1; $index -ge 0; $index--) {
+        try {
+            $outputArtifactPublicationLocks[$index].stream.Dispose()
+        }
+        catch {
+            $postResultReleaseErrors.Add(
+                "Could not release the $($outputArtifactPublicationLocks[$index].record.kind) publication stream: $($_.Exception.Message)"
+            )
+        }
+    }
     for ($index = $directoryMutationGuards.Count - 1; $index -ge 0; $index--) {
         try {
             $directoryMutationGuards[$index].stream.Dispose()

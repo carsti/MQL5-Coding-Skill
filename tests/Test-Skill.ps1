@@ -227,6 +227,7 @@ function Invoke-CompilerCase {
         [string]$ChildPidPath,
         [string]$IncludePath,
         [string]$ArgumentsPath,
+        [string]$IncludeProbeMovePath,
         [int]$TimeoutSeconds = 5,
         [switch]$SyntaxOnly,
         [switch]$WarningsAsErrors
@@ -273,6 +274,9 @@ function Invoke-CompilerCase {
     }
     if (-not [string]::IsNullOrWhiteSpace($ArgumentsPath)) {
         $startInfo.EnvironmentVariables['FAKE_METAEDITOR_ARGS_PATH'] = $ArgumentsPath
+    }
+    if (-not [string]::IsNullOrWhiteSpace($IncludeProbeMovePath)) {
+        $startInfo.EnvironmentVariables['FAKE_METAEDITOR_INCLUDE_MOVE_PATH'] = $IncludeProbeMovePath
     }
 
     $process = New-Object Diagnostics.Process
@@ -769,6 +773,11 @@ Assert-True -Condition (
     $nativeCompilerStartIndex -gt $metaEditorLeaseIndex
 ) -Message 'MetaEditor is not pinned by a no-follow executable lease before process creation.'
 Assert-True -Condition (
+    $compilerProcessJobText -match 'Reading compiler directory attributes failed' -and
+    $compilerProcessJobText -match 'FileAttributeDirectory\) == 0' -and
+    $compilerProcessJobText -match 'FileAttributeReparsePoint\) != 0'
+) -Message 'Compiler directory leases do not validate the opened handle type and attributes.'
+Assert-True -Condition (
     $compilerProcessJobText -match 'TryOpenObservedOutputFileIdentityLease' -and
     $compilerProcessJobText -match 'TryOpenMovableOutputFileIdentityLease' -and
     $compilerProcessJobText -match 'TryOpenPinnedOutputFileIdentityLease' -and
@@ -848,6 +857,44 @@ Assert-True -Condition (
 ) -Message 'Directory mutation guards are released before pathname work is complete.'
 Assert-True -Condition ($outputClaimReleaseIndex -gt $resultWriteIndex) `
     -Message 'The output-directory claim is released before the result is created.'
+$outputPublicationReleaseIndex = $runnerText.LastIndexOf(
+    '$outputArtifactPublicationLocks[$index].stream.Dispose()',
+    [StringComparison]::Ordinal
+)
+$outputPublicationTrackerCount = (
+    [regex]::Matches(
+        $runnerText,
+        '(?m)^\s+-Tracker \$outputArtifactPublicationLocks\s*$'
+    )
+).Count
+Assert-True -Condition (
+    $outputPublicationTrackerCount -eq 2 -and
+    $outputPublicationReleaseIndex -gt $resultWriteIndex -and
+    $mutationGuardReleaseIndex -gt $outputPublicationReleaseIndex
+) -Message 'Copied-report destination streams are not retained through smoke-result publication.'
+Assert-True -Condition (
+    $runnerText -match
+        '\$leasedPathEntries = \[System\.Collections\.Hashtable\]::new\(\s*\[System\.StringComparer\]::Ordinal\s*\)' -and
+    $runnerText -match
+        '\$guardedDirectories = \[System\.Collections\.Hashtable\]::new\(\s*\[System\.StringComparer\]::Ordinal\s*\)' -and
+    $runnerText -match 'cached directory lease does not exactly match' -and
+    $runnerText -match 'cached file lease does not exactly match' -and
+    $runnerText -match 'cached optional-file lease does not exactly match' -and
+    $runnerText -match 'cached directory mutation guard does not exactly match' -and
+    $runnerText -match
+        '\$snapshot = \[System\.Collections\.Hashtable\]::new\(\s*\[System\.StringComparer\]::Ordinal\s*\)' -and
+    $runnerText -notmatch '\$key\s*=.*To(?:Upper|Lower)Invariant'
+) -Message 'Security-sensitive tester caches still collapse case-distinct NTFS paths.'
+$ordinalPathMap = [System.Collections.Hashtable]::new(
+    [System.StringComparer]::Ordinal
+)
+$ordinalPathMap['C:\case\a'] = 1
+$ordinalPathMap['C:\case\A'] = 2
+Assert-True -Condition (
+    $ordinalPathMap.Count -eq 2 -and
+    [int]$ordinalPathMap['C:\case\a'] -eq 1 -and
+    [int]$ordinalPathMap['C:\case\A'] -eq 2
+) -Message 'The PowerShell runtime did not preserve case-distinct ordinal path keys.'
 $redactionProbe = & {
     param($ProtectDefinition, $SelectDefinition)
     . ([scriptblock]::Create($ProtectDefinition))
@@ -1899,6 +1946,168 @@ try {
     )
     $expertHash = (Get-FileHash -LiteralPath $expert -Algorithm SHA256).Hash.ToLowerInvariant()
 
+    $caseSensitiveRoot = Join-Path $testRoot 'case-sensitive-path-cache'
+    [IO.Directory]::CreateDirectory($caseSensitiveRoot) | Out-Null
+    $fsutilExecutable = Join-Path $env:WINDIR 'System32\fsutil.exe'
+    $caseSensitivityOutput = @(
+        & $fsutilExecutable file setCaseSensitiveInfo $caseSensitiveRoot enable 2>&1
+    )
+    $caseSensitivityExitCode = $LASTEXITCODE
+    if ($caseSensitivityExitCode -ne 0) {
+        $caseSensitivityFailure = (
+            'Could not enable the NTFS case-sensitive path-cache regression fixture. ' +
+            ($caseSensitivityOutput -join ' ')
+        )
+        if ([string]$env:GITHUB_ACTIONS -ceq 'true') {
+            throw $caseSensitivityFailure
+        }
+        Write-Warning ($caseSensitivityFailure + ' The E2E case-sensitive check is skipped outside CI.')
+    }
+    else {
+        $caseLowerDirectory = Join-Path $caseSensitiveRoot 'a'
+        $caseUpperJunction = Join-Path $caseSensitiveRoot 'A'
+        $caseUpperTarget = Join-Path $caseSensitiveRoot 'upper-target'
+        [IO.Directory]::CreateDirectory($caseLowerDirectory) | Out-Null
+        [IO.Directory]::CreateDirectory($caseUpperTarget) | Out-Null
+        $caseExpert = Join-Path $caseLowerDirectory 'fixture.ex5'
+        $casePreset = Join-Path $caseUpperTarget 'fixture.set'
+        [IO.File]::Copy($expert, $caseExpert)
+        [IO.File]::Copy($preset, $casePreset)
+        $caseJunctionOutput = @(
+            & $env:ComSpec /d /c mklink /J $caseUpperJunction $caseUpperTarget 2>&1
+        )
+        $caseJunctionExitCode = $LASTEXITCODE
+        Assert-True -Condition ($caseJunctionExitCode -eq 0) -Message (
+            'Could not create the case-distinct junction regression fixture. ' +
+            ($caseJunctionOutput -join ' ')
+        )
+        try {
+            $caseCacheBlocked = Invoke-RunnerCase `
+                -Name 'preflight-case-sensitive-cache-junction' `
+                -Mode PreflightOnly `
+                -TerminalPath $terminal `
+                -TerminalDataPath $dataPath `
+                -ExpertPath $caseExpert `
+                -PresetPath (Join-Path $caseUpperJunction 'fixture.set') `
+                -ExpertSha256 $expertHash
+        }
+        finally {
+            [IO.Directory]::Delete($caseUpperJunction)
+        }
+        $caseCacheResultErrors = if ($null -eq $caseCacheBlocked.Result) {
+            ''
+        }
+        else {
+            @($caseCacheBlocked.Result.errors) -join ' '
+        }
+        $caseCacheDiagnostic = (
+            [string]$caseCacheBlocked.StandardOutput + ' ' +
+            [string]$caseCacheBlocked.StandardError + ' ' +
+            $caseCacheResultErrors
+        )
+        $caseCacheStatusValid = (
+            $null -eq $caseCacheBlocked.Result -or
+            (
+                [string]$caseCacheBlocked.Result.status -ceq 'blocked' -and
+                -not [bool]$caseCacheBlocked.Result.process.execution_attempted
+            )
+        )
+        Assert-True -Condition (
+            $caseCacheBlocked.ExitCode -eq 4 -and
+            $caseCacheStatusValid -and
+            $caseCacheDiagnostic -match
+                '(?i)unsafe or unleaseable directory path component'
+        ) -Message (
+            'A case-distinct intermediate junction reused a safe cached path lease. ' +
+            "exit=$($caseCacheBlocked.ExitCode); diagnostic=$caseCacheDiagnostic"
+        )
+
+        $caseJournalRoot = Join-Path $caseSensitiveRoot 'journals'
+        [IO.Directory]::CreateDirectory($caseJournalRoot) | Out-Null
+        $caseLowerJournal = Join-Path $caseJournalRoot 'a.log'
+        $caseUpperJournal = Join-Path $caseJournalRoot 'A.log'
+        [IO.File]::WriteAllText(
+            $caseLowerJournal,
+            'lower',
+            [Text.Encoding]::ASCII
+        )
+        [IO.File]::WriteAllText(
+            $caseUpperJournal,
+            'upper',
+            [Text.Encoding]::ASCII
+        )
+        $journalDefinitionTexts = New-Object 'System.Collections.Generic.List[string]'
+        foreach ($journalFunctionName in @(
+                'ConvertTo-Hex',
+                'ConvertTo-NormalizedDirectoryPath',
+                'Test-IsAbsoluteLocalDrivePath',
+                'Assert-StableFixedLocalVolumePath',
+                'Open-NonReparseDirectoryChain',
+                'Open-NonReparseFileLeaf',
+                'Get-StreamPrefixSha256',
+                'Get-JournalSnapshot'
+            )) {
+            $journalFunctionNode = $runnerAst.Find(
+                {
+                    param($node)
+                    return (
+                        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                        $node.Name -eq $journalFunctionName
+                    )
+                },
+                $true
+            )
+            Assert-True -Condition ($null -ne $journalFunctionNode) `
+                -Message "Journal dependency was not found: $journalFunctionName"
+            $journalDefinitionTexts.Add($journalFunctionNode.Extent.Text)
+        }
+        $caseJournalProbe = & {
+            param($DefinitionTexts, $JournalRoot, $LowerPath, $UpperPath)
+            foreach ($definitionText in $DefinitionTexts) {
+                . ([scriptblock]::Create($definitionText))
+            }
+            $script:fixedLocalVolumeIdentities = @{}
+            $journalLeases = New-Object 'System.Collections.Generic.List[object]'
+            $journalStreams = New-Object 'System.Collections.Generic.List[object]'
+            $journalLeasesByPath = [System.Collections.Hashtable]::new(
+                [System.StringComparer]::Ordinal
+            )
+            try {
+                $snapshot = Get-JournalSnapshot `
+                    -RootPath $JournalRoot `
+                    -PathEntryLeases $journalLeases `
+                    -LeasesByPath $journalLeasesByPath `
+                    -StreamTracker $journalStreams
+                return [pscustomobject]@{
+                    count = $snapshot.Count
+                    has_lower = $snapshot.ContainsKey(
+                        [IO.Path]::GetFullPath($LowerPath)
+                    )
+                    has_upper = $snapshot.ContainsKey(
+                        [IO.Path]::GetFullPath($UpperPath)
+                    )
+                }
+            }
+            finally {
+                for ($index = $journalStreams.Count - 1; $index -ge 0; $index--) {
+                    $journalStreams[$index].Dispose()
+                }
+                for ($index = $journalLeases.Count - 1; $index -ge 0; $index--) {
+                    $journalLeases[$index].Dispose()
+                }
+            }
+        } `
+            ($journalDefinitionTexts.ToArray()) `
+            $caseJournalRoot `
+            $caseLowerJournal `
+            $caseUpperJournal
+        Assert-True -Condition (
+            [int]$caseJournalProbe.count -eq 2 -and
+            [bool]$caseJournalProbe.has_lower -and
+            [bool]$caseJournalProbe.has_upper
+        ) -Message 'Case-distinct Strategy Tester journals collapsed to one snapshot entry.'
+    }
+
     $compileDirectory = Join-Path $testRoot 'compile'
     [IO.Directory]::CreateDirectory($compileDirectory) | Out-Null
 
@@ -2158,7 +2367,9 @@ try {
     $testerLeaseProbeRenamed = Join-Path $testRoot 'tester-lease-probe-renamed'
     [IO.Directory]::CreateDirectory($testerLeaseProbeDirectory) | Out-Null
     $testerGuardTracker = New-Object 'System.Collections.Generic.List[object]'
-    $testerGuardByPath = @{}
+    $testerGuardByPath = [System.Collections.Hashtable]::new(
+        [System.StringComparer]::Ordinal
+    )
     $testerDirectoryLease = $null
     $testerDirectoryGuard = $null
     $testerLeaseCleanupErrors = New-Object 'System.Collections.Generic.List[string]'
@@ -2340,7 +2551,10 @@ try {
             'Assert-StableFixedLocalVolumePath',
             'Open-NonReparseDirectoryChain',
             'Open-NonReparseFileLeaf',
-            'Open-NewTextArtifactReadLock'
+            'Open-NewTextArtifactReadLock',
+            'Copy-NewVerifiedOutputArtifact',
+            'Write-NewTextFile',
+            'Write-JsonFile'
         )) {
         $retainedFunctionNode = $runnerAst.Find(
             {
@@ -2357,15 +2571,28 @@ try {
     }
     $retainedArtifactProbePath = Join-Path $testRoot 'retained-artifact-probe.txt'
     $retainedArtifactCopyPath = $retainedArtifactProbePath + '.copy'
+    $publishedReportProbePath = Join-Path $testRoot 'published-report-probe.htm'
+    $publishedReportRenamedPath = $publishedReportProbePath + '.renamed'
+    $publishedManifestProbePath = Join-Path $testRoot 'published-report-result.json'
     $retainedArtifactProbe = & {
-        param($DefinitionTexts, $ProbePath, $CopyPath)
+        param(
+            $DefinitionTexts,
+            $ProbePath,
+            $CopyPath,
+            $PublishedPath,
+            $PublishedRenamedPath,
+            $ManifestPath
+        )
         foreach ($definitionText in $DefinitionTexts) {
             . ([scriptblock]::Create($definitionText))
         }
         $script:fixedLocalVolumeIdentities = @{}
         $integrityLocks = New-Object 'System.Collections.Generic.List[object]'
+        $publicationLocks = New-Object 'System.Collections.Generic.List[object]'
         $pathLeases = New-Object 'System.Collections.Generic.List[object]'
-        $leasesByPath = @{}
+        $leasesByPath = [System.Collections.Hashtable]::new(
+            [System.StringComparer]::Ordinal
+        )
         try {
             $record = Open-NewTextArtifactReadLock -Text 'retained artifact' -Path $ProbePath -Encoding (New-Object Text.UTF8Encoding($false)) -Kind 'retained artifact probe' -Tracker $integrityLocks -PathEntryLeases $pathLeases -LeasesByPath $leasesByPath
             $overwriteBlocked = $false
@@ -2388,6 +2615,56 @@ try {
                 -PathEntryLeases $pathLeases `
                 -LeasesByPath $leasesByPath `
                 -RetainedSourceStream $integrityLocks[0].stream
+
+            $sourceLease = Open-NonReparseFileLeaf `
+                -Path $ProbePath `
+                -Tracker $pathLeases `
+                -LeasesByPath $leasesByPath
+            $publishedRecord = Copy-NewVerifiedOutputArtifact `
+                -Source $ProbePath `
+                -Destination $PublishedPath `
+                -Kind 'published report probe' `
+                -SourceLease $sourceLease `
+                -Tracker $publicationLocks
+            $publicationOverwriteBlocked = $false
+            $publicationRenameBlocked = $false
+            try {
+                [IO.File]::WriteAllText(
+                    $PublishedPath,
+                    'replacement before manifest',
+                    [Text.Encoding]::ASCII
+                )
+            }
+            catch {
+                $publicationOverwriteBlocked = $true
+            }
+            try {
+                [IO.File]::Move($PublishedPath, $PublishedRenamedPath)
+            }
+            catch {
+                $publicationRenameBlocked = $true
+            }
+            Write-JsonFile `
+                -Value ([ordered]@{
+                    report_path = $PublishedPath
+                    sha256 = $publishedRecord.sha256
+                }) `
+                -Path $ManifestPath
+            $manifestWrittenWhilePinned = [IO.File]::Exists($ManifestPath)
+
+            for ($index = $publicationLocks.Count - 1; $index -ge 0; $index--) {
+                $publicationLocks[$index].stream.Dispose()
+            }
+            [IO.File]::WriteAllText(
+                $PublishedPath,
+                'replacement after manifest',
+                [Text.Encoding]::ASCII
+            )
+            [IO.File]::Move($PublishedPath, $PublishedRenamedPath)
+            $postManifestMutationSucceeded = [IO.File]::Exists(
+                $PublishedRenamedPath
+            )
+
             return [pscustomobject]@{
                 overwrite_blocked = $overwriteBlocked
                 integrity_lock_count = $integrityLocks.Count
@@ -2399,9 +2676,17 @@ try {
                     [long]$copyRecord.byte_length -eq [long]$record.byte_length -and
                     [string]$copyRecord.sha256 -ceq [string]$record.sha256
                 )
+                publication_lock_count = $publicationLocks.Count
+                publication_overwrite_blocked = $publicationOverwriteBlocked
+                publication_rename_blocked = $publicationRenameBlocked
+                manifest_written_while_pinned = $manifestWrittenWhilePinned
+                post_manifest_mutation_succeeded = $postManifestMutationSucceeded
             }
         }
         finally {
+            for ($index = $publicationLocks.Count - 1; $index -ge 0; $index--) {
+                $publicationLocks[$index].stream.Dispose()
+            }
             for ($index = $integrityLocks.Count - 1; $index -ge 0; $index--) {
                 $integrityLocks[$index].stream.Dispose()
             }
@@ -2412,7 +2697,10 @@ try {
     } `
         ($retainedArtifactDefinitions.ToArray()) `
         $retainedArtifactProbePath `
-        $retainedArtifactCopyPath
+        $retainedArtifactCopyPath `
+        $publishedReportProbePath `
+        $publishedReportRenamedPath `
+        $publishedManifestProbePath
     Assert-True -Condition (
         [bool]$retainedArtifactProbe.overwrite_blocked -and
         [int]$retainedArtifactProbe.integrity_lock_count -eq 1 -and
@@ -2421,13 +2709,24 @@ try {
         [long]$retainedArtifactProbe.byte_length -gt 0 -and
         [string]$retainedArtifactProbe.sha256 -cmatch '\A[0-9a-f]{64}\z'
     ) -Message 'A newly generated text artifact was not identity-correlated and retained under a write-denying read lock.'
+    Assert-True -Condition (
+        [int]$retainedArtifactProbe.publication_lock_count -eq 1 -and
+        [bool]$retainedArtifactProbe.publication_overwrite_blocked -and
+        [bool]$retainedArtifactProbe.publication_rename_blocked -and
+        [bool]$retainedArtifactProbe.manifest_written_while_pinned -and
+        [bool]$retainedArtifactProbe.post_manifest_mutation_succeeded
+    ) -Message 'A copied report was not pinned against overwrite and rename through manifest publication.'
     [IO.File]::WriteAllText(
         $retainedArtifactProbePath,
         'write after release',
         [Text.Encoding]::UTF8
     )
     Remove-Item `
-        -LiteralPath $retainedArtifactProbePath, $retainedArtifactCopyPath `
+        -LiteralPath `
+            $retainedArtifactProbePath, `
+            $retainedArtifactCopyPath, `
+            $publishedReportRenamedPath, `
+            $publishedManifestProbePath `
         -Force
     $mutableReportProbe = Join-Path $testRoot 'mutable-report-reservation.htm'
     $mutableReportLease = [Mql5Coding.JobProcessLaunch]::CreateMutableOutputFileLease(
@@ -2999,6 +3298,75 @@ try {
         -Message 'A root include path ending in a backslash was not delivered as one exact argument.'
     Assert-True -Condition ($receivedCompilerArguments -ccontains '/s') `
         -Message 'The syntax-only switch was swallowed by include-path command-line quoting.'
+
+    $fileDirectoryLeaseRejected = $false
+    try {
+        $invalidDirectoryLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
+            $compileSource
+        )
+        $invalidDirectoryLease.Dispose()
+    }
+    catch {
+        $fileDirectoryLeaseRejected = (
+            $_.Exception.Message -match 'did not resolve to a directory'
+        )
+    }
+    Assert-True -Condition $fileDirectoryLeaseRejected `
+        -Message 'Compiler directory leasing accepted a regular file handle.'
+
+    $includeRootTarget = Join-Path $testRoot 'compiler-include-root-target'
+    $includeRootAlias = Join-Path $testRoot 'compiler-include-root-alias'
+    $includeRootMoveProbe = Join-Path $testRoot 'compiler-include-root-moved'
+    $includeProbeArguments = Join-Path $testRoot 'fake-metaeditor-include-probe-arguments.txt'
+    [IO.Directory]::CreateDirectory($includeRootTarget) | Out-Null
+    $null = New-Item -ItemType Junction -Path $includeRootAlias -Target $includeRootTarget
+    $includeCanonicalLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
+        $includeRootAlias
+    )
+    try {
+        $canonicalIncludeRoot = [IO.Path]::GetFullPath(
+            $includeCanonicalLease.FinalPath
+        )
+    }
+    finally {
+        $includeCanonicalLease.Dispose()
+    }
+    try {
+        $includePinnedCase = Invoke-CompilerCase `
+            -SourcePath $compileSource `
+            -MetaEditorPath $metaEditor `
+            -FakeMode 'success' `
+            -IncludePath $includeRootAlias `
+            -ArgumentsPath $includeProbeArguments `
+            -IncludeProbeMovePath $includeRootMoveProbe `
+            -SyntaxOnly
+        Assert-True -Condition ($includePinnedCase.ExitCode -eq 0) `
+            -Message (
+                'Pinned include-root compilation failed. stderr=' +
+                $includePinnedCase.StandardError
+            )
+        $includeProbeReceivedArguments = @(
+            [IO.File]::ReadAllLines($includeProbeArguments)
+        )
+        Assert-True -Condition (
+            $includeProbeReceivedArguments -ccontains
+                "/include:$canonicalIncludeRoot" -and
+            $includeProbeReceivedArguments -cnotcontains
+                "/include:$includeRootAlias"
+        ) -Message 'Compiler did not pass the pinned canonical include root to MetaEditor.'
+
+        [IO.Directory]::Move($includeRootTarget, $includeRootMoveProbe)
+        [IO.Directory]::Move($includeRootMoveProbe, $includeRootTarget)
+    }
+    finally {
+        if ([IO.Directory]::Exists($includeRootAlias)) {
+            [IO.Directory]::Delete($includeRootAlias)
+        }
+        if ([IO.Directory]::Exists($includeRootMoveProbe) -and
+            -not [IO.Directory]::Exists($includeRootTarget)) {
+            [IO.Directory]::Move($includeRootMoveProbe, $includeRootTarget)
+        }
+    }
 
     $earlyExit = Invoke-CompilerCase `
         -SourcePath $compileSource `

@@ -46,6 +46,7 @@ $warningCount = $null
 $artifactPath = $null
 $resolvedSource = $null
 $resolvedInclude = $null
+$includeRootLease = $null
 $resolvedMetaEditor = $null
 $metaEditorParentLease = $null
 $metaEditorReadLease = $null
@@ -587,6 +588,15 @@ try {
         }
     }
 
+    if (-not [string]::IsNullOrWhiteSpace($resolvedInclude)) {
+        $includeRootLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
+            $resolvedInclude
+        )
+        $resolvedInclude = [System.IO.Path]::GetFullPath(
+            $includeRootLease.FinalPath
+        )
+    }
+
     $sourceLeaf = [System.IO.Path]::GetFileName($resolvedSource)
     $sourceParentPath = [System.IO.Path]::GetDirectoryName($resolvedSource)
     $sourceParentLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
@@ -1041,6 +1051,20 @@ finally {
                 }
             }
         }
+    }
+
+    if ($null -ne $includeRootLease) {
+        try {
+            $includeRootLease.Dispose()
+        }
+        catch {
+            $exitCode = $ExitToolError
+            $status = 'tool_error'
+            if ([string]::IsNullOrWhiteSpace($errorMessage)) {
+                $errorMessage = "Could not release the include-root identity lease: $($_.Exception.Message)"
+            }
+        }
+        $includeRootLease = $null
     }
 
     if ($null -ne $metaEditorReadLease) {
