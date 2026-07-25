@@ -225,6 +225,51 @@ function Resolve-MetaEditorExecutable {
     throw 'MetaEditor was not found. Supply -MetaEditorPath or set METAEDITOR_EXE.'
 }
 
+function ConvertTo-WindowsCommandLineArgument {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Value
+    )
+
+    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') {
+        return $Value
+    }
+
+    $backslash = [char]92
+    $quote = [char]34
+    $builder = New-Object Text.StringBuilder
+    [void]$builder.Append($quote)
+    $pendingBackslashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq $backslash) {
+            $pendingBackslashes++
+            continue
+        }
+
+        if ($character -eq $quote) {
+            [void]$builder.Append(
+                $backslash,
+                (($pendingBackslashes * 2) + 1)
+            )
+            [void]$builder.Append($quote)
+        }
+        else {
+            if ($pendingBackslashes -gt 0) {
+                [void]$builder.Append($backslash, $pendingBackslashes)
+            }
+            [void]$builder.Append($character)
+        }
+        $pendingBackslashes = 0
+    }
+
+    if ($pendingBackslashes -gt 0) {
+        [void]$builder.Append($backslash, ($pendingBackslashes * 2))
+    }
+    [void]$builder.Append($quote)
+    return $builder.ToString()
+}
+
 function Read-SharedText {
     param(
         [Parameter(Mandatory = $true)][string]$LiteralPath,
@@ -393,8 +438,9 @@ function Complete-LeasedCompilerOutput {
         )
     }
 
-    if ($null -ne $OriginalPinnedLease -and $null -eq $OriginalMovableLease) {
-        throw "The preserved $Description has no movable identity lease.$recovery"
+    if (($null -eq $OriginalMovableLease) -xor
+        ($null -eq $OriginalPinnedLease)) {
+        throw "The preserved $Description does not have a complete identity lease pair.$recovery"
     }
     if ($null -ne $OriginalMovableLease) {
         if ([string]$OriginalMovableLease.GetCurrentIdentity() -cne
@@ -461,21 +507,11 @@ function Complete-LeasedCompilerOutput {
     }
 
     if ($null -ne $OriginalMovableLease) {
+        $originalIdentity = [string]$OriginalMovableLease.Identity
         $OriginalMovableLease.RenameTo($LiteralPath)
-        $restored = $null
-        try {
-            $restored = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(
-                $LiteralPath
-            )
-            if ($null -eq $restored -or
-                [string]$restored.Identity -cne [string]$OriginalMovableLease.Identity) {
-                throw "The original $Description was not restored with its preserved identity."
-            }
-        }
-        finally {
-            if ($null -ne $restored) {
-                $restored.Dispose()
-            }
+        if ([string]$OriginalMovableLease.GetCurrentIdentity() -cne $originalIdentity -or
+            [string]$OriginalPinnedLease.GetCurrentIdentity() -cne $originalIdentity) {
+            throw "The original $Description was not restored with its preserved identity."
         }
     }
 }
@@ -646,6 +682,7 @@ try {
     }
 
     $artifactProbeLease = $null
+    $artifactProbePinnedLease = $null
     try {
         $artifactProbeLease = [Mql5Coding.CompilerProcessJob]::TryOpenMovableOutputFileIdentityLease(
             $artifactPath
@@ -660,30 +697,36 @@ try {
         }
         else {
             $artifactBackupIdentity = [string]$artifactProbeLease.Identity
+            $artifactProbePinnedLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(
+                $artifactPath
+            )
+            if ($null -eq $artifactProbePinnedLease -or
+                [string]$artifactProbePinnedLease.Identity -cne $artifactBackupIdentity) {
+                throw 'The original compiler artifact changed while its preservation leases were acquired.'
+            }
+            $artifactSnapshot = Get-ArtifactState -LiteralPath $artifactPath -Lease $artifactProbePinnedLease
             $artifactBackupPath = Move-OriginalArtifactAside -LiteralPath $artifactPath -Lease $artifactProbeLease
             $artifactBackupMovableLease = $artifactProbeLease
+            $artifactBackupLease = $artifactProbePinnedLease
             $artifactProbeLease = $null
+            $artifactProbePinnedLease = $null
             $artifactPrepared = $true
 
-            $artifactBackupLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(
-                $artifactBackupPath
-            )
-            if ($null -eq $artifactBackupLease -or
-                [string]$artifactBackupLease.Identity -cne $artifactBackupIdentity) {
-                throw 'The original compiler artifact changed while it was moved to its backup path.'
-            }
-            $artifactSnapshot = Get-ArtifactState -LiteralPath $artifactBackupPath -Lease $artifactBackupLease
             $artifactSnapshot | Add-Member -NotePropertyName BackupPath -NotePropertyValue $artifactBackupPath
             $artifactSnapshot | Add-Member -NotePropertyName Identity -NotePropertyValue $artifactBackupIdentity
         }
     }
     finally {
+        if ($null -ne $artifactProbePinnedLease) {
+            $artifactProbePinnedLease.Dispose()
+        }
         if ($null -ne $artifactProbeLease) {
             $artifactProbeLease.Dispose()
         }
     }
 
     $logProbeLease = $null
+    $logProbePinnedLease = $null
     try {
         $logProbeLease = [Mql5Coding.CompilerProcessJob]::TryOpenMovableOutputFileIdentityLease(
             $logPath
@@ -698,18 +741,20 @@ try {
         }
         else {
             $logIdentity = [string]$logProbeLease.Identity
+            $logProbePinnedLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(
+                $logPath
+            )
+            if ($null -eq $logProbePinnedLease -or
+                [string]$logProbePinnedLease.Identity -cne $logIdentity) {
+                throw 'The original compilation log changed while its preservation leases were acquired.'
+            }
             $logBackupPath = Move-OriginalLogAside -LiteralPath $logPath -Lease $logProbeLease
             $logBackupMovableLease = $logProbeLease
+            $logBackupLease = $logProbePinnedLease
             $logProbeLease = $null
+            $logProbePinnedLease = $null
             $logPrepared = $true
 
-            $logBackupLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(
-                $logBackupPath
-            )
-            if ($null -eq $logBackupLease -or
-                [string]$logBackupLease.Identity -cne $logIdentity) {
-                throw 'The original compilation log changed while it was moved to its backup path.'
-            }
             $logSnapshot = [pscustomobject]@{
                 Existed    = $true
                 BackupPath = $logBackupPath
@@ -718,6 +763,9 @@ try {
         }
     }
     finally {
+        if ($null -ne $logProbePinnedLease) {
+            $logProbePinnedLease.Dispose()
+        }
         if ($null -ne $logProbeLease) {
             $logProbeLease.Dispose()
         }
