@@ -2770,12 +2770,17 @@ try {
             for ($index = $publicationLocks.Count - 1; $index -ge 0; $index--) {
                 $publicationLocks[$index].stream.Dispose()
             }
-            [IO.File]::WriteAllText(
-                $PublishedPath,
-                'replacement after manifest',
-                [Text.Encoding]::ASCII
-            )
-            [IO.File]::Move($PublishedPath, $PublishedRenamedPath)
+            try {
+                [IO.File]::WriteAllText(
+                    $PublishedPath,
+                    'replacement after manifest',
+                    [Text.Encoding]::ASCII
+                )
+                [IO.File]::Move($PublishedPath, $PublishedRenamedPath)
+            }
+            catch {
+                throw "The report publication stream was not released after manifest creation: $($_.Exception.Message)"
+            }
             $postManifestMutationSucceeded = [IO.File]::Exists(
                 $PublishedRenamedPath
             )
@@ -3433,6 +3438,7 @@ try {
     $includeRootAlias = Join-Path $testRoot 'compiler-include-root-alias'
     $includeRootMoveProbe = Join-Path $testRoot 'compiler-include-root-moved'
     $includeProbeArguments = Join-Path $testRoot 'fake-metaeditor-include-probe-arguments.txt'
+    $includeRootAliasRemoved = $false
     [IO.Directory]::CreateDirectory($includeRootTarget) | Out-Null
     $null = New-Item -ItemType Junction -Path $includeRootAlias -Target $includeRootTarget
     $includeCanonicalLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
@@ -3470,11 +3476,19 @@ try {
                 "/include:$includeRootAlias"
         ) -Message 'Compiler did not pass the pinned canonical include root to MetaEditor.'
 
-        [IO.Directory]::Move($includeRootTarget, $includeRootMoveProbe)
-        [IO.Directory]::Move($includeRootMoveProbe, $includeRootTarget)
+        [IO.Directory]::Delete($includeRootAlias)
+        $includeRootAliasRemoved = $true
+        try {
+            [IO.Directory]::Move($includeRootTarget, $includeRootMoveProbe)
+            [IO.Directory]::Move($includeRootMoveProbe, $includeRootTarget)
+        }
+        catch {
+            throw "The include-root lease was not released after compilation: $($_.Exception.Message)"
+        }
     }
     finally {
-        if ([IO.Directory]::Exists($includeRootAlias)) {
+        if (-not $includeRootAliasRemoved -and
+            [IO.Directory]::Exists($includeRootAlias)) {
             [IO.Directory]::Delete($includeRootAlias)
         }
         if ([IO.Directory]::Exists($includeRootMoveProbe) -and
