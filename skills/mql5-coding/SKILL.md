@@ -79,7 +79,7 @@ $compiler = [IO.Path]::GetFullPath((Join-Path $codexHome "skills\mql5-coding\scr
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $compiler -SourcePath "<absolute-source-path>"
 ```
 
-Use `-IncludePath "<absolute-MQL5-root>"` only when a required custom include root cannot be auto-detected. Use `-SyntaxOnly` only when the user explicitly requests a syntax check instead of a compiled artifact.
+Use `-IncludePath "<absolute-MQL5-root>"` only when a required custom include root cannot be auto-detected. Use `-SyntaxOnly` only when the user explicitly requests a syntax check instead of a compiled artifact. The wrapper canonicalizes directory-junction aliases but rejects a `.mq5` source leaf that is itself a symlink or reparse point, because that pathname cannot be safely pinned for MetaEditor.
 
 Interpret the wrapper exit code exactly:
 

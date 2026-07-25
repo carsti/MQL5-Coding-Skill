@@ -17,6 +17,17 @@ internal static class FakeMetaEditor
         throw new InvalidOperationException("Missing /compile argument.");
     }
 
+    private static string IncludePath(string[] args)
+    {
+        foreach (string arg in args)
+        {
+            const string prefix = "/include:";
+            if (arg.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return Path.GetFullPath(arg.Substring(prefix.Length).Trim('"'));
+        }
+        throw new InvalidOperationException("Missing /include argument.");
+    }
+
     private static bool HasArgument(string[] args, string expected)
     {
         foreach (string arg in args)
@@ -36,6 +47,36 @@ internal static class FakeMetaEditor
         string argumentsPath = Environment.GetEnvironmentVariable("FAKE_METAEDITOR_ARGS_PATH");
         if (!String.IsNullOrWhiteSpace(argumentsPath))
             File.WriteAllLines(argumentsPath, args, new UTF8Encoding(false));
+
+        string includeMovePath = Environment.GetEnvironmentVariable(
+            "FAKE_METAEDITOR_INCLUDE_MOVE_PATH");
+        if (!String.IsNullOrWhiteSpace(includeMovePath))
+        {
+            string includeRoot = IncludePath(args);
+            string moveTarget = Path.GetFullPath(includeMovePath);
+            bool moved = false;
+            try
+            {
+                Directory.Move(includeRoot, moveTarget);
+                moved = true;
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+            if (moved)
+            {
+                Directory.Move(moveTarget, includeRoot);
+                throw new InvalidOperationException(
+                    "The include-root directory was movable during compilation.");
+            }
+        }
+
+        byte[] sourceBytes = File.ReadAllBytes(sourcePath);
+        if (sourceBytes.Length == 0)
+            throw new InvalidOperationException("Synthetic compiler received an empty source file.");
 
         if (mode == "exit_without_result")
             return 0;

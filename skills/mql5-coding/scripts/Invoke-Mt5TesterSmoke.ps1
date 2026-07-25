@@ -32,6 +32,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$fixedLocalVolumeIdentities = @{}
 
 $nativeTypeLoadError = $null
 try {
@@ -40,6 +41,7 @@ try {
 using System;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -58,6 +60,27 @@ namespace Mql5Coding
         private const int JobObjectExtendedLimitInformationClass = 9;
         private const uint WaitObject0 = 0x00000000;
         private const uint WaitFailed = 0xFFFFFFFF;
+        private const uint FileListDirectory = 0x00000001;
+        private const uint GenericRead = 0x80000000;
+        private const uint GenericWrite = 0x40000000;
+        private const uint ProcessQueryLimitedInformation = 0x00001000;
+        private const uint ProcessNameNative = 0x00000001;
+        private const uint ShareRead = 0x00000001;
+        private const uint ShareReadWrite = 0x00000003;
+        private const uint ShareReadWriteDelete = 0x00000007;
+        private const uint DriveFixed = 3;
+        private const int ErrorFileNotFound = 2;
+        private const int ErrorPathNotFound = 3;
+        private const int ErrorFileExists = 80;
+        private const int ErrorAlreadyExists = 183;
+        private const int ErrorMoreData = 234;
+        private const uint CreateNew = 1;
+        private const uint OpenExisting = 3;
+        private const uint FileAttributeDirectory = 0x00000010;
+        private const uint FileAttributeNormal = 0x00000080;
+        private const uint FileAttributeReparsePoint = 0x00000400;
+        private const uint FileFlagOpenReparsePoint = 0x00200000;
+        private const uint FileFlagBackupSemantics = 0x02000000;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct IoCounters
@@ -184,6 +207,86 @@ namespace Mql5Coding
             uint informationLength,
             out uint returnLength);
 
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "CreateFileW")]
+        private static extern SafeFileHandle OpenPathHandle(
+            string path,
+            uint desiredAccess,
+            uint shareMode,
+            IntPtr securityAttributes,
+            uint creationDisposition,
+            uint flagsAndAttributes,
+            IntPtr templateFile);
+
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "CreateDirectoryW")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CreateDirectoryPath(
+            string path,
+            IntPtr securityAttributes);
+
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "GetDriveTypeW")]
+        private static extern uint GetDriveType(string rootPathName);
+
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "QueryDosDeviceW")]
+        private static extern uint QueryDosDevice(
+            string deviceName,
+            StringBuilder targetPath,
+            uint maximumCharacters);
+
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "GetVolumeNameForVolumeMountPointW")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetVolumeNameForVolumeMountPoint(
+            string volumeMountPoint,
+            StringBuilder volumeName,
+            uint bufferLength);
+
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "GetVolumePathNamesForVolumeNameW")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetVolumePathNamesForVolumeName(
+            string volumeName,
+            [Out] char[] volumePathNames,
+            uint bufferLength,
+            out uint returnLength);
+
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "GetVolumeInformationW")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetVolumeInformation(
+            string rootPathName,
+            StringBuilder volumeName,
+            uint volumeNameSize,
+            out uint volumeSerialNumber,
+            out uint maximumComponentLength,
+            out uint fileSystemFlags,
+            StringBuilder fileSystemName,
+            uint fileSystemNameSize);
+
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool CreateProcessW(
@@ -230,6 +333,12 @@ namespace Mql5Coding
             SafeFileHandle file,
             out ByHandleFileInformation information);
 
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern SafeWaitHandle OpenProcess(
+            uint desiredAccess,
+            [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
+            uint processId);
+
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool QueryFullProcessImageName(
@@ -256,6 +365,59 @@ namespace Mql5Coding
         }
 
         public int ProcessId { get; private set; }
+
+        public sealed class PathEntryLease : IDisposable
+        {
+            private SafeFileHandle handle;
+
+            internal PathEntryLease(
+                SafeFileHandle entryHandle,
+                string path,
+                string identity,
+                bool isDirectory)
+            {
+                handle = entryHandle;
+                Path = path;
+                Identity = identity;
+                IsDirectory = isDirectory;
+            }
+
+            public string Path { get; private set; }
+
+            public string Identity { get; private set; }
+
+            public bool IsDirectory { get; private set; }
+
+            public void VerifyStillNonReparseDirectory()
+            {
+                if (handle == null || handle.IsInvalid || handle.IsClosed)
+                    throw new InvalidOperationException(
+                        "The directory path-integrity handle is unavailable.");
+                if (!IsDirectory)
+                    throw new InvalidOperationException(
+                        "The path-integrity lease does not identify a directory.");
+
+                ByHandleFileInformation information;
+                if (!GetFileInformationByHandle(handle, out information))
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "Reading live directory attributes failed: " + Path);
+                if ((information.FileAttributes & FileAttributeDirectory) == 0 ||
+                    (information.FileAttributes & FileAttributeReparsePoint) != 0)
+                    throw new InvalidOperationException(
+                        "A leased directory became a reparse point or changed type: " +
+                        Path);
+            }
+
+            public void Dispose()
+            {
+                if (handle != null)
+                {
+                    handle.Dispose();
+                    handle = null;
+                }
+            }
+        }
 
         public static JobProcessLaunch CreateSuspended(
             string applicationPath,
@@ -408,6 +570,479 @@ namespace Mql5Coding
                 ":" + fileIndex.ToString("X16");
         }
 
+        private static bool VolumePathListContainsRoot(
+            string volumeName,
+            string root)
+        {
+            uint requiredLength;
+            char[] paths = new char[1024];
+            while (!GetVolumePathNamesForVolumeName(
+                volumeName,
+                paths,
+                unchecked((uint)paths.Length),
+                out requiredLength))
+            {
+                int error = Marshal.GetLastWin32Error();
+                if (error != ErrorMoreData ||
+                    requiredLength <= unchecked((uint)paths.Length) ||
+                    requiredLength > 1048576)
+                    throw new Win32Exception(
+                        error,
+                        "GetVolumePathNamesForVolumeName failed for " +
+                        volumeName + ".");
+                paths = new char[checked((int)requiredLength)];
+            }
+
+            int start = 0;
+            while (start < paths.Length && paths[start] != '\0')
+            {
+                int end = start;
+                while (end < paths.Length && paths[end] != '\0')
+                    end++;
+                string volumePath = new string(paths, start, end - start);
+                if (String.Equals(
+                    volumePath,
+                    root,
+                    StringComparison.OrdinalIgnoreCase))
+                    return true;
+                start = end + 1;
+            }
+            return false;
+        }
+
+        public static string GetFixedLocalVolumeIdentity(string path)
+        {
+            if (String.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("A path is required.", "path");
+
+            string fullPath = Path.GetFullPath(path);
+            string root = Path.GetPathRoot(fullPath);
+            if (String.IsNullOrWhiteSpace(root) ||
+                root.Length != 3 ||
+                !Char.IsLetter(root[0]) ||
+                root[1] != ':' ||
+                (root[2] != '\\' && root[2] != '/'))
+                throw new InvalidOperationException(
+                    "A drive-rooted path is required: " + fullPath);
+
+            uint driveType = GetDriveType(root);
+            if (driveType != DriveFixed)
+                throw new InvalidOperationException(
+                    "The path is not on a fixed local drive: " + fullPath);
+
+            string deviceName = root.Substring(0, 2);
+            StringBuilder mappingBuffer = new StringBuilder(32768);
+            uint mappingLength = QueryDosDevice(
+                deviceName,
+                mappingBuffer,
+                unchecked((uint)mappingBuffer.Capacity));
+            if (mappingLength == 0)
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "QueryDosDevice failed for " + deviceName + ".");
+
+            string mapping = mappingBuffer.ToString();
+            const string DirectVolumePrefix = @"\Device\HarddiskVolume";
+            if (!mapping.StartsWith(
+                    DirectVolumePrefix,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "Mapped, substituted, and redirected drive letters are not allowed: " +
+                    deviceName + " -> " + mapping);
+
+            string volumeSuffix = mapping.Substring(DirectVolumePrefix.Length);
+            if (volumeSuffix.Length == 0)
+                throw new InvalidOperationException(
+                    "The drive letter does not map to a numbered local volume: " +
+                    deviceName + " -> " + mapping);
+            foreach (char value in volumeSuffix)
+            {
+                if (!Char.IsDigit(value))
+                    throw new InvalidOperationException(
+                        "The drive letter is not a direct local-volume mapping: " +
+                        deviceName + " -> " + mapping);
+            }
+
+            StringBuilder volumeNameBuffer = new StringBuilder(1024);
+            if (!GetVolumeNameForVolumeMountPoint(
+                    root,
+                    volumeNameBuffer,
+                    unchecked((uint)volumeNameBuffer.Capacity)))
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "GetVolumeNameForVolumeMountPoint failed for " + root + ".");
+
+            string volumeName = volumeNameBuffer.ToString();
+            if (!volumeName.StartsWith(
+                    @"\\?\Volume{",
+                    StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "The drive root did not resolve to a stable volume GUID: " +
+                    root);
+            if (!VolumePathListContainsRoot(volumeName, root))
+                throw new InvalidOperationException(
+                    "The drive letter is not registered for this volume by the " +
+                    "Windows mount manager: " + root);
+
+            uint volumeSerialNumber;
+            uint maximumComponentLength;
+            uint fileSystemFlags;
+            StringBuilder displayName = new StringBuilder(261);
+            StringBuilder fileSystemName = new StringBuilder(261);
+            if (!GetVolumeInformation(
+                    root,
+                    displayName,
+                    unchecked((uint)displayName.Capacity),
+                    out volumeSerialNumber,
+                    out maximumComponentLength,
+                    out fileSystemFlags,
+                    fileSystemName,
+                    unchecked((uint)fileSystemName.Capacity)))
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "GetVolumeInformation failed for " + root + ".");
+
+            return volumeSerialNumber.ToString("X8") + "|" +
+                volumeName.ToUpperInvariant() + "|" +
+                mapping.ToUpperInvariant();
+        }
+
+        public static void VerifyPathEntryLeaseVolume(
+            string path,
+            PathEntryLease lease)
+        {
+            if (lease == null)
+                throw new ArgumentNullException("lease");
+
+            string volumeIdentity = GetFixedLocalVolumeIdentity(path);
+            int separator = volumeIdentity.IndexOf('|');
+            if (separator <= 0)
+                throw new InvalidOperationException(
+                    "The fixed-volume identity is malformed.");
+            string expectedSerial = volumeIdentity.Substring(0, separator);
+            string leaseIdentity = lease.Identity ?? String.Empty;
+            int identitySeparator = leaseIdentity.IndexOf(':');
+            string actualSerial = identitySeparator > 0
+                ? leaseIdentity.Substring(0, identitySeparator)
+                : String.Empty;
+            if (!String.Equals(
+                    expectedSerial,
+                    actualSerial,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "The path-entry lease was opened on a different volume: " +
+                    path);
+        }
+
+        private static PathEntryLease OpenNonReparsePathEntry(
+            string path,
+            bool requireDirectory,
+            uint shareMode)
+        {
+            if (String.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("A path is required.", "path");
+
+            uint flags = FileFlagOpenReparsePoint;
+            if (requireDirectory)
+                flags |= FileFlagBackupSemantics;
+
+            SafeFileHandle handle = OpenPathHandle(
+                path,
+                requireDirectory ? FileListDirectory : GenericRead,
+                shareMode,
+                IntPtr.Zero,
+                OpenExisting,
+                flags,
+                IntPtr.Zero);
+            if (handle == null || handle.IsInvalid)
+            {
+                if (handle != null)
+                    handle.Dispose();
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "Opening a path-integrity lease failed: " + path);
+            }
+
+            try
+            {
+                ByHandleFileInformation information;
+                if (!GetFileInformationByHandle(handle, out information))
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "Reading path-integrity attributes failed: " + path);
+
+                bool isDirectory =
+                    (information.FileAttributes & FileAttributeDirectory) != 0;
+                if ((information.FileAttributes & FileAttributeReparsePoint) != 0)
+                    throw new InvalidOperationException(
+                        "Reparse-point path entries are not allowed: " + path);
+                if (requireDirectory && !isDirectory)
+                    throw new InvalidOperationException(
+                        "A directory path component was expected: " + path);
+                if (!requireDirectory && isDirectory)
+                    throw new InvalidOperationException(
+                        "A file path entry was expected: " + path);
+
+                PathEntryLease lease = new PathEntryLease(
+                    handle,
+                    path,
+                    GetFileIdentity(handle),
+                    isDirectory);
+                handle = null;
+                return lease;
+            }
+            finally
+            {
+                if (handle != null)
+                    handle.Dispose();
+            }
+        }
+
+        public static PathEntryLease OpenDirectoryComponentLease(string path)
+        {
+            return OpenNonReparsePathEntry(path, true, ShareRead);
+        }
+
+        public static PathEntryLease OpenFileLeafLease(string path)
+        {
+            return OpenNonReparsePathEntry(path, false, ShareReadWrite);
+        }
+
+        public static PathEntryLease TryOpenFileLeafLease(string path)
+        {
+            try
+            {
+                return OpenNonReparsePathEntry(path, false, ShareReadWrite);
+            }
+            catch (Win32Exception exception)
+            {
+                if (exception.NativeErrorCode == ErrorFileNotFound ||
+                    exception.NativeErrorCode == ErrorPathNotFound)
+                    return null;
+                throw;
+            }
+        }
+
+        private static void VerifyNonReparseFile(
+            SafeFileHandle handle,
+            string path)
+        {
+            ByHandleFileInformation information;
+            if (!GetFileInformationByHandle(handle, out information))
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "Reading output-file attributes failed: " + path);
+            if ((information.FileAttributes & FileAttributeDirectory) != 0)
+                throw new InvalidOperationException(
+                    "An output file resolved to a directory: " + path);
+            if ((information.FileAttributes & FileAttributeReparsePoint) != 0)
+                throw new InvalidOperationException(
+                    "Output-file reparse points are not allowed: " + path);
+        }
+
+        public static PathEntryLease CreateMutableOutputFileLease(string path)
+        {
+            if (String.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("A path is required.", "path");
+
+            // Retain the exact no-follow creation handle. A zero-access reopen
+            // does not reliably block rename/delete on Windows and reintroduces
+            // output-provenance risk. GenericRead with read/write sharing lets
+            // MT5 write the reserved file in place while denying replacement.
+            SafeFileHandle handle = OpenPathHandle(
+                path,
+                GenericRead,
+                ShareReadWrite,
+                IntPtr.Zero,
+                CreateNew,
+                FileAttributeNormal | FileFlagOpenReparsePoint,
+                IntPtr.Zero);
+            if (handle == null || handle.IsInvalid)
+            {
+                int error = Marshal.GetLastWin32Error();
+                if (handle != null)
+                    handle.Dispose();
+                throw new Win32Exception(
+                    error,
+                    "Creating a mutable output reservation failed: " + path);
+            }
+
+            try
+            {
+                VerifyNonReparseFile(handle, path);
+                PathEntryLease lease = new PathEntryLease(
+                    handle,
+                    path,
+                    GetFileIdentity(handle),
+                    false);
+                handle = null;
+                return lease;
+            }
+            finally
+            {
+                if (handle != null)
+                    handle.Dispose();
+            }
+        }
+
+        public static FileStream CreatePinnedOutputFileStream(string path)
+        {
+            if (String.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("A path is required.", "path");
+
+            SafeFileHandle handle = OpenPathHandle(
+                path,
+                GenericRead | GenericWrite,
+                ShareRead,
+                IntPtr.Zero,
+                CreateNew,
+                FileAttributeNormal | FileFlagOpenReparsePoint,
+                IntPtr.Zero);
+            if (handle == null || handle.IsInvalid)
+            {
+                int error = Marshal.GetLastWin32Error();
+                if (handle != null)
+                    handle.Dispose();
+                throw new Win32Exception(
+                    error,
+                    "Creating a pinned output file failed: " + path);
+            }
+
+            try
+            {
+                VerifyNonReparseFile(handle, path);
+                FileStream stream = new FileStream(handle, FileAccess.ReadWrite);
+                handle = null;
+                return stream;
+            }
+            finally
+            {
+                if (handle != null)
+                    handle.Dispose();
+            }
+        }
+
+        public static bool TryCreateDirectory(string path)
+        {
+            if (String.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("A path is required.", "path");
+            if (CreateDirectoryPath(path, IntPtr.Zero))
+                return true;
+
+            int error = Marshal.GetLastWin32Error();
+            if (error == ErrorFileExists || error == ErrorAlreadyExists)
+                return false;
+            throw new Win32Exception(
+                error,
+                "Creating a path-integrity directory failed: " + path);
+        }
+
+        public static string GetNonReparseGuardFileIdentity(string path)
+        {
+            using (PathEntryLease lease = OpenNonReparsePathEntry(
+                path,
+                false,
+                ShareReadWriteDelete))
+            {
+                return lease.Identity;
+            }
+        }
+
+        public static bool TryGetProcessImagePathOnFixedVolume(
+            int processId,
+            string fixedVolumePath,
+            out string processImagePath)
+        {
+            processImagePath = null;
+            if (processId <= 0)
+                throw new ArgumentOutOfRangeException(
+                    "processId",
+                    "A positive process identifier is required.");
+            if (String.IsNullOrWhiteSpace(fixedVolumePath))
+                throw new ArgumentException(
+                    "A fixed-volume path is required.",
+                    "fixedVolumePath");
+
+            string fullPath = Path.GetFullPath(fixedVolumePath);
+            string root = Path.GetPathRoot(fullPath);
+            string volumeIdentity = GetFixedLocalVolumeIdentity(fullPath);
+            int mappingSeparator = volumeIdentity.LastIndexOf('|');
+            if (mappingSeparator < 0 ||
+                mappingSeparator == volumeIdentity.Length - 1)
+                throw new InvalidOperationException(
+                    "The fixed-volume identity is malformed.");
+
+            string expectedDevicePrefix =
+                volumeIdentity.Substring(mappingSeparator + 1);
+            string nativeImagePath;
+            SafeWaitHandle process = null;
+            try
+            {
+                process = OpenProcess(
+                    ProcessQueryLimitedInformation,
+                    false,
+                    unchecked((uint)processId));
+                if (process == null || process.IsInvalid)
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "OpenProcess failed for PID " + processId + ".");
+
+                uint capacity = 32768;
+                StringBuilder imagePath = new StringBuilder((int)capacity);
+                if (!QueryFullProcessImageName(
+                        process,
+                        ProcessNameNative,
+                        imagePath,
+                        ref capacity))
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "QueryFullProcessImageName failed for PID " +
+                        processId + ".");
+                nativeImagePath = imagePath.ToString();
+            }
+            finally
+            {
+                if (process != null)
+                    process.Dispose();
+            }
+
+            if (nativeImagePath.Length <= expectedDevicePrefix.Length ||
+                !nativeImagePath.StartsWith(
+                    expectedDevicePrefix,
+                    StringComparison.OrdinalIgnoreCase) ||
+                nativeImagePath[expectedDevicePrefix.Length] != '\\')
+                return false;
+
+            string relativePath =
+                nativeImagePath.Substring(expectedDevicePrefix.Length + 1);
+            if (String.IsNullOrWhiteSpace(relativePath) ||
+                relativePath.IndexOf(':') >= 0)
+                throw new InvalidOperationException(
+                    "The native process-image path is malformed for PID " +
+                    processId + ".");
+
+            string translatedPath = Path.GetFullPath(
+                Path.Combine(root, relativePath));
+            if (!String.Equals(
+                    Path.GetPathRoot(translatedPath),
+                    root,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "The native process-image path escaped its fixed volume.");
+
+            string translatedVolumeIdentity =
+                GetFixedLocalVolumeIdentity(translatedPath);
+            if (!String.Equals(
+                    translatedVolumeIdentity,
+                    volumeIdentity,
+                    StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    "The fixed-volume mapping changed during process-image inspection.");
+
+            processImagePath = translatedPath;
+            return true;
+        }
+
         public string GetImagePath()
         {
             if (processHandle == null || processHandle.IsInvalid || processHandle.IsClosed)
@@ -523,19 +1158,398 @@ function Assert-SafeIniValue {
     }
 }
 
+function ConvertTo-NormalizedDirectoryPath {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $full = [IO.Path]::GetFullPath($Path)
+    $root = [IO.Path]::GetPathRoot($full)
+    if (-not [string]::IsNullOrWhiteSpace($root) -and
+        $full.Length -gt $root.Length) {
+        $full = $full.TrimEnd([char[]]@('\', '/'))
+    }
+    return $full
+}
+
+function Test-IsAbsoluteLocalDrivePath {
+    param([Parameter(Mandatory)][string]$Path)
+
+    return (
+        -not [string]::IsNullOrWhiteSpace($Path) -and
+        $Path -cmatch '\A[A-Za-z]:[\\/]'
+    )
+}
+
 function Resolve-ExistingFile {
     param(
         [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$Name
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
     )
-    if (-not [IO.Path]::IsPathRooted($Path)) {
+    if (-not (Test-IsAbsoluteLocalDrivePath -Path $Path)) {
         throw "$Name must be an absolute path."
     }
-    $resolved = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
-    if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
-        throw "$Name is not a file: $resolved"
+    $full = [IO.Path]::GetFullPath($Path)
+    Assert-StableFixedLocalVolumePath -Path $full
+    $null = Open-NonReparseFileLeaf `
+        -Path $full `
+        -Tracker $Tracker `
+        -LeasesByPath $LeasesByPath
+    return $full
+}
+
+function Assert-StableFixedLocalVolumePath {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $full = [IO.Path]::GetFullPath($Path)
+    try {
+        $identity = [Mql5Coding.JobProcessLaunch]::GetFixedLocalVolumeIdentity(
+            $full
+        )
     }
-    return [IO.Path]::GetFullPath($resolved)
+    catch {
+        throw "BLOCKED: Security-sensitive paths must use a direct fixed local volume: $full. $($_.Exception.Message)"
+    }
+
+    $rootKey = ([IO.Path]::GetPathRoot($full)).ToUpperInvariant()
+    if ($script:fixedLocalVolumeIdentities.ContainsKey($rootKey)) {
+        if ([string]$script:fixedLocalVolumeIdentities[$rootKey] -cne
+            [string]$identity) {
+            throw "BLOCKED: The local-volume mapping changed during tester validation: $rootKey"
+        }
+    }
+    else {
+        $script:fixedLocalVolumeIdentities[$rootKey] = $identity
+    }
+}
+
+function Open-NonReparseDirectoryChain {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
+    )
+
+    if (-not (Test-IsAbsoluteLocalDrivePath -Path $Path)) {
+        throw "BLOCKED: Security-sensitive directories must use absolute local-drive paths: $Path"
+    }
+    $full = ConvertTo-NormalizedDirectoryPath -Path $Path
+    if ($full -cnotmatch '\A[A-Za-z]:\\') {
+        throw "BLOCKED: UNC, device, and drive-relative paths are not supported for security-sensitive tester paths: $full"
+    }
+    Assert-StableFixedLocalVolumePath -Path $full
+
+    $root = [IO.Path]::GetPathRoot($full)
+    $candidates = New-Object 'System.Collections.Generic.List[string]'
+    $candidates.Add($root)
+    $current = $root
+    $relative = $full.Substring($root.Length)
+    foreach ($component in @($relative -split '[\\/]' | Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_)
+            })) {
+        $current = Join-Path $current $component
+        $candidates.Add((ConvertTo-NormalizedDirectoryPath -Path $current))
+    }
+
+    foreach ($candidate in $candidates) {
+        Assert-StableFixedLocalVolumePath -Path $candidate
+        $key = ConvertTo-NormalizedDirectoryPath -Path $candidate
+        if ($LeasesByPath.ContainsKey($key)) {
+            $existingLease = $LeasesByPath[$key]
+            if (-not (ConvertTo-NormalizedDirectoryPath -Path (
+                        [string]$existingLease.Path
+                    )).Equals($candidate, [StringComparison]::Ordinal)) {
+                throw "BLOCKED: A cached directory lease does not exactly match '$candidate'."
+            }
+            try {
+                [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
+                    $candidate,
+                    $existingLease
+                )
+            }
+            catch {
+                throw "BLOCKED: Directory volume binding changed for '$candidate': $($_.Exception.Message)"
+            }
+            continue
+        }
+        $lease = $null
+        try {
+            $lease = [Mql5Coding.JobProcessLaunch]::OpenDirectoryComponentLease(
+                $candidate
+            )
+            Assert-StableFixedLocalVolumePath -Path $candidate
+            [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
+                $candidate,
+                $lease
+            )
+        }
+        catch {
+            if ($null -ne $lease) {
+                $lease.Dispose()
+            }
+            throw "BLOCKED: Unsafe or unleaseable directory path component '$candidate': $($_.Exception.Message)"
+        }
+        $LeasesByPath[$key] = $lease
+        $Tracker.Add($lease)
+    }
+    Assert-StableFixedLocalVolumePath -Path $full
+    return $LeasesByPath[$full]
+}
+
+function Open-NonReparseFileLeaf {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
+    )
+
+    if (-not (Test-IsAbsoluteLocalDrivePath -Path $Path)) {
+        throw "BLOCKED: Security-sensitive files must use absolute local-drive paths: $Path"
+    }
+    $full = [IO.Path]::GetFullPath($Path)
+    Assert-StableFixedLocalVolumePath -Path $full
+    $parent = [IO.Path]::GetDirectoryName($full)
+    $null = Open-NonReparseDirectoryChain -Path $parent -Tracker $Tracker -LeasesByPath $LeasesByPath
+
+    $key = $full
+    if ($LeasesByPath.ContainsKey($key)) {
+        $existingLease = $LeasesByPath[$key]
+        if (-not ([IO.Path]::GetFullPath(
+                    [string]$existingLease.Path
+                )).Equals($full, [StringComparison]::Ordinal)) {
+            throw "BLOCKED: A cached file lease does not exactly match '$full'."
+        }
+        Assert-StableFixedLocalVolumePath -Path $full
+        try {
+            [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
+                $full,
+                $existingLease
+            )
+        }
+        catch {
+            throw "BLOCKED: File volume binding changed for '$full': $($_.Exception.Message)"
+        }
+        return $existingLease
+    }
+    $lease = $null
+    try {
+        $lease = [Mql5Coding.JobProcessLaunch]::OpenFileLeafLease($full)
+        Assert-StableFixedLocalVolumePath -Path $full
+        [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
+            $full,
+            $lease
+        )
+    }
+    catch {
+        if ($null -ne $lease) {
+            $lease.Dispose()
+        }
+        throw "BLOCKED: Unsafe or unleaseable file path '$full': $($_.Exception.Message)"
+    }
+    $LeasesByPath[$key] = $lease
+    $Tracker.Add($lease)
+    return $lease
+}
+
+function Try-OpenNonReparseFileLeaf {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
+    )
+
+    if (-not (Test-IsAbsoluteLocalDrivePath -Path $Path)) {
+        throw "BLOCKED: Security-sensitive files must use absolute local-drive paths: $Path"
+    }
+    $full = [IO.Path]::GetFullPath($Path)
+    Assert-StableFixedLocalVolumePath -Path $full
+    $parent = [IO.Path]::GetDirectoryName($full)
+    $null = Open-NonReparseDirectoryChain -Path $parent -Tracker $Tracker -LeasesByPath $LeasesByPath
+
+    $key = $full
+    if ($LeasesByPath.ContainsKey($key)) {
+        $existingLease = $LeasesByPath[$key]
+        if (-not ([IO.Path]::GetFullPath(
+                    [string]$existingLease.Path
+                )).Equals($full, [StringComparison]::Ordinal)) {
+            throw "BLOCKED: A cached optional-file lease does not exactly match '$full'."
+        }
+        Assert-StableFixedLocalVolumePath -Path $full
+        try {
+            [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
+                $full,
+                $existingLease
+            )
+        }
+        catch {
+            throw "BLOCKED: File volume binding changed for '$full': $($_.Exception.Message)"
+        }
+        return $existingLease
+    }
+
+    $lease = $null
+    try {
+        $lease = [Mql5Coding.JobProcessLaunch]::TryOpenFileLeafLease($full)
+        if ($null -eq $lease) {
+            return $null
+        }
+        Assert-StableFixedLocalVolumePath -Path $full
+        [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
+            $full,
+            $lease
+        )
+    }
+    catch {
+        if ($null -ne $lease) {
+            $lease.Dispose()
+        }
+        throw "BLOCKED: Unsafe or unleaseable file path '$full': $($_.Exception.Message)"
+    }
+    $LeasesByPath[$key] = $lease
+    $Tracker.Add($lease)
+    return $lease
+}
+
+function Open-OrCreateNonReparseDirectory {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
+    )
+
+    if (-not (Test-IsAbsoluteLocalDrivePath -Path $Path)) {
+        throw "BLOCKED: Security-sensitive directories must use absolute local-drive paths: $Path"
+    }
+    $full = ConvertTo-NormalizedDirectoryPath -Path $Path
+    Assert-StableFixedLocalVolumePath -Path $full
+    $parent = [IO.Path]::GetDirectoryName($full)
+    if ([string]::IsNullOrWhiteSpace($parent)) {
+        throw "BLOCKED: A non-root directory path is required: $full"
+    }
+    $null = Open-NonReparseDirectoryChain -Path $parent -Tracker $Tracker -LeasesByPath $LeasesByPath
+    $created = [Mql5Coding.JobProcessLaunch]::TryCreateDirectory($full)
+    $lease = Open-NonReparseDirectoryChain -Path $full -Tracker $Tracker -LeasesByPath $LeasesByPath
+    return [pscustomobject]@{
+        created = [bool]$created
+        lease = $lease
+        path = $full
+    }
+}
+
+function Open-NewMutableOutputFileReservation {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
+    )
+
+    if (-not (Test-IsAbsoluteLocalDrivePath -Path $Path)) {
+        throw "BLOCKED: Mutable output reservations must use absolute local-drive paths: $Path"
+    }
+    $full = [IO.Path]::GetFullPath($Path)
+    Assert-StableFixedLocalVolumePath -Path $full
+    $parent = [IO.Path]::GetDirectoryName($full)
+    $null = Open-NonReparseDirectoryChain -Path $parent -Tracker $Tracker -LeasesByPath $LeasesByPath
+
+    $key = $full
+    if ($LeasesByPath.ContainsKey($key)) {
+        throw "A mutable output reservation already exists: $full"
+    }
+
+    $lease = $null
+    try {
+        $lease = [Mql5Coding.JobProcessLaunch]::CreateMutableOutputFileLease($full)
+        Assert-StableFixedLocalVolumePath -Path $full
+        [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume($full, $lease)
+    }
+    catch {
+        if ($null -ne $lease) {
+            $lease.Dispose()
+        }
+        throw "BLOCKED: Could not reserve a stable mutable output file '$full': $($_.Exception.Message)"
+    }
+
+    $LeasesByPath[$key] = $lease
+    $Tracker.Add($lease)
+    return $lease
+}
+
+function Open-DirectoryMutationGuard {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$DirectoryLease,
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)][hashtable]$GuardsByPath,
+        [Parameter(Mandatory)][string]$RunId
+    )
+
+    $full = ConvertTo-NormalizedDirectoryPath -Path $Path
+    $key = $full
+    if ($GuardsByPath.ContainsKey($key)) {
+        $existingGuard = $GuardsByPath[$key]
+        if (-not (ConvertTo-NormalizedDirectoryPath -Path (
+                    [string]$existingGuard.directory_path
+                )).Equals($full, [StringComparison]::Ordinal)) {
+            throw "BLOCKED: A cached directory mutation guard does not exactly match '$full'."
+        }
+        return $existingGuard
+    }
+    if (-not [bool]$DirectoryLease.IsDirectory -or
+        -not ([IO.Path]::GetFullPath([string]$DirectoryLease.Path)).Equals(
+            $full,
+            [StringComparison]::Ordinal
+        )) {
+        throw "BLOCKED: A matching directory lease is required before creating a mutation guard: $full"
+    }
+
+    $guardLeaf = '.mcg-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.tmp'
+    $guardPath = Join-Path $full $guardLeaf
+    if ($guardPath.Length -gt 259) {
+        throw "BLOCKED: The directory mutation-guard path exceeds 259 characters: $guardPath"
+    }
+
+    $stream = $null
+    try {
+        $stream = New-Object IO.FileStream(
+            $guardPath,
+            [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::ReadWrite,
+            [IO.FileShare]::Read,
+            4096,
+            [IO.FileOptions]::DeleteOnClose
+        )
+        $bytes = [Text.Encoding]::UTF8.GetBytes($RunId)
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
+
+        $DirectoryLease.VerifyStillNonReparseDirectory()
+        $handleIdentity = [Mql5Coding.JobProcessLaunch]::GetFileIdentity(
+            $stream.SafeFileHandle
+        )
+        $pathIdentity = [Mql5Coding.JobProcessLaunch]::GetNonReparseGuardFileIdentity(
+            $guardPath
+        )
+        if ([string]$handleIdentity -cne [string]$pathIdentity) {
+            throw 'The directory mutation guard did not remain bound to its leased directory.'
+        }
+        $DirectoryLease.VerifyStillNonReparseDirectory()
+
+        $record = [pscustomobject][ordered]@{
+            directory_path = $full
+            path = $guardPath
+            file_identity = $handleIdentity
+            stream = $stream
+        }
+        $GuardsByPath[$key] = $record
+        $Tracker.Add($record)
+        return $record
+    }
+    catch {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+        throw "BLOCKED: Could not pin a nonempty leased directory '$full': $($_.Exception.Message)"
+    }
 }
 
 function Assert-ExpectedApplicationMarker {
@@ -561,93 +1575,145 @@ function ConvertFrom-TerminalOriginText {
     $origin = $Text.Trim()
     if ([string]::IsNullOrWhiteSpace($origin) -or
         $origin -match '[\r\n]' -or
-        -not [IO.Path]::IsPathRooted($origin)) {
+        -not (Test-IsAbsoluteLocalDrivePath -Path $origin)) {
         throw "Terminal origin file must contain exactly one absolute install-directory path: $SourcePath"
     }
     return [IO.Path]::GetFullPath($origin)
 }
 
 function Read-TerminalOrigin {
-    param([Parameter(Mandatory)][string]$Path)
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Lease
+    )
 
-    $originInfo = Get-Item -LiteralPath $Path -ErrorAction Stop
-    if ([long]$originInfo.Length -le 0 -or [long]$originInfo.Length -gt 32768) {
-        throw "Terminal origin file must contain 1-32768 bytes: $Path"
+    $full = [IO.Path]::GetFullPath($Path)
+    if ($null -eq $Lease -or [bool]$Lease.IsDirectory -or
+        -not ([IO.Path]::GetFullPath([string]$Lease.Path)).Equals(
+            $full,
+            [StringComparison]::Ordinal
+        )) {
+        throw "A matching no-follow file lease is required before reading terminal origin: $full"
     }
-    return ConvertFrom-TerminalOriginText `
-        -Text ([IO.File]::ReadAllText($Path)) `
-        -SourcePath $Path
+
+    $stream = [IO.File]::Open(
+        $full,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::Read,
+        [IO.FileShare]::Read
+    )
+    try {
+        $streamIdentity = [Mql5Coding.JobProcessLaunch]::GetFileIdentity(
+            $stream.SafeFileHandle
+        )
+        if ([string]$streamIdentity -cne [string]$Lease.Identity) {
+            throw "Terminal origin path changed while its file lease was held: $full"
+        }
+        if ([long]$stream.Length -le 0 -or [long]$stream.Length -gt 32768) {
+            throw "Terminal origin file must contain 1-32768 bytes: $full"
+        }
+        $strictUtf8 = New-Object Text.UTF8Encoding($false, $true)
+        $reader = New-Object IO.StreamReader(
+            $stream,
+            $strictUtf8,
+            $true,
+            1024,
+            $true
+        )
+        try {
+            $text = $reader.ReadToEnd()
+        }
+        finally {
+            $reader.Dispose()
+        }
+        return ConvertFrom-TerminalOriginText -Text $text -SourcePath $full
+    }
+    finally {
+        $stream.Dispose()
+    }
 }
 
 function Resolve-TerminalBinding {
     param(
         [string]$RequestedTerminalPath,
-        [string]$RequestedDataPath
+        [string]$RequestedDataPath,
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
     )
 
     $terminal = $null
     $data = $null
 
     if (-not [string]::IsNullOrWhiteSpace($RequestedTerminalPath)) {
-        $terminal = Resolve-ExistingFile -Path $RequestedTerminalPath -Name 'TerminalPath'
+        $terminal = Resolve-ExistingFile -Path $RequestedTerminalPath -Name 'TerminalPath' -Tracker $Tracker -LeasesByPath $LeasesByPath
         if ([IO.Path]::GetFileName($terminal) -ine 'terminal64.exe') {
             throw "TerminalPath must identify terminal64.exe: $terminal"
         }
     }
 
     if (-not [string]::IsNullOrWhiteSpace($RequestedDataPath)) {
-        if (-not [IO.Path]::IsPathRooted($RequestedDataPath)) {
+        if (-not (Test-IsAbsoluteLocalDrivePath -Path $RequestedDataPath)) {
             throw 'TerminalDataPath must be an absolute path.'
         }
-        $data = (Resolve-Path -LiteralPath $RequestedDataPath -ErrorAction Stop).Path
-        foreach ($required in @('origin.txt', 'MQL5', 'Tester', 'logs')) {
-            if (-not (Test-Path -LiteralPath (Join-Path $data $required))) {
-                throw "TerminalDataPath lacks required entry '$required': $data"
-            }
-        }
-    }
-
-    if ($null -ne $data) {
-        $origin = Read-TerminalOrigin -Path (Join-Path $data 'origin.txt')
-        $originTerminal = Join-Path $origin 'terminal64.exe'
-        if ($null -eq $terminal) {
-            $terminal = Resolve-ExistingFile -Path $originTerminal -Name 'terminal64.exe from origin.txt'
-        }
-        elseif (-not ([IO.Path]::GetFullPath((Split-Path -Parent $terminal)).TrimEnd('\', '/')).Equals(
-                $origin.TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase)) {
-            throw "TerminalDataPath belongs to '$origin', not to '$terminal'."
-        }
+        $data = ConvertTo-NormalizedDirectoryPath -Path $RequestedDataPath
+        $null = Open-NonReparseDirectoryChain -Path $data -Tracker $Tracker -LeasesByPath $LeasesByPath
     }
 
     $terminalDataRoot = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'MetaQuotes\Terminal'
     if ($null -eq $data) {
-        if (-not (Test-Path -LiteralPath $terminalDataRoot -PathType Container)) {
-            throw "MetaTrader terminal data root does not exist: $terminalDataRoot"
-        }
-
-        $matches = New-Object 'System.Collections.Generic.List[string]'
+        $null = Open-NonReparseDirectoryChain -Path $terminalDataRoot -Tracker $Tracker -LeasesByPath $LeasesByPath
+        $matches = New-Object 'System.Collections.Generic.List[object]'
         foreach ($directory in Get-ChildItem -LiteralPath $terminalDataRoot -Directory) {
-            $originPath = Join-Path $directory.FullName 'origin.txt'
-            if (-not (Test-Path -LiteralPath $originPath -PathType Leaf)) {
+            $candidateData = [IO.Path]::GetFullPath($directory.FullName)
+            $null = Open-NonReparseDirectoryChain -Path $candidateData -Tracker $Tracker -LeasesByPath $LeasesByPath
+            $originPath = Join-Path $candidateData 'origin.txt'
+            $originLease = Try-OpenNonReparseFileLeaf -Path $originPath -Tracker $Tracker -LeasesByPath $LeasesByPath
+            if ($null -eq $originLease) {
                 continue
             }
             try {
-                $origin = Read-TerminalOrigin -Path $originPath
+                $origin = Read-TerminalOrigin -Path $originPath -Lease $originLease
             }
             catch {
                 continue
             }
 
             if ($null -eq $terminal) {
-                $candidate = Join-Path $origin 'terminal64.exe'
-                if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-                    $matches.Add($directory.FullName)
+                $candidateTerminal = [IO.Path]::GetFullPath(
+                    (Join-Path $origin 'terminal64.exe')
+                )
+                $candidateTerminalLease = Try-OpenNonReparseFileLeaf -Path $candidateTerminal -Tracker $Tracker -LeasesByPath $LeasesByPath
+                if ($null -eq $candidateTerminalLease) {
+                    continue
                 }
+                $matches.Add([pscustomobject]@{
+                    data = $candidateData
+                    terminal = $candidateTerminal
+                })
             }
             else {
-                $terminalInstall = [IO.Path]::GetFullPath((Split-Path -Parent $terminal)).TrimEnd('\', '/')
-                if ($origin.TrimEnd('\', '/').Equals($terminalInstall, [StringComparison]::OrdinalIgnoreCase)) {
-                    $matches.Add($directory.FullName)
+                $terminalInstall = [IO.Path]::GetFullPath(
+                    (Split-Path -Parent $terminal)
+                ).TrimEnd('\', '/')
+                try {
+                    $originInstallLease = Open-NonReparseDirectoryChain `
+                        -Path $origin `
+                        -Tracker $Tracker `
+                        -LeasesByPath $LeasesByPath
+                    $terminalInstallLease = Open-NonReparseDirectoryChain `
+                        -Path $terminalInstall `
+                        -Tracker $Tracker `
+                        -LeasesByPath $LeasesByPath
+                }
+                catch {
+                    continue
+                }
+                if ([string]$originInstallLease.Identity -ceq
+                    [string]$terminalInstallLease.Identity) {
+                    $matches.Add([pscustomobject]@{
+                        data = $candidateData
+                        terminal = $terminal
+                    })
                 }
             }
         }
@@ -656,39 +1722,132 @@ function Resolve-TerminalBinding {
             throw 'No terminal data directory with a matching origin.txt was found.'
         }
         if ($matches.Count -gt 1) {
-            throw "Terminal data discovery is ambiguous: $($matches -join '; ')"
+            $candidatePaths = @($matches | ForEach-Object { $_.data })
+            throw "Terminal data discovery is ambiguous: $($candidatePaths -join '; ')"
         }
-        $data = [IO.Path]::GetFullPath($matches[0])
+        $data = [IO.Path]::GetFullPath([string]$matches[0].data)
         if ($null -eq $terminal) {
-            $origin = Read-TerminalOrigin -Path (Join-Path $data 'origin.txt')
-            $terminal = Resolve-ExistingFile -Path (Join-Path $origin 'terminal64.exe') -Name 'discovered terminal64.exe'
+            $terminal = [IO.Path]::GetFullPath([string]$matches[0].terminal)
         }
+    }
+
+    $dataLease = Open-NonReparseDirectoryChain -Path $data -Tracker $Tracker -LeasesByPath $LeasesByPath
+    $originPath = Join-Path $data 'origin.txt'
+    $originFileLease = Open-NonReparseFileLeaf -Path $originPath -Tracker $Tracker -LeasesByPath $LeasesByPath
+    $origin = Read-TerminalOrigin -Path $originPath -Lease $originFileLease
+    if ($null -eq $terminal) {
+        $terminal = Resolve-ExistingFile -Path (Join-Path $origin 'terminal64.exe') -Name 'terminal64.exe from origin.txt' -Tracker $Tracker -LeasesByPath $LeasesByPath
+    }
+    else {
+        $null = Open-NonReparseFileLeaf -Path $terminal -Tracker $Tracker -LeasesByPath $LeasesByPath
+    }
+
+    $terminalInstall = [IO.Path]::GetFullPath(
+        (Split-Path -Parent $terminal)
+    ).TrimEnd('\', '/')
+    $originInstallLease = Open-NonReparseDirectoryChain `
+        -Path $origin `
+        -Tracker $Tracker `
+        -LeasesByPath $LeasesByPath
+    $terminalInstallLease = Open-NonReparseDirectoryChain `
+        -Path $terminalInstall `
+        -Tracker $Tracker `
+        -LeasesByPath $LeasesByPath
+    if ([string]$originInstallLease.Identity -cne
+        [string]$terminalInstallLease.Identity) {
+        throw "TerminalDataPath belongs to '$origin', not to '$terminal'."
+    }
+
+    foreach ($requiredDirectory in @(
+            (Join-Path $data 'MQL5'),
+            (Join-Path $data 'Tester'),
+            (Join-Path $data 'logs')
+        )) {
+        $null = Open-NonReparseDirectoryChain -Path $requiredDirectory -Tracker $Tracker -LeasesByPath $LeasesByPath
     }
 
     return [pscustomobject][ordered]@{
         terminal_path = [IO.Path]::GetFullPath($terminal)
         terminal_data_path = [IO.Path]::GetFullPath($data)
+        terminal_install_path = [IO.Path]::GetFullPath($origin)
+        terminal_install_identity = [string]$originInstallLease.Identity
     }
 }
 
 function Get-FileIdentityFromPath {
     param([Parameter(Mandatory)][string]$Path)
 
-    $share = [IO.FileShare](
-        [int][IO.FileShare]::ReadWrite -bor
-        [int][IO.FileShare]::Delete
-    )
-    $stream = [IO.File]::Open(
-        $Path,
-        [IO.FileMode]::Open,
-        [IO.FileAccess]::Read,
-        $share
+    $temporaryLeases = New-Object 'System.Collections.Generic.List[object]'
+    $temporaryLeasesByPath = [System.Collections.Hashtable]::new(
+        [System.StringComparer]::Ordinal
     )
     try {
-        return [Mql5Coding.JobProcessLaunch]::GetFileIdentity($stream.SafeFileHandle)
+        $lease = Open-NonReparseFileLeaf -Path $Path -Tracker $temporaryLeases -LeasesByPath $temporaryLeasesByPath
+        return [string]$lease.Identity
     }
     finally {
-        $stream.Dispose()
+        for ($index = $temporaryLeases.Count - 1; $index -ge 0; $index--) {
+            $temporaryLeases[$index].Dispose()
+        }
+    }
+}
+
+function Get-NativeProcessImageObservation {
+    param(
+        [Parameter(Mandatory)][int]$ProcessId,
+        [Parameter(Mandatory)][string]$ExpectedVolumePath
+    )
+
+    [string]$translatedPath = ''
+    try {
+        $onExpectedVolume = [Mql5Coding.JobProcessLaunch]::TryGetProcessImagePathOnFixedVolume(
+                $ProcessId,
+                $ExpectedVolumePath,
+                [ref]$translatedPath
+            )
+    }
+    catch {
+        return [pscustomobject][ordered]@{
+            query_succeeded = $false
+            on_expected_volume = $false
+            identity_resolved = $false
+            executable_path = $null
+            file_identity = $null
+            error = $_.Exception.Message
+        }
+    }
+
+    if (-not $onExpectedVolume) {
+        return [pscustomobject][ordered]@{
+            query_succeeded = $true
+            on_expected_volume = $false
+            identity_resolved = $false
+            executable_path = $null
+            file_identity = $null
+            error = $null
+        }
+    }
+
+    try {
+        $identity = Get-FileIdentityFromPath -Path $translatedPath
+        return [pscustomobject][ordered]@{
+            query_succeeded = $true
+            on_expected_volume = $true
+            identity_resolved = $true
+            executable_path = [IO.Path]::GetFullPath($translatedPath)
+            file_identity = [string]$identity
+            error = $null
+        }
+    }
+    catch {
+        return [pscustomobject][ordered]@{
+            query_succeeded = $true
+            on_expected_volume = $true
+            identity_resolved = $false
+            executable_path = [IO.Path]::GetFullPath($translatedPath)
+            file_identity = $null
+            error = $_.Exception.Message
+        }
     }
 }
 
@@ -844,7 +2003,7 @@ function Get-MatchingTerminalProcesses {
         }
     }
 
-    $matches = New-Object 'System.Collections.Generic.List[object]'
+    $matchingProcesses = New-Object 'System.Collections.Generic.List[object]'
     $unknown = New-Object 'System.Collections.Generic.List[int]'
 
     try {
@@ -985,77 +2144,167 @@ function Get-MatchingTerminalProcesses {
         catch {
             $path = ''
         }
-        if ([string]::IsNullOrWhiteSpace($path)) {
-            if ($null -ne $suspendedMatchRecord) {
-                $matches.Add($suspendedMatchRecord)
+
+        $reportedCandidate = $null
+        $reportedIdentityError = $null
+        $candidate = $null
+        $candidateIdentity = $null
+        $identityResolved = $false
+        if (-not [string]::IsNullOrWhiteSpace($path)) {
+            try {
+                $reportedCandidate = [IO.Path]::GetFullPath($path)
+                $candidate = $reportedCandidate
+                $candidateIdentity = Get-FileIdentityFromPath -Path $reportedCandidate
+                $identityResolved = $true
             }
-            elseif ($null -ne $settlingMatchRecord) {
-                $matches.Add($settlingMatchRecord)
+            catch {
+                $reportedIdentityError = $_.Exception.Message
             }
-            elseif ($sameLeafName -or $suspendedProcessIdMatch -or $settlingProcessIdMatch) {
-                $unknown.Add($processId)
-            }
-            continue
         }
 
-        $candidate = $null
-        try {
-            $candidate = [IO.Path]::GetFullPath($path)
-            $candidateIdentity = Get-FileIdentityFromPath -Path $candidate
+        $nativeObservation = $null
+        if (-not $identityResolved) {
+            $nativeObservation = Get-NativeProcessImageObservation `
+                -ProcessId $processId `
+                -ExpectedVolumePath $wanted
+            if ([bool]$nativeObservation.identity_resolved) {
+                $candidate = [IO.Path]::GetFullPath(
+                    [string]$nativeObservation.executable_path
+                )
+                $candidateIdentity = [string]$nativeObservation.file_identity
+                $identityResolved = $true
+            }
         }
-        catch {
+
+        if (-not $identityResolved) {
+            $nativeVolumeContradiction = (
+                $null -ne $nativeObservation -and
+                [bool]$nativeObservation.query_succeeded -and
+                -not [bool]$nativeObservation.on_expected_volume
+            )
+            $nativeReparseRejected = (
+                $null -ne $nativeObservation -and
+                [bool]$nativeObservation.query_succeeded -and
+                [bool]$nativeObservation.on_expected_volume -and
+                -not [bool]$nativeObservation.identity_resolved -and
+                -not [string]::IsNullOrWhiteSpace(
+                    [string]$nativeObservation.error
+                ) -and
+                [string]$nativeObservation.error -match
+                    '(?i)\breparse(?:-point)?\b'
+            )
+            if ([string]::IsNullOrWhiteSpace($path)) {
+                if (
+                    $null -ne $suspendedMatchRecord -and
+                    -not $nativeVolumeContradiction
+                ) {
+                    $matchingProcesses.Add($suspendedMatchRecord)
+                }
+                elseif (
+                    $null -ne $settlingMatchRecord -and
+                    -not $nativeVolumeContradiction
+                ) {
+                    $matchingProcesses.Add($settlingMatchRecord)
+                }
+                elseif (
+                    -not $nativeVolumeContradiction -and
+                    (
+                        $sameLeafName -or
+                        $suspendedProcessIdMatch -or
+                        $settlingProcessIdMatch -or
+                        $nativeReparseRejected
+                    )
+                ) {
+                    $unknown.Add($processId)
+                }
+                continue
+            }
+
             $pathMatches = (
-                $null -ne $candidate -and
-                $candidate.Equals($wanted, [StringComparison]::OrdinalIgnoreCase)
+                $null -ne $reportedCandidate -and
+                $reportedCandidate.Equals(
+                    $wanted,
+                    [StringComparison]::OrdinalIgnoreCase
+                )
             )
             $suspendedKnownPath = (
-                $null -eq $candidate -or
+                $null -eq $reportedCandidate -or
                 $pathMatches -or
                 (
                     $null -ne $suspendedVerifiedPath -and
-                    $candidate.Equals(
+                    $reportedCandidate.Equals(
                         $suspendedVerifiedPath,
                         [StringComparison]::OrdinalIgnoreCase
                     )
                 )
             )
             $settlingKnownPath = (
-                $null -eq $candidate -or
+                $null -eq $reportedCandidate -or
                 $pathMatches -or
                 (
                     $null -ne $settlingVerifiedPath -and
-                    $candidate.Equals(
+                    $reportedCandidate.Equals(
                         $settlingVerifiedPath,
                         [StringComparison]::OrdinalIgnoreCase
                     )
                 )
             )
+            $reportedReparseRejected = (
+                -not [string]::IsNullOrWhiteSpace($reportedIdentityError) -and
+                $reportedIdentityError -match '(?i)\breparse(?:-point)?\b'
+            )
+            $sameVolumeReparseUnresolved = (
+                $nativeReparseRejected -or
+                (
+                    $reportedReparseRejected -and
+                    (
+                        $null -eq $nativeObservation -or
+                        -not [bool]$nativeObservation.query_succeeded -or
+                        [bool]$nativeObservation.on_expected_volume
+                    )
+                )
+            )
             if (
                 $null -ne $suspendedMatchRecord -and
-                $suspendedKnownPath
+                $suspendedKnownPath -and
+                -not $nativeVolumeContradiction
             ) {
-                $matches.Add($suspendedMatchRecord)
+                $matchingProcesses.Add($suspendedMatchRecord)
             }
             elseif (
                 $null -ne $settlingMatchRecord -and
-                $settlingKnownPath
+                $settlingKnownPath -and
+                -not $nativeVolumeContradiction
             ) {
-                $matches.Add($settlingMatchRecord)
+                $matchingProcesses.Add($settlingMatchRecord)
             }
             elseif (
-                $sameLeafName -or
-                $pathMatches -or
-                $suspendedProcessIdMatch -or
-                $settlingProcessIdMatch
+                -not $nativeVolumeContradiction -and
+                (
+                    $sameLeafName -or
+                    $pathMatches -or
+                    $suspendedProcessIdMatch -or
+                    $settlingProcessIdMatch -or
+                    $sameVolumeReparseUnresolved
+                )
             ) {
                 $unknown.Add($processId)
             }
             continue
         }
 
-        $pathMatch = $candidate.Equals(
-            $wanted,
-            [StringComparison]::OrdinalIgnoreCase
+        $pathMatch = (
+            $candidate.Equals(
+                $wanted,
+                [StringComparison]::OrdinalIgnoreCase
+            ) -or
+            (
+                $null -ne $reportedCandidate -and
+                $reportedCandidate.Equals(
+                    $wanted,
+                    [StringComparison]::OrdinalIgnoreCase
+                )
+            )
         )
         $identityMatch = $candidateIdentity.Equals(
             $ExpectedFileIdentity,
@@ -1066,7 +2315,7 @@ function Get-MatchingTerminalProcesses {
                 $identityMatch -and
                 $null -ne $suspendedMatchRecord
             ) {
-                $matches.Add($suspendedMatchRecord)
+                $matchingProcesses.Add($suspendedMatchRecord)
             }
             else {
                 $unknown.Add($processId)
@@ -1080,10 +2329,10 @@ function Get-MatchingTerminalProcesses {
                 $unknown.Add($processId)
             }
             elseif (-not $settlingIdentityComplete) {
-                $matches.Add($settlingMatchRecord)
+                $matchingProcesses.Add($settlingMatchRecord)
             }
             else {
-                $matches.Add([pscustomobject][ordered]@{
+                $matchingProcesses.Add([pscustomobject][ordered]@{
                     process_id = $processId
                     parent_process_id = [int]$process.ParentProcessId
                     creation_utc_ticks = $creationTicks
@@ -1099,7 +2348,7 @@ function Get-MatchingTerminalProcesses {
             }
         }
         elseif ($pathMatch -or $identityMatch) {
-            $matches.Add([pscustomobject][ordered]@{
+            $matchingProcesses.Add([pscustomobject][ordered]@{
                 process_id = $processId
                 parent_process_id = [int]$process.ParentProcessId
                 creation_utc_ticks = $creationTicks
@@ -1118,7 +2367,7 @@ function Get-MatchingTerminalProcesses {
     if ($unknown.Count -gt 0) {
         throw "BLOCKED: Running terminal64.exe process identity is unreadable for PID(s) $($unknown -join ', '); refusing an unsafe launch."
     }
-    return $matches.ToArray()
+    return $matchingProcesses.ToArray()
 }
 
 function Open-DataDirectoryLock {
@@ -1162,56 +2411,82 @@ function Open-DataDirectoryLock {
 function Open-NewOutputDirectoryClaim {
     param(
         [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$RunId
+        [Parameter(Mandatory)][string]$RunId,
+        [Parameter(Mandatory)]$DirectoryLease,
+        [Parameter(Mandatory)]$IntegrityTracker,
+        [Parameter(Mandatory)]$PathEntryLeases,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
     )
 
-    if (Test-Path -LiteralPath $Path) {
-        throw "OutputDirectory must not already exist: $Path"
+    $full = ConvertTo-NormalizedDirectoryPath -Path $Path
+    if ($null -eq $DirectoryLease -or
+        -not [bool]$DirectoryLease.IsDirectory -or
+        -not (ConvertTo-NormalizedDirectoryPath -Path ([string]$DirectoryLease.Path)).Equals(
+            $full,
+            [StringComparison]::Ordinal
+        )) {
+        throw "OutputDirectory must have a matching live directory lease before it is claimed: $full"
     }
-    $parent = Split-Path -Parent $Path
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
-        throw "OutputDirectory parent does not exist: $parent"
+    $DirectoryLease.VerifyStillNonReparseDirectory()
+    if (-not (Test-Path -LiteralPath $full -PathType Container)) {
+        throw "OutputDirectory must be created and path-lease validated before it is claimed: $full"
+    }
+    if (@(Get-ChildItem -LiteralPath $full -Force).Count -ne 0) {
+        throw "OutputDirectory was populated before exclusive ownership was established: $full"
     }
 
-    [IO.Directory]::CreateDirectory($Path) | Out-Null
-    $claimPath = Join-Path $Path '.mql5-coding-smoke.claim'
-    $ownerPath = Join-Path $Path '.mql5-coding-smoke.owner'
+    $claimPath = Join-Path $full '.mql5-coding-smoke.claim'
+    $ownerPath = Join-Path $full '.mql5-coding-smoke.owner'
     $stream = $null
     try {
         $stream = New-Object IO.FileStream(
             $claimPath,
             [IO.FileMode]::CreateNew,
             [IO.FileAccess]::ReadWrite,
-            [IO.FileShare]::None,
+            [IO.FileShare]::Read,
             4096,
             [IO.FileOptions]::DeleteOnClose
         )
-        $entries = @(Get-ChildItem -LiteralPath $Path -Force)
+        $entries = @(Get-ChildItem -LiteralPath $full -Force)
         if ($entries.Count -ne 1 -or
             -not ([IO.Path]::GetFullPath($entries[0].FullName)).Equals(
                 [IO.Path]::GetFullPath($claimPath),
                 [StringComparison]::OrdinalIgnoreCase
             )) {
-            throw "OutputDirectory was populated before exclusive ownership was established: $Path"
+            throw "OutputDirectory was populated before exclusive ownership was established: $full"
         }
 
         $bytes = [Text.Encoding]::UTF8.GetBytes($RunId)
         $stream.Write($bytes, 0, $bytes.Length)
         $stream.Flush($true)
+        $DirectoryLease.VerifyStillNonReparseDirectory()
+        $claimHandleIdentity = [Mql5Coding.JobProcessLaunch]::GetFileIdentity(
+            $stream.SafeFileHandle
+        )
+        $claimPathIdentity = [Mql5Coding.JobProcessLaunch]::GetNonReparseGuardFileIdentity(
+            $claimPath
+        )
+        if ([string]$claimHandleIdentity -cne [string]$claimPathIdentity) {
+            throw 'The output-directory claim did not remain bound to its leased directory.'
+        }
+        $DirectoryLease.VerifyStillNonReparseDirectory()
+
         $ownerText = $RunId + "`n"
-        Write-NewTextFile -Text $ownerText -Path $ownerPath -Encoding (New-Object Text.UTF8Encoding($false))
+        $ownerRecord = Open-NewTextArtifactReadLock -Text $ownerText -Path $ownerPath -Encoding (New-Object Text.UTF8Encoding($false)) -Kind 'output owner' -Tracker $IntegrityTracker -PathEntryLeases $PathEntryLeases -LeasesByPath $LeasesByPath
         return [pscustomobject]@{
             path = $claimPath
             stream = $stream
             owner_path = $ownerPath
-            owner_sha256 = Get-TextSha256 -Text $ownerText
+            owner_sha256 = $ownerRecord.sha256
+            owner_record = $ownerRecord
+            file_identity = $claimHandleIdentity
         }
     }
     catch {
         if ($null -ne $stream) {
             $stream.Dispose()
         }
-        throw "OutputDirectory could not be claimed exclusively: $Path. $($_.Exception.Message)"
+        throw "OutputDirectory could not be claimed exclusively: $full. $($_.Exception.Message)"
     }
 }
 
@@ -1220,21 +2495,42 @@ function Copy-NewHashBoundFile {
         [Parameter(Mandatory)][string]$Source,
         [Parameter(Mandatory)][string]$Destination,
         [Parameter(Mandatory)][string]$Kind,
-        [Parameter(Mandatory)]$Tracker
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)]$PathEntryLeases,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath,
+        [AllowNull()][IO.FileStream]$RetainedSourceStream
     )
-    if (Test-Path -LiteralPath $Destination) {
-        throw "Refusing to overwrite an existing $Kind staging path: $Destination"
-    }
+
+    $sourceLease = Open-NonReparseFileLeaf -Path $Source -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
     $parent = Split-Path -Parent $Destination
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
-        [IO.Directory]::CreateDirectory($parent) | Out-Null
-    }
+    $null = Open-NonReparseDirectoryChain -Path $parent -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
     $input = $null
+    $disposeInput = $false
     $output = $null
     $record = $null
     try {
-        $input = [IO.File]::Open($Source, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
-        $output = [IO.File]::Open($Destination, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        if ($null -eq $RetainedSourceStream) {
+            $input = [IO.File]::Open(
+                $Source,
+                [IO.FileMode]::Open,
+                [IO.FileAccess]::Read,
+                [IO.FileShare]::Read
+            )
+            $disposeInput = $true
+        }
+        else {
+            if (-not $RetainedSourceStream.CanRead -or
+                -not $RetainedSourceStream.CanSeek) {
+                throw "$Kind retained source stream is not readable and seekable: $Source"
+            }
+            $input = $RetainedSourceStream
+            $input.Position = 0
+        }
+        if ([Mql5Coding.JobProcessLaunch]::GetFileIdentity($input.SafeFileHandle) -cne
+            [string]$sourceLease.Identity) {
+            throw "$Kind source path changed before staging: $Source"
+        }
+        $output = [IO.File]::Open($Destination, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
         $record = [pscustomobject][ordered]@{
             kind = $Kind
             source_path = $Source
@@ -1246,20 +2542,81 @@ function Copy-NewHashBoundFile {
         $Tracker.Add($record)
         $input.CopyTo($output)
         $output.Flush($true)
-        $output.Dispose()
-        $output = $null
-        $input.Dispose()
-        $input = $null
 
-        $sourceHash = Get-FileSha256 -Path $Source
-        $destinationHash = Get-FileSha256 -Path $Destination
-        if ($sourceHash -cne $destinationHash) {
+        $destinationLease = Open-NonReparseFileLeaf -Path $Destination -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
+        if ([Mql5Coding.JobProcessLaunch]::GetFileIdentity($output.SafeFileHandle) -cne
+            [string]$destinationLease.Identity) {
+            throw "$Kind staging path changed while its lease was established: $Destination"
+        }
+
+        $sourceLength = [long]$input.Length
+        $destinationLength = [long]$output.Length
+        $sourceHash = Get-StreamSha256 -Stream $input
+        $destinationHash = Get-StreamSha256 -Stream $output
+        if ($sourceLength -ne $destinationLength -or
+            $sourceHash -cne $destinationHash) {
             throw "$Kind staging hash mismatch: $Destination"
         }
-        $destinationInfo = Get-Item -LiteralPath $Destination
-        $record.byte_length = [long]$destinationInfo.Length
+
+        $record.byte_length = $destinationLength
         $record.sha256 = $destinationHash
         $record.verified = $true
+        return $record
+    }
+    finally {
+        if ($null -ne $output) {
+            $output.Dispose()
+        }
+        if ($disposeInput -and $null -ne $input) {
+            $input.Dispose()
+        }
+        elseif ($null -ne $input -and $input.CanSeek) {
+            $input.Position = 0
+        }
+    }
+}
+
+function Copy-NewVerifiedOutputArtifact {
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$Destination,
+        [Parameter(Mandatory)][string]$Kind,
+        [Parameter(Mandatory)]$SourceLease,
+        [Parameter(Mandatory)]$Tracker
+    )
+
+    $sourcePath = [IO.Path]::GetFullPath($Source)
+    $destinationPath = [IO.Path]::GetFullPath($Destination)
+    $input = $null
+    $output = $null
+    try {
+        $input = [IO.File]::Open($sourcePath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        if ([Mql5Coding.JobProcessLaunch]::GetFileIdentity($input.SafeFileHandle) -cne [string]$SourceLease.Identity) {
+            throw "$Kind source identity changed before output publication: $sourcePath"
+        }
+
+        $output = [Mql5Coding.JobProcessLaunch]::CreatePinnedOutputFileStream($destinationPath)
+        $input.CopyTo($output)
+        $output.Flush($true)
+        $sourceHash = Get-StreamSha256 -Stream $input
+        $destinationHash = Get-StreamSha256 -Stream $output
+        if ([long]$input.Length -ne [long]$output.Length -or $sourceHash -cne $destinationHash) {
+            throw "$Kind output copy failed exact byte verification: $destinationPath"
+        }
+
+        $record = [pscustomobject][ordered]@{
+            kind = $Kind
+            source_path = $sourcePath
+            destination_path = $destinationPath
+            byte_length = [long]$output.Length
+            sha256 = $destinationHash
+            verified = $true
+        }
+        $Tracker.Add([pscustomobject][ordered]@{
+            record = $record
+            stream = $output
+        })
+        $output = $null
         return $record
     }
     finally {
@@ -1286,10 +2643,75 @@ function Get-StreamSha256 {
     }
 }
 
+function Open-NewTextArtifactReadLock {
+    param(
+        [Parameter(Mandatory)][string]$Text,
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][Text.Encoding]$Encoding,
+        [Parameter(Mandatory)][string]$Kind,
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)]$PathEntryLeases,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
+    )
+
+    $full = [IO.Path]::GetFullPath($Path)
+    $parent = [IO.Path]::GetDirectoryName($full)
+    $null = Open-NonReparseDirectoryChain -Path $parent -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
+    $creationStream = $null
+    try {
+        $creationStream = [Mql5Coding.JobProcessLaunch]::CreatePinnedOutputFileStream(
+            $full
+        )
+        $preamble = $Encoding.GetPreamble()
+        if ($preamble.Length -gt 0) {
+            $creationStream.Write($preamble, 0, $preamble.Length)
+        }
+        $bytes = $Encoding.GetBytes($Text)
+        if ($bytes.Length -gt 0) {
+            $creationStream.Write($bytes, 0, $bytes.Length)
+        }
+        $creationStream.Flush($true)
+
+        # Correlate the exact no-follow creation handle with a retained no-follow
+        # leaf lease while the creation handle is still open. Keeping that same
+        # stream removes the close-to-reopen replacement window.
+        $lease = Open-NonReparseFileLeaf -Path $full -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
+        $creationIdentity = [Mql5Coding.JobProcessLaunch]::GetFileIdentity(
+            $creationStream.SafeFileHandle
+        )
+        if ([string]$creationIdentity -cne [string]$lease.Identity) {
+            throw "$Kind creation handle did not remain bound to its no-follow leaf lease: $full"
+        }
+        $expectedLength = [long]$creationStream.Length
+        $expectedHash = Get-StreamSha256 -Stream $creationStream
+
+        $record = [pscustomobject][ordered]@{
+            kind = $Kind
+            destination_path = $full
+            byte_length = $expectedLength
+            sha256 = $expectedHash
+            file_identity = $creationIdentity
+            verified = $true
+        }
+        $Tracker.Add([pscustomobject][ordered]@{
+            record = $record
+            stream = $creationStream
+        })
+        $creationStream = $null
+        return $record
+    }
+    finally {
+        if ($null -ne $creationStream) {
+            $creationStream.Dispose()
+        }
+    }
+}
+
 function Open-TerminalOriginReadLock {
     param(
         [Parameter(Mandatory)][string]$TerminalDataPath,
         [Parameter(Mandatory)][string]$TerminalPath,
+        [Parameter(Mandatory)][string]$ExpectedInstallPath,
         [Parameter(Mandatory)]$Tracker
     )
 
@@ -1315,12 +2737,14 @@ function Open-TerminalOriginReadLock {
             $reader.Dispose()
         }
         $origin = ConvertFrom-TerminalOriginText -Text $originText -SourcePath $originPath
-        $terminalInstall = [IO.Path]::GetFullPath((Split-Path -Parent $TerminalPath)).TrimEnd('\', '/')
+        $expectedInstall = [IO.Path]::GetFullPath(
+            $ExpectedInstallPath
+        ).TrimEnd('\', '/')
         if (-not $origin.TrimEnd('\', '/').Equals(
-                $terminalInstall,
-                [StringComparison]::OrdinalIgnoreCase
+                $expectedInstall,
+                [StringComparison]::Ordinal
             )) {
-            throw "Terminal data origin changed or does not belong to '$TerminalPath': $originPath"
+            throw "Terminal data origin changed after binding to '$TerminalPath': $originPath"
         }
 
         $stream.Position = 0
@@ -1330,6 +2754,9 @@ function Open-TerminalOriginReadLock {
             install_path = $origin
             byte_length = [long]$stream.Length
             sha256 = Get-StreamSha256 -Stream $stream
+            file_identity = [Mql5Coding.JobProcessLaunch]::GetFileIdentity(
+                $stream.SafeFileHandle
+            )
             verified = $true
         }
         $Tracker.Add([pscustomobject][ordered]@{
@@ -1349,27 +2776,44 @@ function Open-TerminalOriginReadLock {
 function Open-StagingReadLocks {
     param(
         [Parameter(Mandatory)]$Records,
-        [Parameter(Mandatory)]$Tracker
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)]$PathEntryLeases,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
     )
 
     foreach ($record in $Records) {
         if ($null -eq $record.PSObject.Properties['verified'] -or -not [bool]$record.verified) {
             throw "Cannot lock an unverified $($record.kind) staging copy: $($record.destination_path)"
         }
+        $path = [IO.Path]::GetFullPath([string]$record.destination_path)
+        $lease = Open-NonReparseFileLeaf -Path $path -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
         $stream = [IO.File]::Open(
-            [string]$record.destination_path,
+            $path,
             [IO.FileMode]::Open,
             [IO.FileAccess]::Read,
             [IO.FileShare]::Read
         )
-        $entry = [pscustomobject][ordered]@{
-            record = $record
-            stream = $stream
+        try {
+            if ([Mql5Coding.JobProcessLaunch]::GetFileIdentity($stream.SafeFileHandle) -cne
+                [string]$lease.Identity) {
+                throw "$($record.kind) path changed while its read lock was established: $path"
+            }
+            $entry = [pscustomobject][ordered]@{
+                record = $record
+                stream = $stream
+            }
+            $Tracker.Add($entry)
+            $stream = $null
+            $hash = Get-StreamSha256 -Stream $entry.stream
+            if ([long]$entry.stream.Length -ne [long]$record.byte_length -or
+                $hash -cne [string]$record.sha256) {
+                throw "$($record.kind) staging bytes changed before the read lock was established: $path"
+            }
         }
-        $Tracker.Add($entry)
-        $hash = Get-StreamSha256 -Stream $stream
-        if ([long]$stream.Length -ne [long]$record.byte_length -or $hash -cne [string]$record.sha256) {
-            throw "$($record.kind) staging bytes changed before the read lock was established: $($record.destination_path)"
+        finally {
+            if ($null -ne $stream) {
+                $stream.Dispose()
+            }
         }
     }
 }
@@ -1378,22 +2822,43 @@ function Open-VerifiedArtifactReadLock {
     param(
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)][string]$Kind,
-        [Parameter(Mandatory)]$Tracker
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)]$PathEntryLeases,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
     )
 
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        throw "Cannot lock a missing $Kind artifact: $Path"
+    $full = [IO.Path]::GetFullPath($Path)
+    $lease = Open-NonReparseFileLeaf -Path $full -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
+    $stream = [IO.File]::Open(
+        $full,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::Read,
+        [IO.FileShare]::Read
+    )
+    try {
+        if ([Mql5Coding.JobProcessLaunch]::GetFileIdentity($stream.SafeFileHandle) -cne
+            [string]$lease.Identity) {
+            throw "$Kind path changed while its read lock was established: $full"
+        }
+        $record = [pscustomobject][ordered]@{
+            kind = $Kind
+            destination_path = $full
+            byte_length = [long]$stream.Length
+            sha256 = Get-StreamSha256 -Stream $stream
+            verified = $true
+        }
+        $Tracker.Add([pscustomobject][ordered]@{
+            record = $record
+            stream = $stream
+        })
+        $stream = $null
+        return $record
     }
-    $info = Get-Item -LiteralPath $Path
-    $record = [pscustomobject][ordered]@{
-        kind = $Kind
-        destination_path = $Path
-        byte_length = [long]$info.Length
-        sha256 = Get-FileSha256 -Path $Path
-        verified = $true
+    finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
     }
-    Open-StagingReadLocks -Records @($record) -Tracker $Tracker
-    return $record
 }
 
 function Get-PinnedStagingIntegrityFailures {
@@ -1449,57 +2914,70 @@ function Get-StreamPrefixSha256 {
     }
 }
 
-function Get-StagingIntegrityFailures {
-    param([Parameter(Mandatory)]$Records)
-    $failures = New-Object 'System.Collections.Generic.List[string]'
-    foreach ($record in $Records) {
-        $path = [string]$record.destination_path
-        if ($null -eq $record.PSObject.Properties['verified'] -or -not [bool]$record.verified) {
-            $failures.Add("$($record.kind) staging copy was not fully verified: $path")
-            continue
-        }
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            $failures.Add("$($record.kind) staging file is missing: $path")
-            continue
-        }
-        try {
-            $info = Get-Item -LiteralPath $path
-            $hash = Get-FileSha256 -Path $path
-            if ([long]$info.Length -ne [long]$record.byte_length -or $hash -cne [string]$record.sha256) {
-                $failures.Add("$($record.kind) staging bytes changed: $path")
-            }
-        }
-        catch {
-            $failures.Add("Could not verify $($record.kind) staging bytes '$path': $($_.Exception.Message)")
-        }
-    }
-    return $failures.ToArray()
-}
-
 function Get-JournalSnapshot {
-    param([Parameter(Mandatory)][string]$RootPath)
-    $snapshot = @{}
-    if (-not (Test-Path -LiteralPath $RootPath -PathType Container)) {
-        return $snapshot
-    }
-    foreach ($file in Get-ChildItem -LiteralPath $RootPath -File -Filter '*.log') {
-        $stream = [IO.File]::Open(
-            $file.FullName,
-            [IO.FileMode]::Open,
-            [IO.FileAccess]::Read,
-            [IO.FileShare]::ReadWrite
+    param(
+        [Parameter(Mandatory)][string]$RootPath,
+        [Parameter(Mandatory)]$PathEntryLeases,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath,
+        [Parameter(Mandatory)]$StreamTracker,
+        [hashtable]$Existing
+    )
+    if ($null -eq $Existing) {
+        $Existing = [System.Collections.Hashtable]::new(
+            [System.StringComparer]::Ordinal
         )
+    }
+    $snapshot = [System.Collections.Hashtable]::new(
+        [System.StringComparer]::Ordinal
+    )
+    $null = Open-NonReparseDirectoryChain -Path $RootPath -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
+    foreach ($file in Get-ChildItem -LiteralPath $RootPath -File -Filter '*.log') {
+        $fullPath = [IO.Path]::GetFullPath($file.FullName)
+        $key = $fullPath
+        $stream = $null
+        $lease = $null
+        $newStream = $false
+        if ($Existing.ContainsKey($key)) {
+            $stream = $Existing[$key].stream
+            $lease = $Existing[$key].path_entry_lease
+        }
+        else {
+            $lease = Open-NonReparseFileLeaf -Path $fullPath -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
+            $stream = [IO.File]::Open(
+                $fullPath,
+                [IO.FileMode]::Open,
+                [IO.FileAccess]::Read,
+                [IO.FileShare]::ReadWrite
+            )
+            $newStream = $true
+        }
+
         try {
+            $streamIdentity = [Mql5Coding.JobProcessLaunch]::GetFileIdentity(
+                $stream.SafeFileHandle
+            )
+            if ($streamIdentity -cne [string]$lease.Identity) {
+                throw "Journal path changed while its read lease was acquired: $fullPath"
+            }
             $byteLength = [long]$stream.Length
             $prefixHash = Get-StreamPrefixSha256 -Stream $stream -Length $byteLength
+            if ($newStream) {
+                $StreamTracker.Add($stream)
+                $newStream = $false
+            }
         }
         finally {
-            $stream.Dispose()
+            if ($newStream -and $null -ne $stream) {
+                $stream.Dispose()
+            }
         }
-        $snapshot[$file.FullName.ToLowerInvariant()] = [pscustomobject]@{
-            path = $file.FullName
+        $snapshot[$key] = [pscustomobject]@{
+            path = $fullPath
             byte_length = $byteLength
             prefix_sha256 = $prefixHash
+            file_identity = $streamIdentity
+            path_entry_lease = $lease
+            stream = $stream
         }
     }
     return $snapshot
@@ -1556,9 +3034,12 @@ function Read-JournalDelta {
         [Parameter(Mandatory)][hashtable]$Before,
         [Parameter(Mandatory)][string]$RootPath,
         [Parameter(Mandatory)][string]$LogicalName,
-        [Parameter(Mandatory)][int]$MaximumBytes
+        [Parameter(Mandatory)][int]$MaximumBytes,
+        [Parameter(Mandatory)]$PathEntryLeases,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath,
+        [Parameter(Mandatory)]$StreamTracker
     )
-    $after = Get-JournalSnapshot -RootPath $RootPath
+    $after = Get-JournalSnapshot -RootPath $RootPath -PathEntryLeases $PathEntryLeases -LeasesByPath $LeasesByPath -StreamTracker $StreamTracker -Existing $Before
     $plans = New-Object 'System.Collections.Generic.List[object]'
     $total = [long]0
 
@@ -1569,7 +3050,7 @@ function Read-JournalDelta {
     }
 
     foreach ($entry in @($after.Values | Sort-Object path)) {
-        $key = ([string]$entry.path).ToLowerInvariant()
+        $key = [string]$entry.path
         $offset = [long]0
         $beforePrefixHash = $null
         if ($Before.ContainsKey($key)) {
@@ -1594,6 +3075,8 @@ function Read-JournalDelta {
             before_prefix_sha256 = $beforePrefixHash
             after_byte_length = [long]$entry.byte_length
             after_sha256 = [string]$entry.prefix_sha256
+            file_identity = [string]$entry.file_identity
+            stream = $entry.stream
         })
     }
 
@@ -1615,35 +3098,30 @@ function Read-JournalDelta {
         if ([long]$plan.byte_length -gt [int]::MaxValue) {
             throw "$LogicalName appended segment is too large to inspect safely: $($plan.path)"
         }
-        $stream = [IO.File]::Open(
-            [string]$plan.path,
-            [IO.FileMode]::Open,
-            [IO.FileAccess]::Read,
-            [IO.FileShare]::Read
-        )
-        try {
-            if ([long]$stream.Length -ne [long]$plan.after_byte_length) {
-                throw "$LogicalName journal changed after its post-run snapshot: $($plan.path)"
-            }
-            $afterHash = Get-StreamPrefixSha256 -Stream $stream -Length ([long]$plan.after_byte_length)
-            if ($afterHash -cne [string]$plan.after_sha256) {
-                throw "$LogicalName journal bytes changed after its post-run snapshot: $($plan.path)"
-            }
-            if ([long]$plan.offset -gt 0) {
-                $prefixHash = Get-StreamPrefixSha256 -Stream $stream -Length ([long]$plan.offset)
-                if ($prefixHash -cne [string]$plan.before_prefix_sha256) {
-                    throw "$LogicalName journal prefix was replaced or modified during the run: $($plan.path)"
-                }
-            }
-            $bytes = Read-ExactBytesFromStream `
-                -Stream $stream `
-                -Offset ([long]$plan.offset) `
-                -Length ([int]$plan.byte_length) `
-                -Path ([string]$plan.path)
+        $stream = $plan.stream
+        if ([Mql5Coding.JobProcessLaunch]::GetFileIdentity(
+                $stream.SafeFileHandle
+            ) -cne [string]$plan.file_identity) {
+            throw "$LogicalName journal file identity changed after its post-run snapshot: $($plan.path)"
         }
-        finally {
-            $stream.Dispose()
+        if ([long]$stream.Length -ne [long]$plan.after_byte_length) {
+            throw "$LogicalName journal changed after its post-run snapshot: $($plan.path)"
         }
+        $afterHash = Get-StreamPrefixSha256 -Stream $stream -Length ([long]$plan.after_byte_length)
+        if ($afterHash -cne [string]$plan.after_sha256) {
+            throw "$LogicalName journal bytes changed after its post-run snapshot: $($plan.path)"
+        }
+        if ([long]$plan.offset -gt 0) {
+            $prefixHash = Get-StreamPrefixSha256 -Stream $stream -Length ([long]$plan.offset)
+            if ($prefixHash -cne [string]$plan.before_prefix_sha256) {
+                throw "$LogicalName journal prefix was replaced or modified during the run: $($plan.path)"
+            }
+        }
+        $bytes = Read-ExactBytesFromStream `
+            -Stream $stream `
+            -Offset ([long]$plan.offset) `
+            -Length ([int]$plan.byte_length) `
+            -Path ([string]$plan.path)
         $start = 0
         if ([long]$plan.offset -eq 0 -and $bytes.Length -ge 2 -and $bytes[0] -eq 0xff -and $bytes[1] -eq 0xfe) {
             $start = 2
@@ -1720,6 +3198,22 @@ function Protect-JournalLine {
         [string[]]$SensitiveValues = @()
     )
     $redacted = $Line
+    $secretLabelPattern =
+        '(?:' +
+            '(?:[A-Za-z0-9]+[._-])*' +
+                '(?:password|passwd|pwd|token|secret|authorization|auth|' +
+                    'access[._-]+token|refresh[._-]+token|api[._-]+key|' +
+                    'client[._-]+secret)' +
+                '(?:[._-][A-Za-z0-9]+)*' +
+            '|' +
+            '(?-i:[A-Za-z0-9]*(?:[Pp]assword|[Pp]asswd|[Pp]wd|[Tt]oken|' +
+                '[Ss]ecret|[Aa]uthorization|[Aa]uth|[Aa]pi[Kk]ey)' +
+                '(?:[A-Z][A-Za-z0-9]*)*)' +
+            '|' +
+            'access[ \t]+token|refresh[ \t]+token|api[ \t]+key|' +
+                'client[ \t]+secret' +
+        ')'
+    $secretLabelClosingQuotePattern = '(?:\\*["''])?'
     $orderedSensitiveValues = @(
         $SensitiveValues |
             Where-Object { -not [string]::IsNullOrEmpty($_) } |
@@ -1751,8 +3245,9 @@ function Protect-JournalLine {
     )
     $redacted = [regex]::Replace(
         $redacted,
-        '(?i)\bAuthorization\b.*$',
-        'Authorization=<REDACTED>'
+        '(?i)(?<![A-Za-z0-9_.-])(?:[A-Za-z0-9]+[._-])*' +
+            '(?:authorization|auth)\b\s*[:=].*$',
+        '<SECRET>=<REDACTED>'
     )
     $redacted = [regex]::Replace(
         $redacted,
@@ -1761,8 +3256,40 @@ function Protect-JournalLine {
     )
     $redacted = [regex]::Replace(
         $redacted,
-        '(?i)(?<![A-Za-z0-9_])(?:--?)?(password|passwd|pwd|access[_-]?token|refresh[_-]?token|token|api[_ -]?key|client[_-]?secret|secret|authorization|auth)\b["'']?(?:\s*[:=]\s*|\s+)(?:"[^"\r\n]*"|''[^''\r\n]*''|[^\s,;]+)',
-        '$1=<REDACTED>'
+        '(?i)(?<![A-Za-z0-9_.-])(?:' +
+            $secretLabelPattern +
+            $secretLabelClosingQuotePattern +
+            '\s*[:=]\s*[^\r\n]*' +
+            '|--?' +
+            $secretLabelPattern +
+            '(?:\s+|\s*[:=]\s*)[^\r\n]*' +
+        ')',
+        '<SECRET>=<REDACTED>'
+    )
+    $bareSecretPattern =
+        '(?i)(?<![A-Za-z0-9_.-])' +
+            $secretLabelPattern +
+            $secretLabelClosingQuotePattern +
+            '\s+(?<bareSecretValue>[^\r\n]+)'
+    $knownBareSecretDiagnosticPattern =
+        '(?i)^(?:is\s+)?(?:authentication\s+failed|refresh\s+failed|not\s+configured|' +
+            'missing|required|invalid|expired|rejected|failed|failure|denied|disabled|' +
+            'enabled|unavailable|empty|absent)$'
+    $redacted = [regex]::Replace(
+        $redacted,
+        $bareSecretPattern,
+        [Text.RegularExpressions.MatchEvaluator]{
+            param($match)
+            $normalizedValue = [regex]::Replace(
+                $match.Groups['bareSecretValue'].Value.Trim(),
+                '\s+',
+                ' '
+            )
+            if ($normalizedValue -match $knownBareSecretDiagnosticPattern) {
+                return $match.Value
+            }
+            return '<SECRET>=<REDACTED>'
+        }
     )
     $redacted = [regex]::Replace(
         $redacted,
@@ -1878,8 +3405,17 @@ $cleanupRemoved = New-Object 'System.Collections.Generic.List[string]'
 $cleanupPreserved = New-Object 'System.Collections.Generic.List[string]'
 $cleanupErrors = New-Object 'System.Collections.Generic.List[string]'
 $hashBoundStaging = New-Object 'System.Collections.Generic.List[object]'
-$outputArtifactIntegrityRecords = New-Object 'System.Collections.Generic.List[object]'
+$outputArtifactPublicationLocks = New-Object 'System.Collections.Generic.List[object]'
 $stagingReadLocks = New-Object 'System.Collections.Generic.List[object]'
+$pathEntryLeases = New-Object 'System.Collections.Generic.List[object]'
+$leasedPathEntries = [System.Collections.Hashtable]::new(
+    [System.StringComparer]::Ordinal
+)
+$directoryMutationGuards = New-Object 'System.Collections.Generic.List[object]'
+$guardedDirectories = [System.Collections.Hashtable]::new(
+    [System.StringComparer]::Ordinal
+)
+$journalReadStreams = New-Object 'System.Collections.Generic.List[object]'
 $generatedOwnedPaths = New-Object 'System.Collections.Generic.List[string]'
 $createdDirectories = New-Object 'System.Collections.Generic.List[string]'
 $lock = $null
@@ -1943,6 +3479,13 @@ $result = [ordered]@{
         process_job_containment = $true
         staging_read_locks = $true
         output_artifact_read_locks = $true
+        non_reparse_path_chain_leases = $true
+        local_drive_paths_required = $true
+        direct_fixed_volume_mapping_required = $true
+        mount_manager_drive_registration_required = $true
+        path_handle_volume_correlation = $true
+        directory_data_write_sharing_denied = $true
+        directory_mutation_guards = $true
         terminal_process_checks_point_in_time = $true
         execution_staging_auto_cleanup = $false
         preflight_staging_auto_cleanup = $false
@@ -2108,7 +3651,7 @@ try {
         }
     }
     if (-not [string]::IsNullOrWhiteSpace($ExpectedLogMarkerFile)) {
-        $markerFile = Resolve-ExistingFile -Path $ExpectedLogMarkerFile -Name 'ExpectedLogMarkerFile'
+        $markerFile = Resolve-ExistingFile -Path $ExpectedLogMarkerFile -Name 'ExpectedLogMarkerFile' -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
         $markerFileStream = [IO.File]::Open(
             $markerFile,
             [IO.FileMode]::Open,
@@ -2187,7 +3730,7 @@ try {
         $result.inputs.expected_log_marker_aggregate_sha256 = Get-TextSha256 -Text $aggregateMaterial
     }
 
-    $expert = Resolve-ExistingFile -Path $ExpertPath -Name 'ExpertPath'
+    $expert = Resolve-ExistingFile -Path $ExpertPath -Name 'ExpertPath' -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
     if ([IO.Path]::GetExtension($expert) -ine '.ex5') {
         throw "ExpertPath must identify a compiled .ex5 file: $expert"
     }
@@ -2199,7 +3742,7 @@ try {
     $presetInfo = $null
     $presetHash = $null
     if (-not [string]::IsNullOrWhiteSpace($SetPath)) {
-        $preset = Resolve-ExistingFile -Path $SetPath -Name 'SetPath'
+        $preset = Resolve-ExistingFile -Path $SetPath -Name 'SetPath' -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
         if ([IO.Path]::GetExtension($preset) -ine '.set') {
             throw "SetPath must identify a .set file: $preset"
         }
@@ -2207,22 +3750,34 @@ try {
         $presetHash = Get-FileSha256 -Path $preset
     }
 
-    if (-not [IO.Path]::IsPathRooted($OutputDirectory)) {
+    if (-not (Test-IsAbsoluteLocalDrivePath -Path $OutputDirectory)) {
         throw 'OutputDirectory must be an absolute path.'
     }
-    $output = [IO.Path]::GetFullPath($OutputDirectory)
-    if (Test-Path -LiteralPath $output) {
+    $output = ConvertTo-NormalizedDirectoryPath -Path $OutputDirectory
+    $outputParent = Split-Path -Parent $output
+    $outputParentLease = Open-NonReparseDirectoryChain `
+        -Path $outputParent `
+        -Tracker $pathEntryLeases `
+        -LeasesByPath $leasedPathEntries
+    $null = Open-DirectoryMutationGuard `
+        -Path $outputParent `
+        -DirectoryLease $outputParentLease `
+        -Tracker $directoryMutationGuards `
+        -GuardsByPath $guardedDirectories `
+        -RunId $runId
+    $outputCreation = Open-OrCreateNonReparseDirectory `
+        -Path $output `
+        -Tracker $pathEntryLeases `
+        -LeasesByPath $leasedPathEntries
+    if (-not [bool]$outputCreation.created) {
         throw "OutputDirectory must not already exist: $output"
     }
-    $outputParent = Split-Path -Parent $output
-    if (-not (Test-Path -LiteralPath $outputParent -PathType Container)) {
-        throw "OutputDirectory parent does not exist: $outputParent"
-    }
-    $outputClaim = Open-NewOutputDirectoryClaim -Path $output -RunId $runId
     $outputCreated = $true
+    $outputDirectoryLease = $outputCreation.lease
+    $outputClaim = Open-NewOutputDirectoryClaim -Path $output -RunId $runId -DirectoryLease $outputDirectoryLease -IntegrityTracker $stagingReadLocks -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries
     $resultPath = Join-Path $output 'smoke-result.json'
 
-    $binding = Resolve-TerminalBinding -RequestedTerminalPath $TerminalPath -RequestedDataPath $TerminalDataPath
+    $binding = Resolve-TerminalBinding -RequestedTerminalPath $TerminalPath -RequestedDataPath $TerminalDataPath -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
     $terminal = [string]$binding.terminal_path
     $data = [string]$binding.terminal_data_path
     $mql5 = Join-Path $data 'MQL5'
@@ -2230,11 +3785,28 @@ try {
     $profilesRoot = Join-Path $mql5 'Profiles\Tester'
     $terminalLogRoot = Join-Path $data 'logs'
     $testerLogRoot = Join-Path $data 'Tester\logs'
-    foreach ($requiredDirectory in @($expertsRoot, $profilesRoot, $terminalLogRoot, $testerLogRoot)) {
-        if (-not (Test-Path -LiteralPath $requiredDirectory -PathType Container)) {
-            throw "Required MT5 directory is missing: $requiredDirectory"
+    $terminalPathLease = Open-NonReparseFileLeaf -Path $terminal -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
+    $mutationGuardDirectories = @(
+        $expertsRoot,
+        $profilesRoot,
+        $terminalLogRoot,
+        $testerLogRoot
+    )
+    foreach ($requiredDirectory in @($data, $mql5) + $mutationGuardDirectories) {
+        $requiredDirectoryLease = Open-NonReparseDirectoryChain `
+            -Path $requiredDirectory `
+            -Tracker $pathEntryLeases `
+            -LeasesByPath $leasedPathEntries
+        if ($mutationGuardDirectories -icontains $requiredDirectory) {
+            $null = Open-DirectoryMutationGuard `
+                -Path $requiredDirectory `
+                -DirectoryLease $requiredDirectoryLease `
+                -Tracker $directoryMutationGuards `
+                -GuardsByPath $guardedDirectories `
+                -RunId $runId
         }
     }
+    $originPathLease = Open-NonReparseFileLeaf -Path (Join-Path $data 'origin.txt') -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
 
     $result.binding = [ordered]@{
         terminal_path = $terminal
@@ -2247,6 +3819,9 @@ try {
     $lock = Open-DataDirectoryLock -TerminalDataPath $data -RunId $runId
     $stagingReadLocksReleased = $false
     $terminalImageRecord = Open-TerminalImageReadLock -Path $terminal -Tracker $stagingReadLocks
+    if ($terminalImageRecord.file_identity -cne [string]$terminalPathLease.Identity) {
+        throw 'Terminal executable identity changed while its path-chain lease was established.'
+    }
     $result.binding.terminal_image = [ordered]@{
         path = $terminalImageRecord.destination_path
         byte_length = [long]$terminalImageRecord.byte_length
@@ -2257,7 +3832,11 @@ try {
     $originRecord = Open-TerminalOriginReadLock `
         -TerminalDataPath $data `
         -TerminalPath $terminal `
+        -ExpectedInstallPath $binding.terminal_install_path `
         -Tracker $stagingReadLocks
+    if ($originRecord.file_identity -cne [string]$originPathLease.Identity) {
+        throw 'Terminal origin identity changed while its path-chain lease was established.'
+    }
     $result.binding.terminal_origin = [ordered]@{
         path = $originRecord.destination_path
         install_path = $originRecord.install_path
@@ -2307,9 +3886,6 @@ try {
         if ($path.Length -gt 259) {
             throw "Owned MT5 staging path exceeds 259 characters: $path"
         }
-        if (Test-Path -LiteralPath $path) {
-            throw "Refusing to reuse an existing owned staging path: $path"
-        }
     }
 
     $configLines = New-Object 'System.Collections.Generic.List[string]'
@@ -2344,7 +3920,7 @@ try {
             "ToDate=$ToDate",
             'ForwardMode=0',
             "Report=$reportLeaf",
-            'ReplaceReport=0',
+            'ReplaceReport=1',
             'ShutdownTerminal=1',
             ('Deposit=' + $Deposit.ToString([Globalization.CultureInfo]::InvariantCulture)),
             "Currency=$Currency",
@@ -2365,14 +3941,23 @@ try {
     $configContent = ($configLines -join "`r`n")
     $canonicalConfig = Join-Path $output 'tester-start.ini'
     $utf16 = New-Object Text.UnicodeEncoding($false, $true)
-    Write-NewTextFile -Text $configContent -Path $canonicalConfig -Encoding $utf16
-    $canonicalConfigInfo = Get-Item -LiteralPath $canonicalConfig
-    $canonicalConfigHash = Get-FileSha256 -Path $canonicalConfig
+    $canonicalConfigRecord = Open-NewTextArtifactReadLock -Text $configContent -Path $canonicalConfig -Encoding $utf16 -Kind 'canonical startup config' -Tracker $stagingReadLocks -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries
+    if ($stagingReadLocks.Count -eq 0) {
+        throw 'Canonical startup config creation did not retain its exact output stream.'
+    }
+    $canonicalConfigLock = $stagingReadLocks[$stagingReadLocks.Count - 1]
+    if (-not [object]::ReferenceEquals(
+            $canonicalConfigLock.record,
+            $canonicalConfigRecord
+        )) {
+        throw 'Canonical startup config creation returned a mismatched retained stream.'
+    }
+    $canonicalConfigHash = $canonicalConfigRecord.sha256
 
     $result.artifacts = [ordered]@{
         output_owner = [ordered]@{
             path = $outputClaim.owner_path
-            byte_length = [long](Get-Item -LiteralPath $outputClaim.owner_path).Length
+            byte_length = [long]$outputClaim.owner_record.byte_length
             sha256 = $outputClaim.owner_sha256
         }
         expert = [ordered]@{
@@ -2398,7 +3983,7 @@ try {
         }
         canonical_config = [ordered]@{
             path = $canonicalConfig
-            byte_length = [long]$canonicalConfigInfo.Length
+            byte_length = [long]$canonicalConfigRecord.byte_length
             sha256 = $canonicalConfigHash
             encoding = 'utf-16le-bom'
             newline = 'crlf'
@@ -2412,30 +3997,37 @@ try {
             postrun_verified = $null
         }
     }
-    $outputArtifactIntegrityRecords.Add([pscustomobject][ordered]@{
-        kind = 'output owner'
-        destination_path = $outputClaim.owner_path
-        byte_length = [long](Get-Item -LiteralPath $outputClaim.owner_path).Length
-        sha256 = $outputClaim.owner_sha256
-        verified = $true
-    })
-    $outputArtifactIntegrityRecords.Add([pscustomobject][ordered]@{
-        kind = 'canonical startup config'
-        destination_path = $canonicalConfig
-        byte_length = [long]$canonicalConfigInfo.Length
-        sha256 = $canonicalConfigHash
-        verified = $true
-    })
-
-    $rootExisted = Test-Path -LiteralPath $expertStageRoot -PathType Container
-    $directoryExisted = Test-Path -LiteralPath (Split-Path -Parent $expertStage) -PathType Container
-    if (-not $rootExisted) {
+    $expertStageRootCreation = Open-OrCreateNonReparseDirectory `
+        -Path $expertStageRoot `
+        -Tracker $pathEntryLeases `
+        -LeasesByPath $leasedPathEntries
+    if ([bool]$expertStageRootCreation.created) {
         $createdDirectories.Add($expertStageRoot)
     }
-    if (-not $directoryExisted) {
-        $createdDirectories.Add((Split-Path -Parent $expertStage))
+    $expertStageRootLease = $expertStageRootCreation.lease
+    $null = Open-DirectoryMutationGuard `
+        -Path $expertStageRoot `
+        -DirectoryLease $expertStageRootLease `
+        -Tracker $directoryMutationGuards `
+        -GuardsByPath $guardedDirectories `
+        -RunId $runId
+    $expertStageDirectory = Split-Path -Parent $expertStage
+    $expertStageDirectoryCreation = Open-OrCreateNonReparseDirectory `
+        -Path $expertStageDirectory `
+        -Tracker $pathEntryLeases `
+        -LeasesByPath $leasedPathEntries
+    if (-not [bool]$expertStageDirectoryCreation.created) {
+        throw "Refusing to reuse an existing run staging directory: $expertStageDirectory"
     }
-    $stageRecord = Copy-NewHashBoundFile -Source $expert -Destination $expertStage -Kind 'expert' -Tracker $hashBoundStaging
+    $createdDirectories.Add($expertStageDirectory)
+    $expertStageDirectoryLease = $expertStageDirectoryCreation.lease
+    $null = Open-DirectoryMutationGuard `
+        -Path $expertStageDirectory `
+        -DirectoryLease $expertStageDirectoryLease `
+        -Tracker $directoryMutationGuards `
+        -GuardsByPath $guardedDirectories `
+        -RunId $runId
+    $stageRecord = Copy-NewHashBoundFile -Source $expert -Destination $expertStage -Kind 'expert' -Tracker $hashBoundStaging -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries
     if ($stageRecord.sha256 -cne $expertHash -or [long]$stageRecord.byte_length -ne [long]$expertInfo.Length) {
         throw 'Expert source bytes changed while the hash-bound staging copy was prepared.'
     }
@@ -2448,7 +4040,7 @@ try {
         $result.artifacts.expert.executed_copy = $result.artifacts.expert.staged_copy
     }
     if ($null -ne $presetStage) {
-        $presetRecord = Copy-NewHashBoundFile -Source $preset -Destination $presetStage -Kind 'preset' -Tracker $hashBoundStaging
+        $presetRecord = Copy-NewHashBoundFile -Source $preset -Destination $presetStage -Kind 'preset' -Tracker $hashBoundStaging -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries
         if ($presetRecord.sha256 -cne $presetHash -or [long]$presetRecord.byte_length -ne [long]$presetInfo.Length) {
             throw 'Preset source bytes changed while the hash-bound staging copy was prepared.'
         }
@@ -2461,8 +4053,15 @@ try {
             $result.artifacts.preset.executed_copy = $result.artifacts.preset.staged_copy
         }
     }
-    $configRecord = Copy-NewHashBoundFile -Source $canonicalConfig -Destination $configStage -Kind 'startup config' -Tracker $hashBoundStaging
-    if ($configRecord.sha256 -cne $canonicalConfigHash -or [long]$configRecord.byte_length -ne [long]$canonicalConfigInfo.Length) {
+    $configRecord = Copy-NewHashBoundFile `
+        -Source $canonicalConfig `
+        -Destination $configStage `
+        -Kind 'startup config' `
+        -Tracker $hashBoundStaging `
+        -PathEntryLeases $pathEntryLeases `
+        -LeasesByPath $leasedPathEntries `
+        -RetainedSourceStream $canonicalConfigLock.stream
+    if ($configRecord.sha256 -cne $canonicalConfigHash -or [long]$configRecord.byte_length -ne [long]$canonicalConfigRecord.byte_length) {
         throw 'Canonical startup config bytes changed while the staging copy was prepared.'
     }
     $result.artifacts.canonical_config.staged_copy = [ordered]@{
@@ -2474,9 +4073,28 @@ try {
         $result.artifacts.canonical_config.executed_copy = $result.artifacts.canonical_config.staged_copy
     }
 
+    foreach ($generatedPath in @($reportStage) + @($reportCompanionStages)) {
+        if ([bool]$Execute) {
+            $null = Open-NewMutableOutputFileReservation `
+                -Path $generatedPath `
+                -Tracker $pathEntryLeases `
+                -LeasesByPath $leasedPathEntries
+            $generatedOwnedPaths.Add($generatedPath)
+        }
+        else {
+            $existingGeneratedLease = Try-OpenNonReparseFileLeaf `
+                -Path $generatedPath `
+                -Tracker $pathEntryLeases `
+                -LeasesByPath $leasedPathEntries
+            if ($null -ne $existingGeneratedLease) {
+                throw "Refusing to reuse an existing generated report path: $generatedPath"
+            }
+        }
+    }
+
     $stagingReadLocksReleased = $false
-    $integrityRecordsToLock = @($hashBoundStaging.ToArray()) + @($outputArtifactIntegrityRecords.ToArray())
-    Open-StagingReadLocks -Records $integrityRecordsToLock -Tracker $stagingReadLocks
+    $integrityRecordsToLock = @($hashBoundStaging.ToArray())
+    Open-StagingReadLocks -Records $integrityRecordsToLock -Tracker $stagingReadLocks -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries
     $stagingReadLockAcquisitionCompleted = $true
     $result.artifacts.staging_integrity.read_locks_acquired = $true
     $prelaunchIntegrityFailures = @(Get-PinnedStagingIntegrityFailures -Locks $stagingReadLocks)
@@ -2485,8 +4103,8 @@ try {
     }
     $result.artifacts.staging_integrity.prelaunch_verified = $true
 
-    $beforeTerminal = Get-JournalSnapshot -RootPath $terminalLogRoot
-    $beforeTester = Get-JournalSnapshot -RootPath $testerLogRoot
+    $beforeTerminal = Get-JournalSnapshot -RootPath $terminalLogRoot -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries -StreamTracker $journalReadStreams
+    $beforeTester = Get-JournalSnapshot -RootPath $testerLogRoot -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries -StreamTracker $journalReadStreams
 
     if ($PreflightOnly) {
         $preflightFinalConflicts = @(Get-MatchingTerminalProcesses -ExecutablePath $terminal -ExpectedFileIdentity $terminalImageRecord.file_identity)
@@ -2499,11 +4117,6 @@ try {
         $exitCode = 0
     }
     else {
-        $generatedOwnedPaths.Add($reportStage)
-        foreach ($path in $reportCompanionStages) {
-            $generatedOwnedPaths.Add($path)
-        }
-
         $conflicts = @(Get-MatchingTerminalProcesses -ExecutablePath $terminal -ExpectedFileIdentity $terminalImageRecord.file_identity)
         if ($conflicts.Count -gt 0) {
             $pids = @($conflicts | ForEach-Object { $_.process_id })
@@ -2599,8 +4212,8 @@ try {
             $errors.Add($failure)
         }
 
-        $terminalDelta = Read-JournalDelta -Before $beforeTerminal -RootPath $terminalLogRoot -LogicalName 'terminal' -MaximumBytes $MaxJournalAppendBytes
-        $testerDelta = Read-JournalDelta -Before $beforeTester -RootPath $testerLogRoot -LogicalName 'tester' -MaximumBytes $MaxJournalAppendBytes
+        $terminalDelta = Read-JournalDelta -Before $beforeTerminal -RootPath $terminalLogRoot -LogicalName 'terminal' -MaximumBytes $MaxJournalAppendBytes -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries -StreamTracker $journalReadStreams
+        $testerDelta = Read-JournalDelta -Before $beforeTester -RootPath $testerLogRoot -LogicalName 'tester' -MaximumBytes $MaxJournalAppendBytes -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries -StreamTracker $journalReadStreams
 
         $terminalText = [string]$terminalDelta.text
         $testerText = [string]$testerDelta.text
@@ -2989,30 +4602,34 @@ try {
             }
         }
 
-        if (Test-Path -LiteralPath $reportStage -PathType Leaf) {
-            $reportInfo = Get-Item -LiteralPath $reportStage
-            if ($reportInfo.Length -gt 0) {
+        $reportStageLease = Try-OpenNonReparseFileLeaf -Path $reportStage -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
+        if ($null -ne $reportStageLease) {
+            $reportSourceRecord = Open-VerifiedArtifactReadLock -Path $reportStage -Kind 'generated report source' -Tracker $stagingReadLocks -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries
+            if ([long]$reportSourceRecord.byte_length -gt 0) {
                 $finalReport = Join-Path $output $reportLeaf
-                [IO.File]::Copy($reportStage, $finalReport, $false)
-                $finalReportRecord = Open-VerifiedArtifactReadLock `
-                    -Path $finalReport `
+                $finalReportRecord = Copy-NewVerifiedOutputArtifact `
+                    -Source $reportStage `
+                    -Destination $finalReport `
                     -Kind 'output report' `
-                    -Tracker $stagingReadLocks
+                    -SourceLease $reportStageLease `
+                    -Tracker $outputArtifactPublicationLocks
                 $reportCompanions = New-Object 'System.Collections.Generic.List[object]'
                 foreach ($companionStage in $reportCompanionStages) {
-                    if (-not (Test-Path -LiteralPath $companionStage -PathType Leaf)) {
+                    $companionStageLease = Try-OpenNonReparseFileLeaf -Path $companionStage -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
+                    if ($null -eq $companionStageLease) {
                         continue
                     }
-                    $companionInfo = Get-Item -LiteralPath $companionStage
-                    if ($companionInfo.Length -le 0) {
+                    $companionSourceRecord = Open-VerifiedArtifactReadLock -Path $companionStage -Kind 'generated report companion source' -Tracker $stagingReadLocks -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries
+                    if ([long]$companionSourceRecord.byte_length -le 0) {
                         continue
                     }
                     $companionFinal = Join-Path $output ([IO.Path]::GetFileName($companionStage))
-                    [IO.File]::Copy($companionStage, $companionFinal, $false)
-                    $companionRecord = Open-VerifiedArtifactReadLock `
-                        -Path $companionFinal `
+                    $companionRecord = Copy-NewVerifiedOutputArtifact `
+                        -Source $companionStage `
+                        -Destination $companionFinal `
                         -Kind 'output report companion' `
-                        -Tracker $stagingReadLocks
+                        -SourceLease $companionStageLease `
+                        -Tracker $outputArtifactPublicationLocks
                     $reportCompanions.Add([pscustomobject][ordered]@{
                         path = $companionFinal
                         byte_length = [long]$companionRecord.byte_length
@@ -3193,8 +4810,8 @@ finally {
         if ([bool]$Execute) {
             $finalIntegrityFailures = @(Get-PinnedStagingIntegrityFailures -Locks $stagingReadLocks)
             if ($finalIntegrityFailures.Count -gt 0) {
-                if ($null -ne $result.artifacts -and
-                    $null -ne $result.artifacts.PSObject.Properties['staging_integrity']) {
+                if ($result.artifacts -is [System.Collections.IDictionary] -and
+                    $result.artifacts.Contains('staging_integrity')) {
                     $result.artifacts.staging_integrity.postrun_verified = $false
                 }
                 foreach ($failure in $finalIntegrityFailures) {
@@ -3216,6 +4833,18 @@ finally {
         }
         $stagingReadLocksReleased = $stagingReadLockAcquisitionCompleted -and -not $lockReleaseFailed
     }
+
+    for ($index = $journalReadStreams.Count - 1; $index -ge 0; $index--) {
+        try {
+            $journalReadStreams[$index].Dispose()
+        }
+        catch {
+            $cleanupErrors.Add(
+                "Could not release a pinned journal read stream: $($_.Exception.Message)"
+            )
+        }
+    }
+
 
     $stagingArtifactsExist = (
         $hashBoundStaging.Count -gt 0 -or
@@ -3248,19 +4877,24 @@ finally {
     }
     foreach ($record in $hashBoundStaging) {
         $path = [string]$record.destination_path
-        if (Test-Path -LiteralPath $path -PathType Leaf) {
-            $cleanupPreserved.Add("$($record.kind): $preservationReason; preserved: $path")
-        }
+        $cleanupPreserved.Add("$($record.kind): $preservationReason; preserved: $path")
     }
     foreach ($path in $generatedOwnedPaths) {
-        if (Test-Path -LiteralPath $path -PathType Leaf) {
-            $cleanupPreserved.Add("generated report artifact: $preservationReason; preserved: $path")
+        try {
+            $generatedLease = Try-OpenNonReparseFileLeaf `
+                -Path $path `
+                -Tracker $pathEntryLeases `
+                -LeasesByPath $leasedPathEntries
+            if ($null -ne $generatedLease) {
+                $cleanupPreserved.Add("generated report artifact: $preservationReason; preserved: $path")
+            }
+        }
+        catch {
+            $cleanupErrors.Add("Could not safely inspect generated report artifact '$path': $($_.Exception.Message)")
         }
     }
     foreach ($directory in $createdDirectories) {
-        if (Test-Path -LiteralPath $directory -PathType Container) {
-            $cleanupPreserved.Add("staging directory: $preservationReason; preserved: $directory")
-        }
+        $cleanupPreserved.Add("staging directory: $preservationReason; preserved: $directory")
     }
     if ($stagingArtifactsExist -and ($conservativeExecutionPreservation -or $conservativePreflightPreservation)) {
         $warnings.Add(
@@ -3280,14 +4914,6 @@ finally {
         }
     }
 
-    if ($null -ne $outputClaim) {
-        try {
-            $outputClaim.stream.Dispose()
-        }
-        catch {
-            $cleanupErrors.Add("Could not release the output-directory claim '$($outputClaim.path)': $($_.Exception.Message)")
-        }
-    }
 
     if ($cleanupErrors.Count -gt 0) {
         if ($result.status -ne 'tooling_error') {
@@ -3304,6 +4930,12 @@ finally {
 
     if ($outputCreated -and $null -ne $resultPath) {
         try {
+            Assert-StableFixedLocalVolumePath -Path $output
+            [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
+                $output,
+                $outputDirectoryLease
+            )
+            $outputDirectoryLease.VerifyStillNonReparseDirectory()
             Write-JsonFile -Value $result -Path $resultPath
             $resultWritten = $true
         }
@@ -3317,6 +4949,68 @@ finally {
     elseif ($errors.Count -gt 0) {
         [Console]::Error.WriteLine(
             (Protect-JournalLine -Line "MQL5 tester smoke $($result.status): $($errors[$errors.Count - 1])")
+        )
+    }
+
+    $postResultReleaseErrors = New-Object 'System.Collections.Generic.List[string]'
+    for ($index = $outputArtifactPublicationLocks.Count - 1; $index -ge 0; $index--) {
+        try {
+            $outputArtifactPublicationLocks[$index].stream.Dispose()
+        }
+        catch {
+            $postResultReleaseErrors.Add(
+                "Could not release the $($outputArtifactPublicationLocks[$index].record.kind) publication stream: $($_.Exception.Message)"
+            )
+        }
+    }
+    for ($index = $directoryMutationGuards.Count - 1; $index -ge 0; $index--) {
+        try {
+            $directoryMutationGuards[$index].stream.Dispose()
+        }
+        catch {
+            $postResultReleaseErrors.Add(
+                "Could not release the directory mutation guard '$($directoryMutationGuards[$index].path)': $($_.Exception.Message)"
+            )
+        }
+    }
+    if ($null -ne $outputClaim) {
+        try {
+            $outputClaim.stream.Dispose()
+        }
+        catch {
+            $postResultReleaseErrors.Add(
+                "Could not release the output-directory claim '$($outputClaim.path)': $($_.Exception.Message)"
+            )
+        }
+    }
+    if ($postResultReleaseErrors.Count -gt 0) {
+        if (-not $resultWritten) {
+            $exitCode = 2
+        }
+        foreach ($releaseError in $postResultReleaseErrors) {
+            [Console]::Error.WriteLine(
+                (Protect-JournalLine -Line "MQL5 tester smoke warning: $releaseError")
+            )
+        }
+    }
+
+    $pathLeaseReleaseError = $null
+    for ($index = $pathEntryLeases.Count - 1; $index -ge 0; $index--) {
+        try {
+            $pathEntryLeases[$index].Dispose()
+        }
+        catch {
+            if ($null -eq $pathLeaseReleaseError) {
+                $pathLeaseReleaseError = $_.Exception.Message
+            }
+        }
+    }
+    if ($null -ne $pathLeaseReleaseError) {
+        [Console]::Error.WriteLine(
+            (Protect-JournalLine -Line (
+                    'MQL5 tester smoke warning: could not release a ' +
+                    "path-integrity lease: $pathLeaseReleaseError"
+                ))
         )
     }
 

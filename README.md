@@ -10,6 +10,8 @@ The skill covers Expert Advisors, indicators, scripts, services, libraries, `.mq
 - Codex with skill support.
 - The `mql5-chm` MCP server installed and enabled.
 - MetaTrader 5 and MetaEditor only when compilation or Strategy Tester execution is requested.
+- Direct fixed-local-volume paths registered by the Windows mount manager and without reparse-point components for Strategy Tester staging and evidence; mapped network drives, SUBST aliases, and raw DOS-device aliases are rejected.
+- An ordinary `.mq5` source file for compilation; directory-junction aliases are canonicalized, but source-file symlinks/reparse points are rejected.
 - The shared MQL5 Python launcher under `CODEX_HOME\tools\mql5-python` only for optional Python analysis.
 
 Ordinary source review and explanation do not start MetaTrader, MetaEditor, or Strategy Tester.
@@ -74,8 +76,8 @@ GitHub Actions and the local test commands validate:
 
 - skill metadata, dependency declaration, links, and portable paths;
 - PowerShell syntax under PowerShell 7 and Windows PowerShell 5.1;
-- compiler-wrapper completion, artifact, and exit-code contracts without starting MetaEditor;
-- Strategy Tester preflight, stable terminal-image identity checks, unambiguous correlated completion, adversarial log rejection, and timeout cleanup without starting real MT5.
+- compiler-wrapper completion, source-path lease, artifact, and exit-code contracts without starting real MetaEditor;
+- Strategy Tester preflight, mount-manager drive validation, path-handle volume correlation, non-reparse path-chain leases, pinned nonempty-directory guards, pinned journal evidence, stable terminal-image identity checks, secret redaction, unambiguous correlated completion, adversarial log rejection, and timeout cleanup without starting real MT5.
 
 Run locally inside an isolated Python 3.12 x64 environment with `PyYAML==6.0.3` available:
 

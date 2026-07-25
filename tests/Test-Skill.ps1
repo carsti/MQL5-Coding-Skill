@@ -72,6 +72,44 @@ function Assert-PowerShellParses {
     }
 }
 
+function Test-PathInChildPowerShell {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Leaf', 'Container')]
+        [string]$PathType
+    )
+
+    $escapedPath = $Path.Replace("'", "''")
+    $commandText = (
+        "if (Test-Path -LiteralPath '$escapedPath' -PathType $PathType) { exit 0 } " +
+        'else { exit 1 }'
+    )
+    $encodedCommand = [Convert]::ToBase64String(
+        [Text.Encoding]::Unicode.GetBytes($commandText)
+    )
+    $startInfo = New-Object Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $hostExecutable
+    $startInfo.Arguments = (
+        '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' +
+        $encodedCommand
+    )
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $startInfo
+    try {
+        $null = $process.Start()
+        $process.WaitForExit()
+        return $process.ExitCode -eq 0
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
 function Invoke-RunnerCase {
     param(
         [Parameter(Mandatory = $true)]
@@ -189,6 +227,7 @@ function Invoke-CompilerCase {
         [string]$ChildPidPath,
         [string]$IncludePath,
         [string]$ArgumentsPath,
+        [string]$IncludeProbeMovePath,
         [int]$TimeoutSeconds = 5,
         [switch]$SyntaxOnly,
         [switch]$WarningsAsErrors
@@ -236,6 +275,9 @@ function Invoke-CompilerCase {
     if (-not [string]::IsNullOrWhiteSpace($ArgumentsPath)) {
         $startInfo.EnvironmentVariables['FAKE_METAEDITOR_ARGS_PATH'] = $ArgumentsPath
     }
+    if (-not [string]::IsNullOrWhiteSpace($IncludeProbeMovePath)) {
+        $startInfo.EnvironmentVariables['FAKE_METAEDITOR_INCLUDE_MOVE_PATH'] = $IncludeProbeMovePath
+    }
 
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $startInfo
@@ -273,10 +315,117 @@ Assert-PowerShellParses -Path $compiler
 if (-not ('Mql5Coding.CompilerProcessJob' -as [type])) {
     Add-Type -Path $compilerProcessJobSource
 }
+$runnerTextForNativeType = Get-Content -LiteralPath $runner -Raw
+$runnerTypeMatch = [regex]::Match(
+    $runnerTextForNativeType,
+    "(?s)Add-Type\s+-TypeDefinition\s+@'\r?\n(?<source>.*?)\r?\n'@"
+)
+Assert-True -Condition $runnerTypeMatch.Success `
+    -Message 'The tester native helper source could not be extracted for lease tests.'
+if (-not ('Mql5Coding.JobProcessLaunch' -as [type])) {
+    Add-Type -TypeDefinition $runnerTypeMatch.Groups['source'].Value
+}
+if (-not ('Mql5Coding.RawDosDeviceProbe' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+
+namespace Mql5Coding
+{
+    public static class RawDosDeviceProbe
+    {
+        private const uint RawTarget = 0x00000001;
+        private const uint RemoveDefinition = 0x00000002;
+        private const uint ExactMatchOnRemove = 0x00000004;
+        private const uint NoBroadcastSystem = 0x00000008;
+
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "QueryDosDeviceW")]
+        private static extern uint QueryDosDevice(
+            string deviceName,
+            StringBuilder targetPath,
+            uint maximumCharacters);
+
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "DefineDosDeviceW")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool DefineDosDevice(
+            uint flags,
+            string deviceName,
+            string targetPath);
+
+        public static bool IsDefined(string deviceName)
+        {
+            StringBuilder target = new StringBuilder(32768);
+            uint length = QueryDosDevice(
+                deviceName,
+                target,
+                unchecked((uint)target.Capacity));
+            if (length != 0)
+                return true;
+            int error = Marshal.GetLastWin32Error();
+            if (error == 2 || error == 3)
+                return false;
+            throw new Win32Exception(
+                error,
+                "QueryDosDevice failed for " + deviceName + ".");
+        }
+
+        public static string Query(string deviceName)
+        {
+            StringBuilder target = new StringBuilder(32768);
+            uint length = QueryDosDevice(
+                deviceName,
+                target,
+                unchecked((uint)target.Capacity));
+            if (length == 0)
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "QueryDosDevice failed for " + deviceName + ".");
+            return target.ToString();
+        }
+
+        public static void Create(string deviceName, string rawTarget)
+        {
+            if (!DefineDosDevice(
+                    RawTarget | NoBroadcastSystem,
+                    deviceName,
+                    rawTarget))
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "DefineDosDevice create failed for " + deviceName + ".");
+        }
+
+        public static void Remove(string deviceName, string rawTarget)
+        {
+            if (!DefineDosDevice(
+                    RawTarget | RemoveDefinition | ExactMatchOnRemove |
+                        NoBroadcastSystem,
+                    deviceName,
+                    rawTarget))
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "DefineDosDevice removal failed for " + deviceName + ".");
+        }
+    }
+}
+'@
+}
+
 
 $skillText = Get-Content -LiteralPath (Join-Path $skillRoot 'SKILL.md') -Raw
 $referenceText = Get-Content -LiteralPath (Join-Path $skillRoot 'references\strategy-tester.md') -Raw
 $compilerText = Get-Content -LiteralPath $compiler -Raw
+$compilerProcessJobText = Get-Content -LiteralPath $compilerProcessJobSource -Raw
+$runnerText = Get-Content -LiteralPath $runner -Raw
 $runnerTokens = $null
 $runnerParseErrors = $null
 $runnerAst = [Management.Automation.Language.Parser]::ParseFile(
@@ -284,6 +433,652 @@ $runnerAst = [Management.Automation.Language.Parser]::ParseFile(
     [ref]$runnerTokens,
     [ref]$runnerParseErrors
 )
+$protectJournalNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Protect-JournalLine'
+        )
+    },
+    $true
+)
+$selectEvidenceNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Select-JournalEvidence'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $protectJournalNode -and $null -ne $selectEvidenceNode) `
+    -Message 'Journal redaction functions were not found for regression testing.'
+$directoryMutationGuardNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Open-DirectoryMutationGuard'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $directoryMutationGuardNode) `
+    -Message 'The directory mutation-guard function was not found for regression testing.'
+$absolutePathNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Test-IsAbsoluteLocalDrivePath'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $absolutePathNode) `
+    -Message 'The absolute local-drive path predicate was not found.'
+$absolutePathProbe = & {
+    param([Parameter(Mandatory = $true)][string]$DefinitionText)
+    . ([scriptblock]::Create($DefinitionText))
+    $valid = @('C:\absolute\path', 'z:/absolute/path')
+    $invalid = @('C:relative', 'C:', '\root-relative', '\\server\share', 'relative')
+    return [pscustomobject]@{
+        valid_count = @($valid | Where-Object {
+                Test-IsAbsoluteLocalDrivePath -Path $_
+            }).Count
+        invalid_accepted = @($invalid | Where-Object {
+                Test-IsAbsoluteLocalDrivePath -Path $_
+            }).Count
+    }
+} $absolutePathNode.Extent.Text
+Assert-True -Condition (
+    $absolutePathProbe.valid_count -eq 2 -and
+    $absolutePathProbe.invalid_accepted -eq 0 -and
+    $runnerText -notmatch '\[IO\.Path\]::IsPathRooted'
+) -Message 'Drive-relative, root-relative, or UNC input passed the absolute-path contract.'
+
+$normalizeDirectoryNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'ConvertTo-NormalizedDirectoryPath'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $normalizeDirectoryNode) -Message 'The directory-path normalization function was not found.'
+$normalizationProbe = & {
+    param([Parameter(Mandatory = $true)][string]$DefinitionText)
+    . ([scriptblock]::Create($DefinitionText))
+    $probeRoot = [IO.Path]::GetPathRoot(
+        [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetTempPath()) 'mql5-normalization-probe'))
+    )
+    $probeNested = [IO.Path]::GetFullPath((Join-Path $probeRoot 'alpha\beta'))
+    return [pscustomobject]@{
+        root = ConvertTo-NormalizedDirectoryPath -Path $probeRoot
+        expected_root = $probeRoot
+        nested = ConvertTo-NormalizedDirectoryPath -Path ($probeNested + '\')
+        expected_nested = $probeNested
+    }
+} $normalizeDirectoryNode.Extent.Text
+Assert-True -Condition (
+    $normalizationProbe.root -ceq $normalizationProbe.expected_root -and
+    $normalizationProbe.nested -ceq $normalizationProbe.expected_nested
+) -Message 'Directory normalization did not preserve a drive root or trim a non-root trailing separator.'
+
+foreach ($functionName in @(
+        'Resolve-ExistingFile',
+        'Open-NonReparseDirectoryChain',
+        'Open-NonReparseFileLeaf'
+    )) {
+    $pathFunctionNode = $runnerAst.Find(
+        {
+            param($node)
+            return (
+                $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+            )
+        },
+        $true
+    )
+    Assert-True -Condition ($null -ne $pathFunctionNode) `
+        -Message "Path-integrity function was not found: $functionName"
+    Assert-True -Condition (
+        $pathFunctionNode.Extent.Text -notmatch
+            '(?i)\b(?:Test-Path|Resolve-Path|Get-Item|Get-ChildItem)\b'
+    ) -Message "$functionName performs filesystem probing before its no-follow lease."
+}
+$newTextArtifactNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Open-NewTextArtifactReadLock'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $newTextArtifactNode) -Message 'The retained new-text artifact helper was not found.'
+$newTextArtifactText = $newTextArtifactNode.Extent.Text
+$newTextCreateIndex = $newTextArtifactText.IndexOf(
+    'CreatePinnedOutputFileStream(',
+    [StringComparison]::Ordinal
+)
+$newTextLeafLeaseIndex = $newTextArtifactText.IndexOf(
+    '$lease = Open-NonReparseFileLeaf',
+    [StringComparison]::Ordinal
+)
+$newTextCreationIdentityIndex = $newTextArtifactText.IndexOf(
+    '$creationStream.SafeFileHandle',
+    [StringComparison]::Ordinal
+)
+$newTextExpectedHashIndex = $newTextArtifactText.IndexOf(
+    '$expectedHash = Get-StreamSha256 -Stream $creationStream',
+    [StringComparison]::Ordinal
+)
+$newTextRetainedStreamIndex = $newTextArtifactText.IndexOf(
+    'stream = $creationStream',
+    [StringComparison]::Ordinal
+)
+$newTextOwnershipTransferIndex = $newTextArtifactText.LastIndexOf(
+    '$creationStream = $null',
+    [StringComparison]::Ordinal
+)
+$newTextCreationCloseIndex = $newTextArtifactText.IndexOf(
+    '$creationStream.Dispose()',
+    [StringComparison]::Ordinal
+)
+Assert-True -Condition (
+    $newTextCreateIndex -ge 0 -and
+    $newTextLeafLeaseIndex -gt $newTextCreateIndex -and
+    $newTextCreationIdentityIndex -gt $newTextLeafLeaseIndex -and
+    $newTextExpectedHashIndex -gt $newTextCreationIdentityIndex -and
+    $newTextRetainedStreamIndex -gt $newTextExpectedHashIndex -and
+    $newTextOwnershipTransferIndex -gt $newTextRetainedStreamIndex -and
+    $newTextCreationCloseIndex -gt $newTextOwnershipTransferIndex -and
+    $newTextArtifactText -notmatch '\$readStream\s*='
+) -Message 'A generated text artifact is not retained through its exact no-follow creation handle and leaf lease.'
+
+$copyNewNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Copy-NewHashBoundFile'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $copyNewNode) -Message 'The hash-bound copy helper was not found.'
+$copyNewText = $copyNewNode.Extent.Text
+Assert-True -Condition (
+    $copyNewText -match '\[IO\.FileAccess\]::ReadWrite' -and
+    $copyNewText -match '\[IO\.FileStream\]\$RetainedSourceStream' -and
+    $copyNewText -match '\$disposeInput' -and
+    $copyNewText -match '\[IO\.FileShare\]::Read' -and
+    $copyNewText -match 'Get-StreamSha256 -Stream \$input' -and
+    $copyNewText -match 'Get-StreamSha256 -Stream \$output' -and
+    $copyNewText -notmatch '\b(?:Get-FileSha256|Get-Item)\b' -and
+    $runnerText -match '-RetainedSourceStream \$canonicalConfigLock\.stream'
+) -Message 'A new copied artifact is not hashed through its still-open source and creation handles.'
+
+$verifiedOutputCopyNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Copy-NewVerifiedOutputArtifact'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $verifiedOutputCopyNode) -Message 'The exact-handle report publication helper was not found.'
+$verifiedOutputCopyText = $verifiedOutputCopyNode.Extent.Text
+Assert-True -Condition (
+    $verifiedOutputCopyText -match 'GetFileIdentity\(\$input\.SafeFileHandle\)' -and
+    $verifiedOutputCopyText -match '\$SourceLease\.Identity' -and
+    $verifiedOutputCopyText -match 'CreatePinnedOutputFileStream' -and
+    $verifiedOutputCopyText -match 'Get-StreamSha256 -Stream \$input' -and
+    $verifiedOutputCopyText -match 'Get-StreamSha256 -Stream \$output' -and
+    $verifiedOutputCopyText -match 'stream = \$output' -and
+    $verifiedOutputCopyText -notmatch '\b(?:Get-FileSha256|Get-Item)\b'
+) -Message 'Generated reports are not copied and hashed through exact retained source and destination handles.'
+Assert-True -Condition (
+    ([regex]::Matches($runnerText, 'Open-NewTextArtifactReadLock')).Count -ge 3 -and
+    $runnerText -notmatch 'Write-NewTextFile -Text \$configContent' -and
+    $runnerText -notmatch '\[IO\.File\]::Copy\(' -and
+    $runnerText -match 'Copy-NewVerifiedOutputArtifact'
+) -Message 'Owner, canonical-config, or copied-report creation bypasses the retained exact-handle integrity path.'
+
+$processIdentityNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Get-FileIdentityFromPath'
+        )
+    },
+    $true
+)
+Assert-True -Condition (
+    $null -ne $processIdentityNode -and
+    $processIdentityNode.Extent.Text -match 'Open-NonReparseFileLeaf' -and
+    $processIdentityNode.Extent.Text -notmatch '\[IO\.File\]::Open'
+) -Message 'Process-image identity can still open an unvalidated executable pathname.'
+$nativeProcessImageNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Get-NativeProcessImageObservation'
+        )
+    },
+    $true
+)
+Assert-True -Condition (
+    $null -ne $nativeProcessImageNode -and
+    $nativeProcessImageNode.Extent.Text -match
+        'TryGetProcessImagePathOnFixedVolume' -and
+    $nativeProcessImageNode.Extent.Text -match 'Get-FileIdentityFromPath' -and
+    $runnerText -match 'ProcessQueryLimitedInformation' -and
+    $runnerText -match 'ProcessNameNative'
+) -Message 'Native process-image fallback or its no-follow identity validation is missing.'
+$processMatcherNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Get-MatchingTerminalProcesses'
+        )
+    },
+    $true
+)
+Assert-True -Condition (
+    $null -ne $processMatcherNode -and
+    $processMatcherNode.Extent.Text -notmatch '(?i)\$matches\b'
+) -Message 'Process matching collides with PowerShell automatic $Matches state.'
+Assert-True -Condition (
+    $runnerText -notmatch 'function Get-StagingIntegrityFailures' -and
+    $runnerText -match 'TryOpenFileLeafLease' -and
+    $runnerText -match 'TryCreateDirectory'
+) -Message 'Safe optional-file or exclusive-directory primitives are missing.'
+Assert-True -Condition (
+    $runnerText -match 'CreateMutableOutputFileLease' -and
+    $runnerText -match 'CreatePinnedOutputFileStream' -and
+    $runnerText -match 'ReplaceReport=1' -and
+    $runnerText -notmatch '\[IO\.File\]::Copy'
+) -Message 'Generated report reservation or no-follow output publication is missing.'
+$mutableOutputMethod = [regex]::Match(
+    [string]$runnerTypeMatch.Groups['source'].Value,
+    '(?s)public static PathEntryLease CreateMutableOutputFileLease\(string path\).*?(?=public static FileStream CreatePinnedOutputFileStream)'
+)
+Assert-True -Condition (
+    $mutableOutputMethod.Success -and
+    $mutableOutputMethod.Value -match '(?s)OpenPathHandle\(.*?GenericRead,.*?ShareReadWrite,.*?CreateNew,' -and
+    $mutableOutputMethod.Value -match 'new PathEntryLease\(\s*handle,' -and
+    $mutableOutputMethod.Value -notmatch 'OpenExisting' -and
+    $mutableOutputMethod.Value -notmatch 'OpenPathHandle\(\s*path,\s*0,'
+) -Message 'Mutable report reservation does not retain its exact no-follow creation handle.'
+$reportReservationIndex = $runnerText.LastIndexOf(
+    '$null = Open-NewMutableOutputFileReservation',
+    [StringComparison]::Ordinal
+)
+$testerLaunchIndex = $runnerText.LastIndexOf(
+    '$jobLaunch = [Mql5Coding.JobProcessLaunch]::CreateSuspended(',
+    [StringComparison]::Ordinal
+)
+Assert-True -Condition (
+    $reportReservationIndex -ge 0 -and
+    $testerLaunchIndex -gt $reportReservationIndex
+) -Message 'Generated report identities are not reserved before terminal launch.'
+$bindingRootLeaseIndex = $runnerText.IndexOf(
+    'Open-NonReparseDirectoryChain -Path $terminalDataRoot',
+    [StringComparison]::Ordinal
+)
+$bindingEnumerationIndex = $runnerText.IndexOf(
+    'Get-ChildItem -LiteralPath $terminalDataRoot -Directory',
+    [StringComparison]::Ordinal
+)
+Assert-True -Condition (
+    $bindingRootLeaseIndex -ge 0 -and
+    $bindingEnumerationIndex -gt $bindingRootLeaseIndex
+) -Message 'Terminal discovery enumerates its data root before leasing it.'
+$terminalBindingNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Resolve-TerminalBinding'
+        )
+    },
+    $true
+)
+$terminalOriginLockNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Open-TerminalOriginReadLock'
+        )
+    },
+    $true
+)
+Assert-True -Condition (
+    $null -ne $terminalBindingNode -and
+    $terminalBindingNode.Extent.Text -match
+        '\$originInstallLease\.Identity\s+-c(?:eq|ne)' -and
+    $terminalBindingNode.Extent.Text -match
+        '\$terminalInstallLease\.Identity' -and
+    $terminalBindingNode.Extent.Text -notmatch 'OrdinalIgnoreCase' -and
+    $null -ne $terminalOriginLockNode -and
+    $terminalOriginLockNode.Extent.Text -match
+        '\$ExpectedInstallPath' -and
+    $terminalOriginLockNode.Extent.Text -match
+        '\[StringComparison\]::Ordinal' -and
+    $terminalOriginLockNode.Extent.Text -notmatch 'OrdinalIgnoreCase'
+) -Message 'Terminal origin binding still conflates case-distinct install directories.'
+$sourceLeaseIndex = $compilerText.IndexOf(
+    '$sourceReadLease = [Mql5Coding.CompilerProcessJob]::OpenSourceFileIdentityLease',
+    [StringComparison]::Ordinal
+)
+$sourceIdentityIndex = $compilerText.IndexOf(
+    '$initialSourceIdentity = [string]$sourceReadLease.Identity',
+    [StringComparison]::Ordinal
+)
+Assert-True -Condition (
+    $sourceLeaseIndex -ge 0 -and
+    $sourceIdentityIndex -gt $sourceLeaseIndex -and
+    $compilerText -notmatch '(?s)\$canonicalSource = .*?Test-Path.*?\$sourceReadLease'
+) -Message 'Compiler source identity is still read before the no-follow leaf lease.'
+Assert-True -Condition (
+    $compilerText -match
+        '\[string\]\$sourceReadLease\.GetCurrentIdentity\(\)\s+-cne\s+\$initialSourceIdentity'
+) -Message 'Compiler source identity is not freshly re-read after both compilation locks are acquired.'
+$metaEditorLeaseIndex = $compilerText.IndexOf(
+    '$metaEditorReadLease = [Mql5Coding.CompilerProcessJob]::OpenExecutableFileIdentityLease',
+    [StringComparison]::Ordinal
+)
+$nativeCompilerStartIndex = $compilerText.IndexOf(
+    '$compileLaunch = [Mql5Coding.CompilerProcessJob]::Start(',
+    [StringComparison]::Ordinal
+)
+Assert-True -Condition (
+    $compilerProcessJobText -match 'OpenExecutableFileIdentityLease' -and
+    $metaEditorLeaseIndex -ge 0 -and
+    $nativeCompilerStartIndex -gt $metaEditorLeaseIndex
+) -Message 'MetaEditor is not pinned by a no-follow executable lease before process creation.'
+Assert-True -Condition (
+    $compilerProcessJobText -match 'Reading compiler directory attributes failed' -and
+    $compilerProcessJobText -match 'FileAttributeDirectory\) == 0' -and
+    $compilerProcessJobText -match 'FileAttributeReparsePoint\) != 0'
+) -Message 'Compiler directory leases do not validate the opened handle type and attributes.'
+Assert-True -Condition (
+    $compilerProcessJobText -match 'TryOpenObservedOutputFileIdentityLease' -and
+    $compilerProcessJobText -match 'TryOpenMovableOutputFileIdentityLease' -and
+    $compilerProcessJobText -match 'TryOpenPinnedOutputFileIdentityLease' -and
+    $compilerProcessJobText -match 'SetFileInformationByHandle' -and
+    $compilerProcessJobText -match 'public void RenameTo' -and
+    $compilerProcessJobText -match 'structureLength = IntPtr\.Size == 8 \? 24 : 16' -and
+    $compilerProcessJobText -match 'bufferLength = checked\(structureLength \+ nameBytes\)' -and
+    $compilerProcessJobText -match 'Marshal\.WriteInt16\(\s*buffer,\s*nameOffset \+ nameBytes,\s*0\)' -and
+    $compilerProcessJobText -match 'public void Delete' -and
+    $compilerText -notmatch 'Test-Path -LiteralPath \$artifactPath' -and
+    $compilerText -notmatch '\[System\.IO\.File\]::(?:Move|Delete)'
+) -Message 'Compiler outputs are not protected by no-follow, handle-bound lifecycle operations.'
+$quoteHelperIndex = $compilerText.IndexOf(
+    'function ConvertTo-WindowsCommandLineArgument',
+    [StringComparison]::Ordinal
+)
+$quoteHelperUseIndex = $compilerText.IndexOf(
+    'ConvertTo-WindowsCommandLineArgument -Value $_',
+    [StringComparison]::Ordinal
+)
+Assert-True -Condition (
+    $quoteHelperIndex -ge 0 -and
+    $quoteHelperUseIndex -gt $quoteHelperIndex
+) -Message 'The compiler command-line quote helper is missing or defined after its use.'
+$artifactPreMovePinIndex = $compilerText.IndexOf(
+    '$artifactProbePinnedLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(',
+    [StringComparison]::Ordinal
+)
+$artifactMoveIndex = $compilerText.IndexOf(
+    '$artifactBackupPath = Move-OriginalArtifactAside',
+    [StringComparison]::Ordinal
+)
+$logPreMovePinIndex = $compilerText.IndexOf(
+    '$logProbePinnedLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(',
+    [StringComparison]::Ordinal
+)
+$logMoveIndex = $compilerText.IndexOf(
+    '$logBackupPath = Move-OriginalLogAside',
+    [StringComparison]::Ordinal
+)
+Assert-True -Condition (
+    $artifactPreMovePinIndex -ge 0 -and
+    $artifactMoveIndex -gt $artifactPreMovePinIndex -and
+    $logPreMovePinIndex -ge 0 -and
+    $logMoveIndex -gt $logPreMovePinIndex -and
+    $compilerText -notmatch '(?s)Move-OriginalArtifactAside.*?TryOpenPinnedOutputFileIdentityLease\(\s*\$artifactBackupPath' -and
+    $compilerText -notmatch '(?s)Move-OriginalLogAside.*?TryOpenPinnedOutputFileIdentityLease\(\s*\$logBackupPath'
+) -Message 'Original compiler outputs are not pinned before their handle-bound backup rename.'
+$resultWriteIndex = $runnerText.LastIndexOf(
+    'Write-JsonFile -Value $result -Path $resultPath',
+    [StringComparison]::Ordinal
+)
+$outputLeaseReverifyIndex = $runnerText.LastIndexOf(
+    '$outputDirectoryLease.VerifyStillNonReparseDirectory()',
+    [StringComparison]::Ordinal
+)
+$mutationGuardReleaseIndex = $runnerText.LastIndexOf(
+    '$directoryMutationGuards[$index].stream.Dispose()',
+    [StringComparison]::Ordinal
+)
+$outputClaimReleaseIndex = $runnerText.LastIndexOf(
+    '$outputClaim.stream.Dispose()',
+    [StringComparison]::Ordinal
+)
+$stagingPreservationProbeIndex = $runnerText.LastIndexOf(
+    'Try-OpenNonReparseFileLeaf `',
+    [StringComparison]::Ordinal
+)
+Assert-True -Condition (
+    $resultWriteIndex -ge 0 -and
+    $outputLeaseReverifyIndex -ge 0 -and
+    $outputLeaseReverifyIndex -lt $resultWriteIndex
+) -Message 'The output-directory lease is not reverified immediately before result creation.'
+Assert-True -Condition (
+    $mutationGuardReleaseIndex -gt $resultWriteIndex -and
+    $mutationGuardReleaseIndex -gt $stagingPreservationProbeIndex
+) -Message 'Directory mutation guards are released before pathname work is complete.'
+Assert-True -Condition ($outputClaimReleaseIndex -gt $resultWriteIndex) `
+    -Message 'The output-directory claim is released before the result is created.'
+$outputPublicationReleaseIndex = $runnerText.LastIndexOf(
+    '$outputArtifactPublicationLocks[$index].stream.Dispose()',
+    [StringComparison]::Ordinal
+)
+$outputPublicationTrackerCount = (
+    [regex]::Matches(
+        $runnerText,
+        '(?m)^\s+-Tracker \$outputArtifactPublicationLocks\s*$'
+    )
+).Count
+Assert-True -Condition (
+    $outputPublicationTrackerCount -eq 2 -and
+    $outputPublicationReleaseIndex -gt $resultWriteIndex -and
+    $mutationGuardReleaseIndex -gt $outputPublicationReleaseIndex
+) -Message 'Copied-report destination streams are not retained through smoke-result publication.'
+$optionalFileLeaseNode = $runnerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Try-OpenNonReparseFileLeaf'
+        )
+    },
+    $true
+)
+Assert-True -Condition (
+    $null -ne $optionalFileLeaseNode -and
+    $optionalFileLeaseNode.Extent.Text -match
+        '(?s)VerifyPathEntryLeaseVolume.*?catch\s*\{.*?BLOCKED: File volume binding changed'
+) -Message 'Cached optional-file volume changes are not classified as blocked.'
+Assert-True -Condition (
+    $runnerText.IndexOf(
+        '$ownerText = $RunId + "`n"',
+        [StringComparison]::Ordinal
+    ) -ge 0
+) -Message 'The output owner record contains text before the intended newline.'
+Assert-True -Condition (
+    $runnerText.IndexOf(
+        '$result.artifacts -is [System.Collections.IDictionary]',
+        [StringComparison]::Ordinal
+    ) -ge 0 -and
+    $runnerText.IndexOf(
+        '$result.artifacts.Contains(''staging_integrity'')',
+        [StringComparison]::Ordinal
+    ) -ge 0
+) -Message 'Final staging-integrity failures do not update the ordered artifact record.'
+Assert-True -Condition (
+    $runnerText -match
+        '\$leasedPathEntries = \[System\.Collections\.Hashtable\]::new\(\s*\[System\.StringComparer\]::Ordinal\s*\)' -and
+    $runnerText -match
+        '\$guardedDirectories = \[System\.Collections\.Hashtable\]::new\(\s*\[System\.StringComparer\]::Ordinal\s*\)' -and
+    $runnerText -match 'cached directory lease does not exactly match' -and
+    $runnerText -match 'cached file lease does not exactly match' -and
+    $runnerText -match 'cached optional-file lease does not exactly match' -and
+    $runnerText -match 'cached directory mutation guard does not exactly match' -and
+    $runnerText -match
+        '\$snapshot = \[System\.Collections\.Hashtable\]::new\(\s*\[System\.StringComparer\]::Ordinal\s*\)' -and
+    $runnerText -notmatch '\$key\s*=.*To(?:Upper|Lower)Invariant'
+) -Message 'Security-sensitive tester caches still collapse case-distinct NTFS paths.'
+$ordinalPathMap = [System.Collections.Hashtable]::new(
+    [System.StringComparer]::Ordinal
+)
+$ordinalPathMap['C:\case\a'] = 1
+$ordinalPathMap['C:\case\A'] = 2
+Assert-True -Condition (
+    $ordinalPathMap.Count -eq 2 -and
+    [int]$ordinalPathMap['C:\case\a'] -eq 1 -and
+    [int]$ordinalPathMap['C:\case\A'] -eq 2
+) -Message 'The PowerShell runtime did not preserve case-distinct ordinal path keys.'
+$redactionProbe = & {
+    param($ProtectDefinition, $SelectDefinition)
+    . ([scriptblock]::Create($ProtectDefinition))
+    . ([scriptblock]::Create($SelectDefinition))
+
+    $positive = @(
+        'ERROR OPENAI_API_KEY=sk-openai-secret',
+        'ERROR AZURE_CLIENT_SECRET:azure-secret',
+        'ERROR DB_PASSWORD=db-secret',
+        'ERROR HTTP_AUTHORIZATION=Basic authorization-secret',
+        'ERROR --refresh-token cli-token',
+        'ERROR service.api-key: dotted-secret',
+        'ERROR password hunter2',
+        'ERROR password is hunter2',
+        'ERROR "api key": "sk-secret"',
+        'ERROR api  key: sk-double-space',
+        "ERROR api`tkey=sk-tab",
+        'ERROR DB_PASSWORD=multi word secret',
+        'ERROR client secret client-secret-value',
+        'ERROR password invalid-secret',
+        'ERROR password rejected-P@ssw0rd',
+        'ERROR client secret missing-value',
+        'ERROR token token-value',
+        'ERROR secret secret-value',
+        'ERROR auth auth-value',
+        'ERROR authorization Basic dXNlcjpwYXNz',
+        'ERROR password="quoted\"leaked-tail"',
+        'ERROR -password:colon-password',
+        'ERROR --token:colon-token',
+        'ERROR --authorization:Basic colon-authorization',
+        'ERROR {\"password\":\"json-password\"}',
+        'ERROR {\"token\":\"json-token\"}',
+        'ERROR {\"apiKey\":\"json-api-key\"}',
+        'ERROR dbPassword=camel-password',
+        'ERROR clientSecret=camel-client-secret',
+        'ERROR authToken=camel-auth-token',
+        'ERROR oauthToken=camel-oauth-token',
+        'ERROR authorizationHeader: Basic header-secret',
+        'ERROR AUTHORIZATION_HEADER: Basic snake-header-secret',
+        'ERROR AWS_SECRET_ACCESS_KEY=aws-secret-access-key',
+        'ERROR SECRET_KEY=framework-secret-key',
+        'ERROR secretAccessKey=camel-secret-access-key',
+        'ERROR password_confirmation=confirmation-secret',
+        'ERROR tokenValue=camel-token-value',
+        'ERROR {\"password_confirmation\":\"json-confirmation-secret\"}',
+        'ERROR {\"tokenValue\":\"json-token-value\"}'
+    )
+    $negative = @(
+        'ERROR token refresh failed',
+        'ERROR authorization denied',
+        'ERROR password authentication failed',
+        'ERROR client secret missing',
+        'ERROR api key not configured',
+        'ERROR password is not configured',
+        'ERROR api key is not configured',
+        'ERROR auth failed',
+        'ERROR secret missing',
+        'ERROR passwordless mode active',
+        'ERROR tokenizer=value',
+        'ERROR authentication failed'
+    )
+    return [pscustomobject]@{
+        positive = @($positive | ForEach-Object {
+                Protect-JournalLine -Line $_
+            })
+        negative = @($negative | ForEach-Object {
+                Protect-JournalLine -Line $_
+            })
+        expected_negative = $negative
+        selected = @(
+            Select-JournalEvidence `
+                -Text (
+                    "ERROR A OPENAI_API_KEY=selected-secret`r`n" +
+                    "ERROR B password selected-password`r`n" +
+                    'ERROR C "api key": "selected-api-key"' + "`r`n" +
+                    "ERROR D api  key: selected-double-space`r`n" +
+                    'ERROR E password selected multi word' + "`r`n" +
+                    'OK'
+                ) `
+                -Patterns @('(?i)error')
+        )
+    }
+} $protectJournalNode.Extent.Text $selectEvidenceNode.Extent.Text
+foreach ($redactedLine in @($redactionProbe.positive)) {
+    Assert-True -Condition (
+        $redactedLine -match '<(?:SECRET|REDACTED)>' -and
+        $redactedLine -notmatch (
+            '(?i)sk-openai-secret|azure-secret|db-secret|authorization-secret|' +
+            'cli-token|dotted-secret|hunter2|sk-secret|sk-double-space|sk-tab|' +
+            'multi word secret|client-secret-value|invalid-secret|rejected-P@ssw0rd|' +
+            'missing-value|token-value|secret-value|auth-value|dXNlcjpwYXNz|leaked-tail|' +
+            'colon-password|colon-token|colon-authorization|json-password|json-token|' +
+            'json-api-key|camel-password|camel-client-secret|camel-auth-token|' +
+            'camel-oauth-token|header-secret|snake-header-secret|aws-secret-access-key|' +
+            'framework-secret-key|camel-secret-access-key|confirmation-secret|' +
+            'camel-token-value|json-confirmation-secret|json-token-value'
+        )
+    ) -Message "A prefixed secret was not redacted: $redactedLine"
+}
+for ($index = 0; $index -lt $redactionProbe.negative.Count; $index++) {
+    Assert-True -Condition (
+        [string]$redactionProbe.negative[$index] -ceq
+            [string]$redactionProbe.expected_negative[$index]
+    ) -Message "Ordinary prose was over-redacted: $($redactionProbe.negative[$index])"
+}
+$selectedEvidenceText = @($redactionProbe.selected) -join "`n"
+Assert-True -Condition (
+    $redactionProbe.selected.Count -eq 5 -and
+    $selectedEvidenceText -notmatch (
+        'selected-secret|selected-password|selected-api-key|' +
+        'selected-double-space|selected multi word'
+    ) -and
+    $selectedEvidenceText -match '<(?:SECRET|REDACTED)>'
+) -Message 'Selected journal evidence retained a secret.'
+
 $postExitWaitNode = $runnerAst.Find(
     {
         param($node)
@@ -523,6 +1318,17 @@ $trustedMatcherProbe = & {
             throw 'Synthetic file identity lookup failure.'
         }
         return [string]$identityState.value
+    }
+    function Get-NativeProcessImageObservation {
+        param($ProcessId, $ExpectedVolumePath)
+        return [pscustomobject]@{
+            query_succeeded = $false
+            on_expected_volume = $false
+            identity_resolved = $false
+            executable_path = $null
+            file_identity = $null
+            error = 'Synthetic native process-image lookup failure.'
+        }
     }
 
     $suspendedMissingFields = @(
@@ -812,6 +1618,188 @@ Assert-True -Condition (
     $trustedMatcherProbe.settling_alias_unresolved
 ) -Message 'An identity-equivalent executable alias was incorrectly rejected.'
 
+$processAliasFallbackProbe = & {
+    param([Parameter(Mandatory = $true)][string]$DefinitionText)
+
+    . ([scriptblock]::Create($DefinitionText))
+    $processRecord = [pscustomobject]@{
+        ProcessId = 6262
+        ParentProcessId = 111
+        Name = 'renamed-host.exe'
+        CreationDate = [datetime]'2024-01-01T00:00:00Z'
+        SessionId = 3
+        ExecutablePath = 'C:\junction\renamed-host.exe'
+    }
+    $state = [pscustomobject]@{
+        reported_error = 'reparse'
+        native_mode = 'resolved'
+    }
+    function Get-CimInstance {
+        param($ClassName)
+        return $processRecord
+    }
+    function Get-FileIdentityFromPath {
+        param($Path)
+        if ($state.reported_error -eq 'reparse') {
+            throw (
+                'BLOCKED: Unsafe or unleaseable directory path component. ' +
+                'Reparse-point path entries are not allowed.'
+            )
+        }
+        throw 'Synthetic access is denied.'
+    }
+    function Get-NativeProcessImageObservation {
+        param($ProcessId, $ExpectedVolumePath)
+        switch ($state.native_mode) {
+            'resolved' {
+                return [pscustomobject]@{
+                    query_succeeded = $true
+                    on_expected_volume = $true
+                    identity_resolved = $true
+                    executable_path = 'C:\real\renamed-host.exe'
+                    file_identity = 'synthetic-identity'
+                    error = $null
+                }
+            }
+            'other_volume' {
+                return [pscustomobject]@{
+                    query_succeeded = $true
+                    on_expected_volume = $false
+                    identity_resolved = $false
+                    executable_path = $null
+                    file_identity = $null
+                    error = $null
+                }
+            }
+            'reparse' {
+                return [pscustomobject]@{
+                    query_succeeded = $true
+                    on_expected_volume = $true
+                    identity_resolved = $false
+                    executable_path = 'C:\junction\renamed-host.exe'
+                    file_identity = $null
+                    error = 'Reparse-point path entries are not allowed.'
+                }
+            }
+            'failed' {
+                return [pscustomobject]@{
+                    query_succeeded = $false
+                    on_expected_volume = $false
+                    identity_resolved = $false
+                    executable_path = $null
+                    file_identity = $null
+                    error = 'Synthetic process query failure.'
+                }
+            }
+            default {
+                throw "Unexpected native observation mode: $($state.native_mode)"
+            }
+        }
+    }
+    function Invoke-MatcherCase {
+        $errorMessage = $null
+        try {
+            $items = @(
+                Get-MatchingTerminalProcesses `
+                    -ExecutablePath 'C:\selected\terminal64.exe' `
+                    -ExpectedFileIdentity 'synthetic-identity'
+            )
+        }
+        catch {
+            $items = @()
+            $errorMessage = $_.Exception.Message
+        }
+        return [pscustomobject]@{
+            count = $items.Count
+            error = $errorMessage
+            first_path = if ($items.Count -gt 0) {
+                [string]$items[0].executable_path
+            }
+            else {
+                $null
+            }
+            first_identity_match = if ($items.Count -gt 0) {
+                [bool]$items[0].identity_match
+            }
+            else {
+                $false
+            }
+            first_path_match = if ($items.Count -gt 0) {
+                [bool]$items[0].path_match
+            }
+            else {
+                $false
+            }
+        }
+    }
+
+    $resolvedJunction = Invoke-MatcherCase
+
+    $processRecord.ExecutablePath = $null
+    $resolvedMissingCimPath = Invoke-MatcherCase
+
+    $state.native_mode = 'reparse'
+    $unresolvedMissingCimPath = Invoke-MatcherCase
+
+    $processRecord.ExecutablePath = 'C:\junction\renamed-host.exe'
+    $state.native_mode = 'failed'
+    $unresolvedJunction = Invoke-MatcherCase
+
+    $processRecord.ExecutablePath = 'C:\ordinary\unrelated.exe'
+    $state.reported_error = 'access_denied'
+    $unrelatedAccessDenied = Invoke-MatcherCase
+
+    $processRecord.ExecutablePath = 'C:\junction\renamed-host.exe'
+    $state.reported_error = 'reparse'
+    $state.native_mode = 'other_volume'
+    $otherVolumeJunction = Invoke-MatcherCase
+    $processRecord.Name = 'terminal64.exe'
+    $otherVolumeSameLeaf = Invoke-MatcherCase
+
+    return [pscustomobject]@{
+        resolved_junction = $resolvedJunction
+        resolved_missing_cim_path = $resolvedMissingCimPath
+        unresolved_missing_cim_path = $unresolvedMissingCimPath
+        unresolved_junction = $unresolvedJunction
+        unrelated_access_denied = $unrelatedAccessDenied
+        other_volume_junction = $otherVolumeJunction
+        other_volume_same_leaf = $otherVolumeSameLeaf
+    }
+} $postExitMatcherDefinitionText
+Assert-True -Condition (
+    $processAliasFallbackProbe.resolved_junction.count -eq 1 -and
+    $null -eq $processAliasFallbackProbe.resolved_junction.error -and
+    $processAliasFallbackProbe.resolved_junction.first_identity_match -and
+    -not $processAliasFallbackProbe.resolved_junction.first_path_match -and
+    [string]$processAliasFallbackProbe.resolved_junction.first_path -ceq
+        'C:\real\renamed-host.exe'
+) -Message 'A renamed hard-link image behind a junction evaded native identity fallback.'
+Assert-True -Condition (
+    $processAliasFallbackProbe.resolved_missing_cim_path.count -eq 1 -and
+    $null -eq $processAliasFallbackProbe.resolved_missing_cim_path.error -and
+    $processAliasFallbackProbe.resolved_missing_cim_path.first_identity_match
+) -Message 'Native process-image identity did not recover a missing CIM image path.'
+Assert-True -Condition (
+    $processAliasFallbackProbe.unresolved_missing_cim_path.count -eq 0 -and
+    $processAliasFallbackProbe.unresolved_missing_cim_path.error -match
+        'identity is unreadable for PID\(s\) 6262'
+) -Message 'A native reparse path with missing CIM fields was silently ignored.'
+Assert-True -Condition (
+    $processAliasFallbackProbe.unresolved_junction.count -eq 0 -and
+    $processAliasFallbackProbe.unresolved_junction.error -match
+        'identity is unreadable for PID\(s\) 6262'
+) -Message 'An unresolved same-volume reparse alias was silently ignored.'
+Assert-True -Condition (
+    $processAliasFallbackProbe.unrelated_access_denied.count -eq 0 -and
+    $null -eq $processAliasFallbackProbe.unrelated_access_denied.error
+) -Message 'An unrelated inaccessible process caused a blanket launch failure.'
+Assert-True -Condition (
+    $processAliasFallbackProbe.other_volume_junction.count -eq 0 -and
+    $null -eq $processAliasFallbackProbe.other_volume_junction.error -and
+    $processAliasFallbackProbe.other_volume_same_leaf.count -eq 0 -and
+    $null -eq $processAliasFallbackProbe.other_volume_same_leaf.error
+) -Message 'A native process image proven to be on another volume was treated as a possible hard link.'
+
 Assert-True -Condition ($skillText -notmatch '(?i)[A-Z]:\\Users\\') `
     -Message 'SKILL.md contains a user-specific path.'
 Assert-True -Condition ($referenceText -notmatch '(?i)[A-Z]:\\Users\\') `
@@ -839,6 +1827,32 @@ $resolverNode = $compilerAst.Find(
 Assert-True -Condition ($null -ne $resolverNode) `
     -Message 'Resolve-MetaEditorExecutable was not found for discovery regression testing.'
 $resolverDefinitionText = $resolverNode.Extent.Text
+$quoteHelperNode = $compilerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'ConvertTo-WindowsCommandLineArgument'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $quoteHelperNode) `
+    -Message 'ConvertTo-WindowsCommandLineArgument was not found for command-line regression testing.'
+$quoteHelperDefinitionText = $quoteHelperNode.Extent.Text
+$moveLeasedOutputNode = $compilerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Move-LeasedCompilerOutputAside'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $moveLeasedOutputNode) `
+    -Message 'Move-LeasedCompilerOutputAside was not found for backup-name regression testing.'
+$moveLeasedOutputDefinitionText = $moveLeasedOutputNode.Extent.Text
 $moveLogNode = $compilerAst.Find(
     {
         param($node)
@@ -857,13 +1871,13 @@ $completeLogNode = $compilerAst.Find(
         param($node)
         return (
             $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
-            $node.Name -eq 'Complete-CompilationLog'
+            $node.Name -eq 'Complete-LeasedCompilerOutput'
         )
     },
     $true
 )
 Assert-True -Condition ($null -ne $completeLogNode) `
-    -Message 'Complete-CompilationLog was not found for unsafe-cleanup regression testing.'
+    -Message 'Complete-LeasedCompilerOutput was not found for unsafe-cleanup regression testing.'
 $completeLogDefinitionText = $completeLogNode.Extent.Text
 $launchCleanupNode = $compilerAst.Find(
     {
@@ -890,6 +1904,23 @@ Assert-True -Condition (
     $markLaunchUnsafeIndex -ge 0 -and
     $nativeStartIndex -gt $markLaunchUnsafeIndex
 ) -Message 'Compiler launch was not marked unsafe before native process creation.'
+$quoteCases = @(
+    [pscustomobject]@{ Value = ''; Expected = '""' },
+    [pscustomobject]@{ Value = 'plain'; Expected = 'plain' },
+    [pscustomobject]@{
+        Value = '/include:C:\path with space\'
+        Expected = '"/include:C:\path with space\\"'
+    }
+)
+foreach ($quoteCase in $quoteCases) {
+    $quotedValue = & {
+        param($DefinitionText, $Value)
+        . ([scriptblock]::Create($DefinitionText))
+        ConvertTo-WindowsCommandLineArgument -Value $Value
+    } $quoteHelperDefinitionText $quoteCase.Value
+    Assert-True -Condition ([string]$quotedValue -ceq [string]$quoteCase.Expected) `
+        -Message "Compiler command-line quoting changed for '$($quoteCase.Value)'."
+}
 $discoveryResult = & {
     param([Parameter(Mandatory = $true)][string]$DefinitionText)
 
@@ -984,16 +2015,1040 @@ try {
     )
     $expertHash = (Get-FileHash -LiteralPath $expert -Algorithm SHA256).Hash.ToLowerInvariant()
 
+    $poisonDirectory = Join-Path $testRoot 'cache-poison-a'
+    [IO.Directory]::CreateDirectory($poisonDirectory) | Out-Null
+    $poisonAliasSpelling = Join-Path $testRoot 'CACHE-POISON-A'
+    Assert-True -Condition ([IO.Directory]::Exists($poisonAliasSpelling)) `
+        -Message 'The always-run cache-poison fixture is not on a case-insensitive directory.'
+    $poisonDefinitionTexts = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($poisonFunctionName in @(
+            'ConvertTo-NormalizedDirectoryPath',
+            'Test-IsAbsoluteLocalDrivePath',
+            'Assert-StableFixedLocalVolumePath',
+            'Open-NonReparseDirectoryChain'
+        )) {
+        $poisonFunctionNode = $runnerAst.Find(
+            {
+                param($node)
+                return (
+                    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                    $node.Name -eq $poisonFunctionName
+                )
+            },
+            $true
+        )
+        Assert-True -Condition ($null -ne $poisonFunctionNode) `
+            -Message "Cache-poison dependency was not found: $poisonFunctionName"
+        $poisonDefinitionTexts.Add($poisonFunctionNode.Extent.Text)
+    }
+    $plainHashtablePoisonBlocked = & {
+        param($DefinitionTexts, $LowerPath, $UpperPath)
+        foreach ($definitionText in $DefinitionTexts) {
+            . ([scriptblock]::Create($definitionText))
+        }
+        $script:fixedLocalVolumeIdentities = @{}
+        $poisonLeases = New-Object 'System.Collections.Generic.List[object]'
+        $plainCache = @{}
+        try {
+            $null = Open-NonReparseDirectoryChain `
+                -Path $LowerPath `
+                -Tracker $poisonLeases `
+                -LeasesByPath $plainCache
+            try {
+                $null = Open-NonReparseDirectoryChain `
+                    -Path $UpperPath `
+                    -Tracker $poisonLeases `
+                    -LeasesByPath $plainCache
+                return $false
+            }
+            catch {
+                return (
+                    $_.Exception.Message -match
+                        'cached directory lease does not exactly match'
+                )
+            }
+        }
+        finally {
+            for ($index = $poisonLeases.Count - 1; $index -ge 0; $index--) {
+                $poisonLeases[$index].Dispose()
+            }
+        }
+    } `
+        ($poisonDefinitionTexts.ToArray()) `
+        $poisonDirectory `
+        $poisonAliasSpelling
+    Assert-True -Condition $plainHashtablePoisonBlocked `
+        -Message 'A caller-supplied case-insensitive path cache bypassed exact lease correlation.'
+
+    $caseSensitiveRoot = Join-Path $testRoot 'case-sensitive-path-cache'
+    [IO.Directory]::CreateDirectory($caseSensitiveRoot) | Out-Null
+    $fsutilExecutable = Join-Path $env:WINDIR 'System32\fsutil.exe'
+    $caseSensitivityOutput = @(
+        & $fsutilExecutable file setCaseSensitiveInfo $caseSensitiveRoot enable 2>&1
+    )
+    $caseSensitivityExitCode = $LASTEXITCODE
+    if ($caseSensitivityExitCode -ne 0) {
+        $caseSensitivityFailure = (
+            'Could not enable the NTFS case-sensitive path-cache regression fixture. ' +
+            ($caseSensitivityOutput -join ' ')
+        )
+        if ([string]$env:GITHUB_ACTIONS -ceq 'true') {
+            throw $caseSensitivityFailure
+        }
+        Write-Warning ($caseSensitivityFailure + ' The E2E case-sensitive check is skipped outside CI.')
+    }
+    else {
+        $caseLowerDirectory = Join-Path $caseSensitiveRoot 'a'
+        $caseUpperJunction = Join-Path $caseSensitiveRoot 'A'
+        $caseUpperTarget = Join-Path $caseSensitiveRoot 'upper-target'
+        [IO.Directory]::CreateDirectory($caseLowerDirectory) | Out-Null
+        [IO.Directory]::CreateDirectory($caseUpperTarget) | Out-Null
+        $caseExpert = Join-Path $caseLowerDirectory 'fixture.ex5'
+        $casePreset = Join-Path $caseUpperTarget 'fixture.set'
+        [IO.File]::Copy($expert, $caseExpert)
+        [IO.File]::Copy(
+            $preset,
+            (Join-Path $caseLowerDirectory 'fixture.set')
+        )
+        [IO.File]::Copy($preset, $casePreset)
+        $caseJunctionOutput = @(
+            & $env:ComSpec /d /c mklink /J $caseUpperJunction $caseUpperTarget 2>&1
+        )
+        $caseJunctionExitCode = $LASTEXITCODE
+        Assert-True -Condition ($caseJunctionExitCode -eq 0) -Message (
+            'Could not create the case-distinct junction regression fixture. ' +
+            ($caseJunctionOutput -join ' ')
+        )
+        $caseEntryNames = @(
+            [IO.Directory]::EnumerateFileSystemEntries($caseSensitiveRoot) |
+                ForEach-Object { [IO.Path]::GetFileName($_) }
+        )
+        Assert-True -Condition (
+            $caseEntryNames -ccontains 'a' -and
+            $caseEntryNames -ccontains 'A'
+        ) -Message 'The case-sensitive regression parent did not preserve distinct a and A entries.'
+        try {
+            $caseCacheBlocked = Invoke-RunnerCase `
+                -Name 'preflight-case-sensitive-cache-junction' `
+                -Mode PreflightOnly `
+                -TerminalPath $terminal `
+                -TerminalDataPath $dataPath `
+                -ExpertPath $caseExpert `
+                -PresetPath (Join-Path $caseUpperJunction 'fixture.set') `
+                -ExpertSha256 $expertHash
+        }
+        finally {
+            [IO.Directory]::Delete($caseUpperJunction)
+        }
+        $caseCacheResultErrors = if ($null -eq $caseCacheBlocked.Result) {
+            ''
+        }
+        else {
+            @($caseCacheBlocked.Result.errors) -join ' '
+        }
+        $caseCacheDiagnostic = (
+            [string]$caseCacheBlocked.StandardOutput + ' ' +
+            [string]$caseCacheBlocked.StandardError + ' ' +
+            $caseCacheResultErrors
+        )
+        $caseCacheStatusValid = (
+            $null -eq $caseCacheBlocked.Result -or
+            (
+                [string]$caseCacheBlocked.Result.status -ceq 'blocked' -and
+                -not [bool]$caseCacheBlocked.Result.process.execution_attempted
+            )
+        )
+        $caseUpperJunctionPattern = '(?i)case-sensitive-path-cache[\\/]+A'
+        Assert-True -Condition (
+            $caseCacheBlocked.ExitCode -eq 4 -and
+            $caseCacheStatusValid -and
+            $caseCacheDiagnostic -match
+                '(?i)unsafe or unleaseable directory path component' -and
+            $caseCacheDiagnostic -match $caseUpperJunctionPattern -and
+            $caseCacheDiagnostic -match
+                '(?i)Reparse-point path entries are not allowed'
+        ) -Message (
+            'A case-distinct intermediate junction reused a safe cached path lease. ' +
+            "exit=$($caseCacheBlocked.ExitCode); diagnostic=$caseCacheDiagnostic"
+        )
+
+        $caseJournalRoot = Join-Path $caseSensitiveRoot 'journals'
+        [IO.Directory]::CreateDirectory($caseJournalRoot) | Out-Null
+        $caseLowerJournal = Join-Path $caseJournalRoot 'a.log'
+        $caseUpperJournal = Join-Path $caseJournalRoot 'A.log'
+        [IO.File]::WriteAllText(
+            $caseLowerJournal,
+            'lower',
+            [Text.Encoding]::ASCII
+        )
+        [IO.File]::WriteAllText(
+            $caseUpperJournal,
+            'upper',
+            [Text.Encoding]::ASCII
+        )
+        $journalDefinitionTexts = New-Object 'System.Collections.Generic.List[string]'
+        foreach ($journalFunctionName in @(
+                'ConvertTo-Hex',
+                'ConvertTo-NormalizedDirectoryPath',
+                'Test-IsAbsoluteLocalDrivePath',
+                'Assert-StableFixedLocalVolumePath',
+                'Open-NonReparseDirectoryChain',
+                'Open-NonReparseFileLeaf',
+                'Get-StreamPrefixSha256',
+                'Get-JournalSnapshot'
+            )) {
+            $journalFunctionNode = $runnerAst.Find(
+                {
+                    param($node)
+                    return (
+                        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                        $node.Name -eq $journalFunctionName
+                    )
+                },
+                $true
+            )
+            Assert-True -Condition ($null -ne $journalFunctionNode) `
+                -Message "Journal dependency was not found: $journalFunctionName"
+            $journalDefinitionTexts.Add($journalFunctionNode.Extent.Text)
+        }
+        $caseJournalProbe = & {
+            param($DefinitionTexts, $JournalRoot, $LowerPath, $UpperPath)
+            foreach ($definitionText in $DefinitionTexts) {
+                . ([scriptblock]::Create($definitionText))
+            }
+            $script:fixedLocalVolumeIdentities = @{}
+            $journalLeases = New-Object 'System.Collections.Generic.List[object]'
+            $journalStreams = New-Object 'System.Collections.Generic.List[object]'
+            $journalLeasesByPath = [System.Collections.Hashtable]::new(
+                [System.StringComparer]::Ordinal
+            )
+            try {
+                $snapshot = Get-JournalSnapshot `
+                    -RootPath $JournalRoot `
+                    -PathEntryLeases $journalLeases `
+                    -LeasesByPath $journalLeasesByPath `
+                    -StreamTracker $journalStreams
+                return [pscustomobject]@{
+                    count = $snapshot.Count
+                    has_lower = $snapshot.ContainsKey(
+                        [IO.Path]::GetFullPath($LowerPath)
+                    )
+                    has_upper = $snapshot.ContainsKey(
+                        [IO.Path]::GetFullPath($UpperPath)
+                    )
+                }
+            }
+            finally {
+                for ($index = $journalStreams.Count - 1; $index -ge 0; $index--) {
+                    $journalStreams[$index].Dispose()
+                }
+                for ($index = $journalLeases.Count - 1; $index -ge 0; $index--) {
+                    $journalLeases[$index].Dispose()
+                }
+            }
+        } `
+            ($journalDefinitionTexts.ToArray()) `
+            $caseJournalRoot `
+            $caseLowerJournal `
+            $caseUpperJournal
+        Assert-True -Condition (
+            [int]$caseJournalProbe.count -eq 2 -and
+            [bool]$caseJournalProbe.has_lower -and
+            [bool]$caseJournalProbe.has_upper
+        ) -Message 'Case-distinct Strategy Tester journals collapsed to one snapshot entry.'
+    }
+
     $compileDirectory = Join-Path $testRoot 'compile'
     [IO.Directory]::CreateDirectory($compileDirectory) | Out-Null
+
+    $directVolumeIdentity = [Mql5Coding.JobProcessLaunch]::GetFixedLocalVolumeIdentity(
+        $testRoot
+    )
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace(
+            [string]$directVolumeIdentity
+        )) -Message 'A direct fixed local test volume did not produce an identity.'
+
+    $substExecutable = Join-Path $env:WINDIR 'System32\subst.exe'
+    Assert-True -Condition (Test-Path -LiteralPath $substExecutable -PathType Leaf) `
+        -Message 'The SUBST regression test could not find subst.exe.'
+    $substDrive = $null
+    foreach ($letter in [char[]]'ZYXWVUTSRQPONMLKJIHGFED') {
+        $candidateDrive = ([string]$letter) + ':'
+        & $substExecutable $candidateDrive $testRoot 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $substDrive = $candidateDrive
+            break
+        }
+    }
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($substDrive)) `
+        -Message 'The SUBST regression test could not reserve a drive letter.'
+    try {
+        $substRejected = $false
+        try {
+            $null = [Mql5Coding.JobProcessLaunch]::GetFixedLocalVolumeIdentity(
+                "$substDrive\"
+            )
+        }
+        catch {
+            $substRejected = $true
+        }
+        Assert-True -Condition $substRejected `
+            -Message 'A SUBST drive was accepted as a direct fixed local volume.'
+    }
+    finally {
+        & $substExecutable $substDrive /D 2>$null | Out-Null
+        Assert-True -Condition ($LASTEXITCODE -eq 0) `
+            -Message "The SUBST regression drive $substDrive could not be removed."
+    }
+
+    $testVolumeRoot = [IO.Path]::GetPathRoot($testRoot)
+    $testVolumeDevice = $testVolumeRoot.Substring(0, 2)
+    $rawDosTarget = [Mql5Coding.RawDosDeviceProbe]::Query($testVolumeDevice)
+    $rawAliasDrive = $null
+    foreach ($letter in [char[]]'ZYXWVUTSRQPONMLKJIHGFED') {
+        $candidateDrive = ([string]$letter) + ':'
+        if ([Mql5Coding.RawDosDeviceProbe]::IsDefined($candidateDrive)) {
+            continue
+        }
+        try {
+            [Mql5Coding.RawDosDeviceProbe]::Create(
+                $candidateDrive,
+                $rawDosTarget
+            )
+            $rawAliasDrive = $candidateDrive
+            break
+        }
+        catch {
+            continue
+        }
+    }
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($rawAliasDrive)) `
+        -Message 'The raw DOS-device regression test could not reserve a drive letter.'
+    try {
+        $rawAliasRoot = $rawAliasDrive + '\'
+        $rawAliasRejected = $false
+        try {
+            $null = [Mql5Coding.JobProcessLaunch]::GetFixedLocalVolumeIdentity(
+                $rawAliasRoot
+            )
+        }
+        catch {
+            $rawAliasRejected = $true
+        }
+        Assert-True -Condition $rawAliasRejected `
+            -Message 'A raw DOS-device alias was accepted as a mount-manager drive.'
+
+        $rawAliasTerminal = $rawAliasRoot + $terminal.Substring($testVolumeRoot.Length)
+        $rawAliasDataPath = $rawAliasRoot + $dataPath.Substring($testVolumeRoot.Length)
+        $rawAliasExpert = $rawAliasRoot + $expert.Substring($testVolumeRoot.Length)
+        $rawAliasPreset = $rawAliasRoot + $preset.Substring($testVolumeRoot.Length)
+        foreach ($probe in @(
+                [pscustomobject]@{ path = $rawAliasTerminal; type = 'Leaf'; name = 'terminal' },
+                [pscustomobject]@{ path = $rawAliasDataPath; type = 'Container'; name = 'data directory' },
+                [pscustomobject]@{ path = $rawAliasExpert; type = 'Leaf'; name = 'expert' },
+                [pscustomobject]@{ path = $rawAliasPreset; type = 'Leaf'; name = 'preset' }
+            )) {
+            Assert-True -Condition (
+                Test-PathInChildPowerShell -Path $probe.path -PathType $probe.type
+            ) -Message (
+                "The raw DOS-device $($probe.name) path did not resolve in the child " +
+                'PowerShell context, so the mount-manager policy was not exercised.'
+            )
+        }
+        foreach ($runnerProbe in @(
+                [pscustomobject]@{
+                    name = 'preflight-raw-dos-device-terminal-alias'
+                    terminal = $rawAliasTerminal
+                    data = $dataPath
+                },
+                [pscustomobject]@{
+                    name = 'preflight-raw-dos-device-data-alias'
+                    terminal = $terminal
+                    data = $rawAliasDataPath
+                }
+            )) {
+            $rawAliasRunnerBlocked = Invoke-RunnerCase `
+                -Name $runnerProbe.name `
+                -Mode PreflightOnly `
+                -TerminalPath $runnerProbe.terminal `
+                -TerminalDataPath $runnerProbe.data `
+                -ExpertPath $expert `
+                -PresetPath $preset `
+                -ExpertSha256 $expertHash
+            $rawAliasResultDiagnostic = if ($null -eq $rawAliasRunnerBlocked.Result) {
+                '<no result JSON>'
+            }
+            else {
+                $rawAliasRunnerBlocked.Result | ConvertTo-Json -Depth 10 -Compress
+            }
+            Assert-True -Condition ($rawAliasRunnerBlocked.ExitCode -eq 4) `
+                -Message (
+                    'A raw DOS-device alias did not produce the required blocked exit. ' +
+                    "case=$($runnerProbe.name); " +
+                    "exit=$($rawAliasRunnerBlocked.ExitCode); " +
+                    "result=$rawAliasResultDiagnostic; " +
+                    "stderr=$($rawAliasRunnerBlocked.StandardError)"
+                )
+            Assert-True -Condition (
+                $null -ne $rawAliasRunnerBlocked.Result -and
+                [string]$rawAliasRunnerBlocked.Result.status -ceq 'blocked' -and
+                -not [bool]$rawAliasRunnerBlocked.Result.process.execution_attempted
+            ) -Message (
+                "Raw DOS-device rejection for '$($runnerProbe.name)' did not produce " +
+                "a pre-execution blocked result. Result: $rawAliasResultDiagnostic; " +
+                "stderr=$($rawAliasRunnerBlocked.StandardError)"
+            )
+            $rawAliasResultErrors = if ($null -eq $rawAliasRunnerBlocked.Result) {
+                ''
+            }
+            else {
+                @($rawAliasRunnerBlocked.Result.errors) -join ' '
+            }
+            $rawAliasDiagnostic = (
+                [string]$rawAliasRunnerBlocked.StandardError + ' ' +
+                $rawAliasResultErrors
+            )
+            Assert-True -Condition (
+                $rawAliasDiagnostic -match '(?i)mount manager|direct fixed local volume'
+            ) -Message (
+                "Raw DOS-device rejection for '$($runnerProbe.name)' did not identify " +
+                "the unsafe volume mapping. Diagnostic: $rawAliasDiagnostic"
+            )
+        }
+    }
+    finally {
+        [Mql5Coding.RawDosDeviceProbe]::Remove(
+            $rawAliasDrive,
+            $rawDosTarget
+        )
+    }
+
+    $leaseProbeDirectory = Join-Path $testRoot 'compile-lease-probe'
+    $leaseProbeRenamed = Join-Path $testRoot 'compile-lease-probe-renamed'
+    [IO.Directory]::CreateDirectory($leaseProbeDirectory) | Out-Null
+    $directoryLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
+        $leaseProbeDirectory
+    )
+    $leaseBlockedRename = $false
+    try {
+        try {
+            [IO.Directory]::Move($leaseProbeDirectory, $leaseProbeRenamed)
+        }
+        catch {
+            $leaseBlockedRename = $true
+        }
+        Assert-True -Condition $leaseBlockedRename `
+            -Message 'A held compiler directory-identity lease allowed its directory to be renamed.'
+    }
+    finally {
+        $directoryLease.Dispose()
+    }
+    [IO.Directory]::Move($leaseProbeDirectory, $leaseProbeRenamed)
+    [IO.Directory]::Move($leaseProbeRenamed, $leaseProbeDirectory)
+    Remove-Item -LiteralPath $leaseProbeDirectory -Force
+
+    $ancestorLeaseRoot = Join-Path $testRoot 'compile-ancestor-probe'
+    $ancestorLeaseChild = Join-Path $ancestorLeaseRoot 'child'
+    $ancestorLeaseRenamed = Join-Path $testRoot 'compile-ancestor-probe-renamed'
+    [IO.Directory]::CreateDirectory($ancestorLeaseChild) | Out-Null
+    $ancestorDirectoryLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
+        $ancestorLeaseChild
+    )
+    $ancestorLeaseBlockedRename = $false
+    try {
+        try {
+            [IO.Directory]::Move($ancestorLeaseRoot, $ancestorLeaseRenamed)
+        }
+        catch {
+            $ancestorLeaseBlockedRename = $true
+        }
+        Assert-True -Condition $ancestorLeaseBlockedRename `
+            -Message 'A compiler lease on a descendant allowed an ancestor directory to be renamed.'
+    }
+    finally {
+        $ancestorDirectoryLease.Dispose()
+    }
+    [IO.Directory]::Move($ancestorLeaseRoot, $ancestorLeaseRenamed)
+    [IO.Directory]::Move($ancestorLeaseRenamed, $ancestorLeaseRoot)
+    Remove-Item -LiteralPath $ancestorLeaseRoot -Recurse -Force
+
+    $compilerFileProbe = Join-Path $testRoot 'compiler-file-lease-probe.mq5'
+    $compilerFileProbeRenamed = Join-Path $testRoot 'compiler-file-lease-probe-renamed.mq5'
+    [IO.File]::WriteAllText(
+        $compilerFileProbe,
+        '// lease probe',
+        [Text.Encoding]::ASCII
+    )
+    $compilerFileLease = [Mql5Coding.CompilerProcessJob]::OpenSourceFileIdentityLease(
+        $compilerFileProbe
+    )
+    $compilerFileLeaseBlockedRename = $false
+    $compilerFileLeaseBlockedWrite = $false
+    try {
+        try {
+            [IO.File]::Move($compilerFileProbe, $compilerFileProbeRenamed)
+        }
+        catch {
+            $compilerFileLeaseBlockedRename = $true
+        }
+        try {
+            [IO.File]::WriteAllText(
+                $compilerFileProbe,
+                '// replacement',
+                [Text.Encoding]::ASCII
+            )
+        }
+        catch {
+            $compilerFileLeaseBlockedWrite = $true
+        }
+        Assert-True -Condition $compilerFileLeaseBlockedRename `
+            -Message 'A held compiler source-file lease allowed its path to be renamed.'
+        Assert-True -Condition $compilerFileLeaseBlockedWrite `
+            -Message 'A held compiler source-file lease allowed its bytes to be overwritten.'
+    }
+    finally {
+        $compilerFileLease.Dispose()
+    }
+    [IO.File]::Move($compilerFileProbe, $compilerFileProbeRenamed)
+    [IO.File]::Move($compilerFileProbeRenamed, $compilerFileProbe)
+    Remove-Item -LiteralPath $compilerFileProbe -Force
+
+    $testerLeaseProbeDirectory = Join-Path $testRoot 'tester-lease-probe'
+    $testerLeaseProbeRenamed = Join-Path $testRoot 'tester-lease-probe-renamed'
+    [IO.Directory]::CreateDirectory($testerLeaseProbeDirectory) | Out-Null
+    $testerGuardTracker = New-Object 'System.Collections.Generic.List[object]'
+    $testerGuardByPath = [System.Collections.Hashtable]::new(
+        [System.StringComparer]::Ordinal
+    )
+    $testerDirectoryLease = $null
+    $testerDirectoryGuard = $null
+    $testerLeaseCleanupErrors = New-Object 'System.Collections.Generic.List[string]'
+    try {
+        $testerDirectoryLease = [Mql5Coding.JobProcessLaunch]::OpenDirectoryComponentLease(
+            $testerLeaseProbeDirectory
+        )
+        $testerDirectoryGuard = & {
+            param(
+                $NormalizeDefinitionText,
+                $DefinitionText,
+                $Path,
+                $DirectoryLease,
+                $Tracker,
+                $GuardsByPath
+            )
+            . ([scriptblock]::Create($NormalizeDefinitionText))
+            . ([scriptblock]::Create($DefinitionText))
+            Open-DirectoryMutationGuard `
+                -Path $Path `
+                -DirectoryLease $DirectoryLease `
+                -Tracker $Tracker `
+                -GuardsByPath $GuardsByPath `
+                -RunId 'lease-probe'
+        } `
+            $normalizeDirectoryNode.Extent.Text `
+            $directoryMutationGuardNode.Extent.Text `
+            $testerLeaseProbeDirectory `
+            $testerDirectoryLease `
+            $testerGuardTracker `
+            $testerGuardByPath
+        $testerLeaseBlockedRename = $false
+        $testerLeaseBlockedDataWrite = $false
+        $testerGuardBlockedRename = $false
+        try {
+            [IO.Directory]::Move(
+                $testerLeaseProbeDirectory,
+                $testerLeaseProbeRenamed
+            )
+        }
+        catch {
+            $testerLeaseBlockedRename = $true
+        }
+
+        $openPathHandleMethod = [Mql5Coding.JobProcessLaunch].GetMethod(
+            'OpenPathHandle',
+            [Reflection.BindingFlags]::NonPublic -bor
+                [Reflection.BindingFlags]::Static
+        )
+        Assert-True -Condition ($null -ne $openPathHandleMethod) `
+            -Message 'The tester path-handle method was unavailable for the share-mode probe.'
+        $directoryDataWriteProbe = $openPathHandleMethod.Invoke(
+            $null,
+            [object[]]@(
+                [string]$testerLeaseProbeDirectory,
+                [uint32]0x00000002,
+                [uint32]0x00000007,
+                [IntPtr]::Zero,
+                [uint32]3,
+                [uint32]0x02200000,
+                [IntPtr]::Zero
+            )
+        )
+        try {
+            $testerLeaseBlockedDataWrite = (
+                $null -eq $directoryDataWriteProbe -or
+                [bool]$directoryDataWriteProbe.IsInvalid
+            )
+        }
+        finally {
+            if ($null -ne $directoryDataWriteProbe) {
+                $directoryDataWriteProbe.Dispose()
+            }
+        }
+
+        try {
+            [IO.File]::Move(
+                [string]$testerDirectoryGuard.path,
+                ([string]$testerDirectoryGuard.path + '.renamed')
+            )
+        }
+        catch {
+            $testerGuardBlockedRename = $true
+        }
+
+        $testerLeaseChildDirectory = Join-Path $testerLeaseProbeDirectory 'child'
+        $testerLeaseChildFile = Join-Path $testerLeaseChildDirectory 'probe.txt'
+        [IO.Directory]::CreateDirectory($testerLeaseChildDirectory) | Out-Null
+        [IO.File]::WriteAllText(
+            $testerLeaseChildFile,
+            'child write remains available',
+            [Text.Encoding]::ASCII
+        )
+
+        Assert-True -Condition $testerLeaseBlockedRename `
+            -Message 'A held tester path-entry lease allowed its directory to be renamed.'
+        Assert-True -Condition $testerLeaseBlockedDataWrite `
+            -Message 'A held tester directory lease allowed a second data-write handle.'
+        Assert-True -Condition $testerGuardBlockedRename `
+            -Message 'A directory mutation guard could be renamed while it was pinned.'
+        Assert-True -Condition (
+            $testerGuardTracker.Count -eq 1 -and
+            (Test-Path -LiteralPath $testerDirectoryGuard.path -PathType Leaf)
+        ) -Message 'The directory mutation guard was not pinned in the leased directory.'
+        Assert-True -Condition (Test-Path -LiteralPath $testerLeaseChildFile -PathType Leaf) `
+            -Message 'A held tester directory lease blocked normal child creation.'
+    }
+    finally {
+        for ($testerGuardIndex = $testerGuardTracker.Count - 1; $testerGuardIndex -ge 0; $testerGuardIndex--) {
+            try {
+                if ($null -ne $testerGuardTracker[$testerGuardIndex].stream) {
+                    $testerGuardTracker[$testerGuardIndex].stream.Dispose()
+                }
+            }
+            catch {
+                $testerLeaseCleanupErrors.Add(
+                    "Could not release tester mutation guard: $($_.Exception.Message)"
+                )
+            }
+        }
+        if ($null -ne $testerDirectoryLease) {
+            try {
+                $testerDirectoryLease.Dispose()
+            }
+            catch {
+                $testerLeaseCleanupErrors.Add(
+                    "Could not release tester directory lease: $($_.Exception.Message)"
+                )
+            }
+        }
+    }
+    Assert-True -Condition ($testerLeaseCleanupErrors.Count -eq 0) `
+        -Message ("Tester lease-probe cleanup failed: " + ($testerLeaseCleanupErrors -join ' '))
+    [IO.Directory]::Move(
+        $testerLeaseProbeDirectory,
+        $testerLeaseProbeRenamed
+    )
+    [IO.Directory]::Move(
+        $testerLeaseProbeRenamed,
+        $testerLeaseProbeDirectory
+    )
+    Remove-Item -LiteralPath $testerLeaseProbeDirectory -Recurse -Force
+
+    $testerFileProbe = Join-Path $testRoot 'tester-file-lease-probe.log'
+    $testerFileProbeRenamed = Join-Path $testRoot 'tester-file-lease-probe-renamed.log'
+    [IO.File]::WriteAllText(
+        $testerFileProbe,
+        'probe',
+        [Text.Encoding]::ASCII
+    )
+    $testerFileLease = [Mql5Coding.JobProcessLaunch]::OpenFileLeafLease(
+        $testerFileProbe
+    )
+    $testerFileLeaseBlockedRename = $false
+    try {
+        try {
+            [IO.File]::Move($testerFileProbe, $testerFileProbeRenamed)
+        }
+        catch {
+            $testerFileLeaseBlockedRename = $true
+        }
+        Assert-True -Condition $testerFileLeaseBlockedRename `
+            -Message 'A held tester file-entry lease allowed its file to be renamed.'
+    }
+    finally {
+        $testerFileLease.Dispose()
+    }
+    [IO.File]::Move($testerFileProbe, $testerFileProbeRenamed)
+    [IO.File]::Move($testerFileProbeRenamed, $testerFileProbe)
+    Remove-Item -LiteralPath $testerFileProbe -Force
+
+    $retainedArtifactDefinitions = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($retainedFunctionName in @(
+            'ConvertTo-Hex',
+            'Get-StreamSha256',
+            'Copy-NewHashBoundFile',
+            'ConvertTo-NormalizedDirectoryPath',
+            'Test-IsAbsoluteLocalDrivePath',
+            'Assert-StableFixedLocalVolumePath',
+            'Open-NonReparseDirectoryChain',
+            'Open-NonReparseFileLeaf',
+            'Open-NewTextArtifactReadLock',
+            'Copy-NewVerifiedOutputArtifact',
+            'Write-NewTextFile',
+            'Write-JsonFile'
+        )) {
+        $retainedFunctionNode = $runnerAst.Find(
+            {
+                param($node)
+                return (
+                    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                    $node.Name -eq $retainedFunctionName
+                )
+            },
+            $true
+        )
+        Assert-True -Condition ($null -ne $retainedFunctionNode) -Message "Retained-artifact dependency was not found: $retainedFunctionName"
+        $retainedArtifactDefinitions.Add($retainedFunctionNode.Extent.Text)
+    }
+    $retainedArtifactProbePath = Join-Path $testRoot 'retained-artifact-probe.txt'
+    $retainedArtifactCopyPath = $retainedArtifactProbePath + '.copy'
+    $publishedReportProbePath = Join-Path $testRoot 'published-report-probe.htm'
+    $publishedReportRenamedPath = $publishedReportProbePath + '.renamed'
+    $publishedManifestProbePath = Join-Path $testRoot 'published-report-result.json'
+    $retainedArtifactProbe = & {
+        param(
+            $DefinitionTexts,
+            $ProbePath,
+            $CopyPath,
+            $PublishedPath,
+            $PublishedRenamedPath,
+            $ManifestPath
+        )
+        foreach ($definitionText in $DefinitionTexts) {
+            . ([scriptblock]::Create($definitionText))
+        }
+        $script:fixedLocalVolumeIdentities = @{}
+        $integrityLocks = New-Object 'System.Collections.Generic.List[object]'
+        $publicationLocks = New-Object 'System.Collections.Generic.List[object]'
+        $pathLeases = New-Object 'System.Collections.Generic.List[object]'
+        $leasesByPath = [System.Collections.Hashtable]::new(
+            [System.StringComparer]::Ordinal
+        )
+        try {
+            $record = Open-NewTextArtifactReadLock -Text 'retained artifact' -Path $ProbePath -Encoding (New-Object Text.UTF8Encoding($false)) -Kind 'retained artifact probe' -Tracker $integrityLocks -PathEntryLeases $pathLeases -LeasesByPath $leasesByPath
+            $overwriteBlocked = $false
+            try {
+                [IO.File]::WriteAllText(
+                    $ProbePath,
+                    'replacement',
+                    [Text.Encoding]::UTF8
+                )
+            }
+            catch {
+                $overwriteBlocked = $true
+            }
+            $copyTracker = New-Object 'System.Collections.Generic.List[object]'
+            $copyRecord = Copy-NewHashBoundFile `
+                -Source $ProbePath `
+                -Destination $CopyPath `
+                -Kind 'retained artifact copy probe' `
+                -Tracker $copyTracker `
+                -PathEntryLeases $pathLeases `
+                -LeasesByPath $leasesByPath `
+                -RetainedSourceStream $integrityLocks[0].stream
+
+            $sourceLease = Open-NonReparseFileLeaf `
+                -Path $CopyPath `
+                -Tracker $pathLeases `
+                -LeasesByPath $leasesByPath
+            $publishedRecord = Copy-NewVerifiedOutputArtifact `
+                -Source $CopyPath `
+                -Destination $PublishedPath `
+                -Kind 'published report probe' `
+                -SourceLease $sourceLease `
+                -Tracker $publicationLocks
+            $publicationOverwriteBlocked = $false
+            $publicationRenameBlocked = $false
+            try {
+                [IO.File]::WriteAllText(
+                    $PublishedPath,
+                    'replacement before manifest',
+                    [Text.Encoding]::ASCII
+                )
+            }
+            catch {
+                $publicationOverwriteBlocked = $true
+            }
+            try {
+                [IO.File]::Move($PublishedPath, $PublishedRenamedPath)
+            }
+            catch {
+                $publicationRenameBlocked = $true
+            }
+            Write-JsonFile `
+                -Value ([ordered]@{
+                    report_path = $PublishedPath
+                    sha256 = $publishedRecord.sha256
+                }) `
+                -Path $ManifestPath
+            $manifestWrittenWhilePinned = [IO.File]::Exists($ManifestPath)
+
+            for ($index = $publicationLocks.Count - 1; $index -ge 0; $index--) {
+                $publicationLocks[$index].stream.Dispose()
+            }
+            for ($index = $pathLeases.Count - 1; $index -ge 0; $index--) {
+                $pathLeases[$index].Dispose()
+            }
+            try {
+                [IO.File]::WriteAllText(
+                    $PublishedPath,
+                    'replacement after manifest',
+                    [Text.Encoding]::ASCII
+                )
+                [IO.File]::Move($PublishedPath, $PublishedRenamedPath)
+            }
+            catch {
+                throw "The report publication stream was not released after manifest creation: $($_.Exception.Message)"
+            }
+            $postManifestMutationSucceeded = [IO.File]::Exists(
+                $PublishedRenamedPath
+            )
+
+            return [pscustomobject]@{
+                overwrite_blocked = $overwriteBlocked
+                integrity_lock_count = $integrityLocks.Count
+                path_lease_count = $pathLeases.Count
+                byte_length = [long]$record.byte_length
+                sha256 = [string]$record.sha256
+                retained_copy_verified = (
+                    [bool]$copyRecord.verified -and
+                    [long]$copyRecord.byte_length -eq [long]$record.byte_length -and
+                    [string]$copyRecord.sha256 -ceq [string]$record.sha256
+                )
+                publication_lock_count = $publicationLocks.Count
+                publication_overwrite_blocked = $publicationOverwriteBlocked
+                publication_rename_blocked = $publicationRenameBlocked
+                manifest_written_while_pinned = $manifestWrittenWhilePinned
+                post_manifest_mutation_succeeded = $postManifestMutationSucceeded
+            }
+        }
+        finally {
+            for ($index = $publicationLocks.Count - 1; $index -ge 0; $index--) {
+                $publicationLocks[$index].stream.Dispose()
+            }
+            for ($index = $integrityLocks.Count - 1; $index -ge 0; $index--) {
+                $integrityLocks[$index].stream.Dispose()
+            }
+            for ($index = $pathLeases.Count - 1; $index -ge 0; $index--) {
+                $pathLeases[$index].Dispose()
+            }
+        }
+    } `
+        ($retainedArtifactDefinitions.ToArray()) `
+        $retainedArtifactProbePath `
+        $retainedArtifactCopyPath `
+        $publishedReportProbePath `
+        $publishedReportRenamedPath `
+        $publishedManifestProbePath
+    Assert-True -Condition (
+        [bool]$retainedArtifactProbe.overwrite_blocked -and
+        [int]$retainedArtifactProbe.integrity_lock_count -eq 1 -and
+        [int]$retainedArtifactProbe.path_lease_count -gt 0 -and
+        [bool]$retainedArtifactProbe.retained_copy_verified -and
+        [long]$retainedArtifactProbe.byte_length -gt 0 -and
+        [string]$retainedArtifactProbe.sha256 -cmatch '\A[0-9a-f]{64}\z'
+    ) -Message 'A newly generated text artifact was not identity-correlated and retained under a write-denying read lock.'
+    Assert-True -Condition (
+        [int]$retainedArtifactProbe.publication_lock_count -eq 1 -and
+        [bool]$retainedArtifactProbe.publication_overwrite_blocked -and
+        [bool]$retainedArtifactProbe.publication_rename_blocked -and
+        [bool]$retainedArtifactProbe.manifest_written_while_pinned -and
+        [bool]$retainedArtifactProbe.post_manifest_mutation_succeeded
+    ) -Message 'A copied report was not pinned against overwrite and rename through manifest publication.'
+    [IO.File]::WriteAllText(
+        $retainedArtifactProbePath,
+        'write after release',
+        [Text.Encoding]::UTF8
+    )
+    Remove-Item `
+        -LiteralPath `
+            $retainedArtifactProbePath, `
+            $retainedArtifactCopyPath, `
+            $publishedReportRenamedPath, `
+            $publishedManifestProbePath `
+        -Force
+    $mutableReportProbe = Join-Path $testRoot 'mutable-report-reservation.htm'
+    $mutableReportLease = [Mql5Coding.JobProcessLaunch]::CreateMutableOutputFileLease(
+        $mutableReportProbe
+    )
+    $mutableReportRename = $mutableReportProbe + '.renamed'
+    $mutableReportBlockedRename = $false
+    try {
+        [IO.File]::WriteAllText(
+            $mutableReportProbe,
+            'generated report bytes',
+            [Text.Encoding]::ASCII
+        )
+        try {
+            [IO.File]::Move($mutableReportProbe, $mutableReportRename)
+        }
+        catch {
+            $mutableReportBlockedRename = $true
+        }
+        Assert-True -Condition $mutableReportBlockedRename `
+            -Message 'A mutable report reservation allowed pathname replacement.'
+        Assert-True -Condition (
+            [Mql5Coding.JobProcessLaunch]::GetNonReparseGuardFileIdentity($mutableReportProbe) -ceq
+                [string]$mutableReportLease.Identity
+        ) -Message 'Mutable report writes escaped the reserved file identity.'
+    }
+    finally {
+        $mutableReportLease.Dispose()
+    }
+    Remove-Item -LiteralPath $mutableReportProbe -Force
+
+    $pinnedOutputProbe = Join-Path $testRoot 'pinned-output-report.htm'
+    $pinnedOutputStream = [Mql5Coding.JobProcessLaunch]::CreatePinnedOutputFileStream(
+        $pinnedOutputProbe
+    )
+    $pinnedOutputBlockedWrite = $false
+    $pinnedOutputBlockedRename = $false
+    try {
+        $pinnedBytes = [Text.Encoding]::ASCII.GetBytes('published report bytes')
+        $pinnedOutputStream.Write($pinnedBytes, 0, $pinnedBytes.Length)
+        $pinnedOutputStream.Flush($true)
+        try {
+            [IO.File]::WriteAllText(
+                $pinnedOutputProbe,
+                'replacement',
+                [Text.Encoding]::ASCII
+            )
+        }
+        catch {
+            $pinnedOutputBlockedWrite = $true
+        }
+        try {
+            [IO.File]::Move($pinnedOutputProbe, ($pinnedOutputProbe + '.renamed'))
+        }
+        catch {
+            $pinnedOutputBlockedRename = $true
+        }
+        Assert-True -Condition (
+            $pinnedOutputBlockedWrite -and $pinnedOutputBlockedRename
+        ) -Message 'A pinned output creation stream allowed write or rename races.'
+    }
+    finally {
+        $pinnedOutputStream.Dispose()
+    }
+    Remove-Item -LiteralPath $pinnedOutputProbe -Force
+
+    for ($renameLength = 1; $renameLength -le 40; $renameLength++) {
+        $renameSentinel = Join-Path $compileDirectory (
+            'rename-sentinel-{0}.bin' -f $renameLength
+        )
+        $renameSource = Join-Path $compileDirectory (
+            'rename-source-{0}.ex5' -f $renameLength
+        )
+        $renameLeaf = (('z' * $renameLength) + '.lease')
+        $renameDestination = Join-Path $compileDirectory $renameLeaf
+        [IO.File]::WriteAllText(
+            $renameSentinel,
+            ('preserved-{0}' -f $renameLength),
+            [Text.Encoding]::ASCII
+        )
+        $null = New-Item -ItemType HardLink -Path $renameSource -Target $renameSentinel
+        $renameIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity(
+            $renameSentinel
+        )
+        $renameMovableLease = $null
+        $renamePinnedLease = $null
+        try {
+            $renameMovableLease = [Mql5Coding.CompilerProcessJob]::TryOpenMovableOutputFileIdentityLease(
+                $renameSource
+            )
+            $renamePinnedLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(
+                $renameSource
+            )
+            Assert-True -Condition (
+                $null -ne $renameMovableLease -and
+                $null -ne $renamePinnedLease -and
+                [string]$renameMovableLease.Identity -ceq $renameIdentity -and
+                [string]$renamePinnedLease.Identity -ceq $renameIdentity
+            ) -Message 'The varied-length rename fixture could not pin its hard-linked source.'
+            $renameMovableLease.RenameTo($renameDestination)
+            $renamedLeaves = @(
+                Get-ChildItem -LiteralPath $compileDirectory -File |
+                    Where-Object { $_.Name.StartsWith($renameLeaf, [StringComparison]::Ordinal) }
+            )
+            Assert-True -Condition (
+                $renamedLeaves.Count -eq 1 -and
+                [string]$renamedLeaves[0].Name -ceq $renameLeaf -and
+                [Mql5Coding.CompilerProcessJob]::GetFileIdentity($renameDestination) -ceq
+                    $renameIdentity -and
+                [string]$renamePinnedLease.GetCurrentIdentity() -ceq $renameIdentity
+            ) -Message "Handle rename produced an inexact destination for leaf length $renameLength."
+        }
+        finally {
+            if ($null -ne $renamePinnedLease) {
+                $renamePinnedLease.Dispose()
+            }
+            if ($null -ne $renameMovableLease) {
+                $renameMovableLease.Dispose()
+            }
+            foreach ($cleanupPath in @(
+                    $renameSource,
+                    $renameDestination,
+                    $renameSentinel
+                )) {
+                if (Test-Path -LiteralPath $cleanupPath -PathType Leaf) {
+                    Remove-Item -LiteralPath $cleanupPath -Force
+                }
+            }
+        }
+    }
 
     $backupNameProbe = Join-Path $compileDirectory 'a.log'
     [IO.File]::WriteAllText($backupNameProbe, 'probe', [Text.Encoding]::ASCII)
     $boundedBackupPath = & {
-        param($DefinitionText, $ProbePath)
+        param($HelperDefinitionText, $DefinitionText, $ProbePath)
+        . ([scriptblock]::Create($HelperDefinitionText))
         . ([scriptblock]::Create($DefinitionText))
-        Move-OriginalLogAside -LiteralPath $ProbePath
-    } $moveLogDefinitionText $backupNameProbe
+        $probeLease = [Mql5Coding.CompilerProcessJob]::TryOpenMovableOutputFileIdentityLease(
+            $ProbePath
+        )
+        $probePinnedLease = [Mql5Coding.CompilerProcessJob]::TryOpenPinnedOutputFileIdentityLease(
+            $ProbePath
+        )
+        try {
+            Assert-True -Condition (
+                $null -ne $probeLease -and
+                $null -ne $probePinnedLease -and
+                [string]$probePinnedLease.Identity -ceq [string]$probeLease.Identity
+            ) -Message 'The backup-name probe did not acquire both preservation leases before rename.'
+            $renamedPath = Move-OriginalLogAside -LiteralPath $ProbePath -Lease $probeLease
+            Assert-True -Condition (
+                [string]$probePinnedLease.GetCurrentIdentity() -ceq [string]$probeLease.Identity
+            ) -Message 'The pre-move pinned lease did not retain the renamed output identity.'
+            return $renamedPath
+        }
+        finally {
+            if ($null -ne $probePinnedLease) {
+                $probePinnedLease.Dispose()
+            }
+            if ($null -ne $probeLease) {
+                $probeLease.Dispose()
+            }
+        }
+    } $moveLeasedOutputDefinitionText $moveLogDefinitionText $backupNameProbe
     Assert-True -Condition (
         [IO.Path]::GetFileName([string]$boundedBackupPath).Length -le
             [IO.Path]::GetFileName($backupNameProbe).Length
@@ -1012,13 +3067,16 @@ try {
         & {
             param($DefinitionText, $LogPath, $BackupPath)
             . ([scriptblock]::Create($DefinitionText))
-            Complete-CompilationLog `
+            Complete-LeasedCompilerOutput `
                 -LiteralPath $LogPath `
-                -Snapshot ([pscustomobject]@{
-                    Existed = $true
-                    BackupPath = $BackupPath
-                }) `
-                -ProcessTreeEmpty $false
+                -Description 'compilation log' `
+                -ProcessTreeEmpty $false `
+                -AcceptGenerated $false `
+                -OriginalMovableLease $null `
+                -OriginalPinnedLease $null `
+                -OriginalBackupPath $BackupPath `
+                -GeneratedMovableLease $null `
+                -GeneratedPinnedLease $null
         } $completeLogDefinitionText $unsafeGeneratedLog $unsafePreservedLog
     }
     catch {
@@ -1035,6 +3093,47 @@ try {
             $unsafePreservedHash
     ) -Message 'Unsafe cleanup modified a generated log or its preserved original.'
     Remove-Item -LiteralPath $unsafeGeneratedLog, $unsafePreservedLog -Force
+
+    $untrackedGeneratedLog = Join-Path $compileDirectory 'untracked-generated.log'
+    $untrackedPreservedLog = Join-Path $compileDirectory 'untracked-preserved.tmp'
+    [IO.File]::WriteAllText($untrackedGeneratedLog, 'untracked', [Text.Encoding]::ASCII)
+    [IO.File]::WriteAllText($untrackedPreservedLog, 'preserved', [Text.Encoding]::ASCII)
+    $untrackedGeneratedHash = (
+        Get-FileHash -LiteralPath $untrackedGeneratedLog -Algorithm SHA256
+    ).Hash
+    $untrackedPreservedHash = (
+        Get-FileHash -LiteralPath $untrackedPreservedLog -Algorithm SHA256
+    ).Hash
+    $untrackedCleanupError = $null
+    try {
+        & {
+            param($DefinitionText, $LogPath, $BackupPath)
+            . ([scriptblock]::Create($DefinitionText))
+            Complete-LeasedCompilerOutput `
+                -LiteralPath $LogPath `
+                -Description 'compilation log' `
+                -ProcessTreeEmpty $true `
+                -AcceptGenerated $false `
+                -OriginalMovableLease $null `
+                -OriginalPinnedLease $null `
+                -OriginalBackupPath $BackupPath `
+                -GeneratedMovableLease $null `
+                -GeneratedPinnedLease $null
+        } $completeLogDefinitionText $untrackedGeneratedLog $untrackedPreservedLog
+    }
+    catch {
+        $untrackedCleanupError = $_.Exception.Message
+    }
+    Assert-True -Condition (
+        $untrackedCleanupError -match 'Refusing to remove an untracked file'
+    ) -Message 'Cleanup deleted or accepted a compiler output without a retained identity lease.'
+    Assert-True -Condition (
+        (Get-FileHash -LiteralPath $untrackedGeneratedLog -Algorithm SHA256).Hash -eq
+            $untrackedGeneratedHash -and
+        (Get-FileHash -LiteralPath $untrackedPreservedLog -Algorithm SHA256).Hash -eq
+            $untrackedPreservedHash
+    ) -Message 'Untracked-output cleanup modified the current file or preserved backup.'
+    Remove-Item -LiteralPath $untrackedGeneratedLog, $untrackedPreservedLog -Force
 
     $unverifiedLaunchError = [InvalidOperationException]::new('unverified launch')
     $unverifiedLaunchError.Data['Mql5Coding.CleanupVerified'] = $false
@@ -1074,6 +3173,20 @@ try {
     $null = New-Item -ItemType HardLink -Path $compileLogMirror -Target $compileLog
     $sentinelLogIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileLog)
 
+    $artifactHardlinkSentinel = Join-Path $compileDirectory 'artifact-hardlink-sentinel.bin'
+    [IO.File]::WriteAllText(
+        $artifactHardlinkSentinel,
+        'pre-existing artifact sentinel',
+        [Text.Encoding]::ASCII
+    )
+    $null = New-Item -ItemType HardLink -Path $compileArtifact -Target $artifactHardlinkSentinel
+    $artifactHardlinkIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity(
+        $artifactHardlinkSentinel
+    )
+    $artifactHardlinkHash = (
+        Get-FileHash -LiteralPath $artifactHardlinkSentinel -Algorithm SHA256
+    ).Hash
+
     $compileSuccess = Invoke-CompilerCase `
         -SourcePath $compileSource `
         -MetaEditorPath $metaEditor `
@@ -1084,6 +3197,134 @@ try {
         -Message 'Synthetic compiler success summary was missing or inaccurate.'
     Assert-True -Condition ($compileSuccess.StandardOutput -match 'MQL5_COMPILE_ARTIFACT=') `
         -Message 'Successful real compilation did not report its artifact.'
+
+    Assert-True -Condition (
+        [Mql5Coding.CompilerProcessJob]::GetFileIdentity($artifactHardlinkSentinel) -ceq
+            $artifactHardlinkIdentity -and
+        (Get-FileHash -LiteralPath $artifactHardlinkSentinel -Algorithm SHA256).Hash -eq
+            $artifactHardlinkHash -and
+        [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileArtifact) -cne
+            $artifactHardlinkIdentity
+    ) -Message 'Successful compilation modified the target of a pre-existing artifact hard link.'
+
+    $sourceLink = Join-Path $compileDirectory 'fixture-source-link.mq5'
+    $sourceLinkCreated = $false
+    try {
+        $null = New-Item `
+            -ItemType SymbolicLink `
+            -Path $sourceLink `
+            -Target $compileSource `
+            -ErrorAction Stop
+        $sourceLinkCreated = $true
+    }
+    catch {
+        $sourceLinkCreated = $false
+    }
+    if ($sourceLinkCreated) {
+        try {
+            $sourceLinkBlocked = Invoke-CompilerCase `
+                -SourcePath $sourceLink `
+                -MetaEditorPath $metaEditor `
+                -FakeMode 'success' `
+                -SyntaxOnly
+            Assert-True -Condition ($sourceLinkBlocked.ExitCode -eq 2) `
+                -Message 'A source-file symbolic link was not rejected.'
+            Assert-True -Condition (
+                $sourceLinkBlocked.StandardError -match '(?i)reparse'
+            ) -Message 'Source-file symbolic-link rejection did not explain the reparse-point block.'
+        }
+        finally {
+            if (Test-Path -LiteralPath $sourceLink) {
+                Remove-Item -LiteralPath $sourceLink -Force
+            }
+        }
+    }
+
+    $artifactLinkTarget = Join-Path $compileDirectory 'artifact-link-target.bin'
+    [IO.File]::WriteAllText(
+        $artifactLinkTarget,
+        'artifact target sentinel',
+        [Text.Encoding]::ASCII
+    )
+    $artifactLinkTargetHash = (
+        Get-FileHash -LiteralPath $artifactLinkTarget -Algorithm SHA256
+    ).Hash
+    if (Test-Path -LiteralPath $compileArtifact -PathType Leaf) {
+        Remove-Item -LiteralPath $compileArtifact -Force
+    }
+    $artifactLinkCreated = $false
+    try {
+        $null = New-Item `
+            -ItemType SymbolicLink `
+            -Path $compileArtifact `
+            -Target $artifactLinkTarget `
+            -ErrorAction Stop
+        $artifactLinkCreated = $true
+    }
+    catch {
+        $artifactLinkCreated = $false
+    }
+    if ($artifactLinkCreated) {
+        try {
+            $artifactLinkBlocked = Invoke-CompilerCase `
+                -SourcePath $compileSource `
+                -MetaEditorPath $metaEditor `
+                -FakeMode 'success'
+            Assert-True -Condition ($artifactLinkBlocked.ExitCode -eq 2) `
+                -Message 'A planted compiler artifact symlink was not blocked.'
+            Assert-True -Condition (
+                $artifactLinkBlocked.StandardError -match '(?i)reparse' -and
+                (Get-FileHash -LiteralPath $artifactLinkTarget -Algorithm SHA256).Hash -eq
+                    $artifactLinkTargetHash
+            ) -Message 'Artifact-symlink rejection touched its target or omitted its diagnosis.'
+        }
+        finally {
+            if (Test-Path -LiteralPath $compileArtifact) {
+                Remove-Item -LiteralPath $compileArtifact -Force
+            }
+        }
+    }
+
+    $logLinkSource = Join-Path $compileDirectory 'log-link-fixture.mq5'
+    $logLinkPath = [IO.Path]::ChangeExtension($logLinkSource, '.log')
+    $logLinkTarget = Join-Path $compileDirectory 'log-link-target.txt'
+    [IO.File]::WriteAllText($logLinkSource, '// log link probe', [Text.Encoding]::ASCII)
+    [IO.File]::WriteAllText($logLinkTarget, 'log target sentinel', [Text.Encoding]::ASCII)
+    $logLinkTargetHash = (Get-FileHash -LiteralPath $logLinkTarget -Algorithm SHA256).Hash
+    $logLinkCreated = $false
+    try {
+        $null = New-Item `
+            -ItemType SymbolicLink `
+            -Path $logLinkPath `
+            -Target $logLinkTarget `
+            -ErrorAction Stop
+        $logLinkCreated = $true
+    }
+    catch {
+        $logLinkCreated = $false
+    }
+    if ($logLinkCreated) {
+        try {
+            $logLinkBlocked = Invoke-CompilerCase `
+                -SourcePath $logLinkSource `
+                -MetaEditorPath $metaEditor `
+                -FakeMode 'success' `
+                -SyntaxOnly
+            Assert-True -Condition ($logLinkBlocked.ExitCode -eq 2) `
+                -Message 'A planted compiler log symlink was not blocked.'
+            Assert-True -Condition (
+                $logLinkBlocked.StandardError -match '(?i)reparse' -and
+                (Get-FileHash -LiteralPath $logLinkTarget -Algorithm SHA256).Hash -eq
+                    $logLinkTargetHash
+            ) -Message 'Log-symlink rejection touched its target or omitted its diagnosis.'
+        }
+        finally {
+            if (Test-Path -LiteralPath $logLinkPath) {
+                Remove-Item -LiteralPath $logLinkPath -Force
+            }
+        }
+    }
+
     Assert-True -Condition (
         [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileLog) -ceq $sentinelLogIdentity -and
         [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileLogMirror) -ceq $sentinelLogIdentity
@@ -1121,6 +3362,12 @@ try {
         (Get-FileHash -LiteralPath $compileLog -Algorithm SHA256).Hash -eq $sentinelLogHash
     ) -Message 'Compiler wrapper did not restore the original log after delayed completion.'
 
+    $artifactBeforeErrorIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity(
+        $compileArtifact
+    )
+    $artifactBeforeErrorHash = (
+        Get-FileHash -LiteralPath $compileArtifact -Algorithm SHA256
+    ).Hash
     $compileError = Invoke-CompilerCase `
         -SourcePath $compileSource `
         -MetaEditorPath $metaEditor `
@@ -1129,6 +3376,13 @@ try {
         -Message "Synthetic compiler error exit code was $($compileError.ExitCode)."
     Assert-True -Condition ($compileError.StandardOutput -notmatch 'MQL5_COMPILE_ARTIFACT=') `
         -Message 'Compilation error incorrectly reported a stale artifact.'
+
+    Assert-True -Condition (
+        [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileArtifact) -ceq
+            $artifactBeforeErrorIdentity -and
+        (Get-FileHash -LiteralPath $compileArtifact -Algorithm SHA256).Hash -eq
+            $artifactBeforeErrorHash
+    ) -Message 'Failed compilation did not restore the exact pre-existing artifact object.'
 
     $warningsAsErrors = Invoke-CompilerCase `
         -SourcePath $compileSource `
@@ -1203,6 +3457,84 @@ try {
     Assert-True -Condition ($receivedCompilerArguments -ccontains '/s') `
         -Message 'The syntax-only switch was swallowed by include-path command-line quoting.'
 
+    $fileDirectoryLeaseRejected = $false
+    try {
+        $invalidDirectoryLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
+            $compileSource
+        )
+        $invalidDirectoryLease.Dispose()
+    }
+    catch {
+        $fileDirectoryLeaseRejected = (
+            $_.Exception.Message -match 'did not resolve to a directory'
+        )
+    }
+    Assert-True -Condition $fileDirectoryLeaseRejected `
+        -Message 'Compiler directory leasing accepted a regular file handle.'
+
+    $includeRootTarget = Join-Path $testRoot 'compiler-include-root-target'
+    $includeRootAlias = Join-Path $testRoot 'compiler-include-root-alias'
+    $includeRootMoveProbe = Join-Path $testRoot 'compiler-include-root-moved'
+    $includeProbeArguments = Join-Path $testRoot 'fake-metaeditor-include-probe-arguments.txt'
+    $includeRootAliasRemoved = $false
+    [IO.Directory]::CreateDirectory($includeRootTarget) | Out-Null
+    $null = New-Item -ItemType Junction -Path $includeRootAlias -Target $includeRootTarget
+    $includeCanonicalLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
+        $includeRootAlias
+    )
+    try {
+        $canonicalIncludeRoot = [IO.Path]::GetFullPath(
+            $includeCanonicalLease.FinalPath
+        )
+    }
+    finally {
+        $includeCanonicalLease.Dispose()
+    }
+    try {
+        $includePinnedCase = Invoke-CompilerCase `
+            -SourcePath $compileSource `
+            -MetaEditorPath $metaEditor `
+            -FakeMode 'success' `
+            -IncludePath $includeRootAlias `
+            -ArgumentsPath $includeProbeArguments `
+            -IncludeProbeMovePath $includeRootMoveProbe `
+            -SyntaxOnly
+        Assert-True -Condition ($includePinnedCase.ExitCode -eq 0) `
+            -Message (
+                'Pinned include-root compilation failed. stderr=' +
+                $includePinnedCase.StandardError
+            )
+        $includeProbeReceivedArguments = @(
+            [IO.File]::ReadAllLines($includeProbeArguments)
+        )
+        Assert-True -Condition (
+            $includeProbeReceivedArguments -ccontains
+                "/include:$canonicalIncludeRoot" -and
+            $includeProbeReceivedArguments -cnotcontains
+                "/include:$includeRootAlias"
+        ) -Message 'Compiler did not pass the pinned canonical include root to MetaEditor.'
+
+        [IO.Directory]::Delete($includeRootAlias)
+        $includeRootAliasRemoved = $true
+        try {
+            [IO.Directory]::Move($includeRootTarget, $includeRootMoveProbe)
+            [IO.Directory]::Move($includeRootMoveProbe, $includeRootTarget)
+        }
+        catch {
+            throw "The include-root lease was not released after compilation: $($_.Exception.Message)"
+        }
+    }
+    finally {
+        if (-not $includeRootAliasRemoved -and
+            [IO.Directory]::Exists($includeRootAlias)) {
+            [IO.Directory]::Delete($includeRootAlias)
+        }
+        if ([IO.Directory]::Exists($includeRootMoveProbe) -and
+            -not [IO.Directory]::Exists($includeRootTarget)) {
+            [IO.Directory]::Move($includeRootMoveProbe, $includeRootTarget)
+        }
+    }
+
     $earlyExit = Invoke-CompilerCase `
         -SourcePath $compileSource `
         -MetaEditorPath $metaEditor `
@@ -1210,13 +3542,51 @@ try {
     Assert-True -Condition ($earlyExit.ExitCode -eq 2) `
         -Message "A compiler that exited without Result was classified as exit code $($earlyExit.ExitCode)."
     Assert-True -Condition ($earlyExit.StandardError -match 'exited without producing a complete Result line') `
-        -Message 'Early compiler exit did not report the missing Result line.'
+        -Message ("Early compiler exit did not report the missing Result line. stderr=" + $earlyExit.StandardError)
     Assert-True -Condition ($earlyExit.StandardOutput -notmatch 'MQL5_COMPILE_ARTIFACT=') `
         -Message 'Early compiler exit incorrectly reported an artifact.'
 
-    $compileAliasDirectory = Join-Path $testRoot 'compile-junction'
+    $logicalMql5Root = Join-Path $testRoot 'logical-terminal\MQL5'
+    [IO.Directory]::CreateDirectory(
+        (Join-Path $logicalMql5Root 'Experts')
+    ) | Out-Null
+    $compileAliasDirectory = Join-Path $logicalMql5Root 'Experts\compile-junction'
     $null = New-Item -ItemType Junction -Path $compileAliasDirectory -Target $compileDirectory
     try {
+        $compileAliasLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease(
+            $compileAliasDirectory
+        )
+        try {
+            Assert-True -Condition (
+                [IO.Path]::GetFullPath($compileAliasLease.FinalPath).Equals(
+                    [IO.Path]::GetFullPath($compileDirectory),
+                    [StringComparison]::OrdinalIgnoreCase
+                )
+            ) -Message 'Compiler directory lease did not expose the junction target path.'
+
+            $compileRetargetDirectory = Join-Path $testRoot 'compile-retarget'
+            [IO.Directory]::CreateDirectory($compileRetargetDirectory) | Out-Null
+            [IO.Directory]::Delete($compileAliasDirectory)
+            $null = New-Item -ItemType Junction -Path $compileAliasDirectory -Target $compileRetargetDirectory
+            $leasedTargetIdentity = $compileAliasLease.GetCurrentIdentity()
+            Assert-True -Condition (
+                $leasedTargetIdentity -ceq
+                    [Mql5Coding.CompilerProcessJob]::GetDirectoryIdentity(
+                        $compileDirectory
+                    ) -and
+                $leasedTargetIdentity -cne
+                    [Mql5Coding.CompilerProcessJob]::GetDirectoryIdentity(
+                        $compileRetargetDirectory
+                    )
+            ) -Message 'Retargeting a junction changed the directory object held by the compiler lease.'
+            [IO.Directory]::Delete($compileAliasDirectory)
+            $null = New-Item -ItemType Junction -Path $compileAliasDirectory -Target $compileDirectory
+            Remove-Item -LiteralPath $compileRetargetDirectory -Force
+        }
+        finally {
+            $compileAliasLease.Dispose()
+        }
+
         $compileAliasSource = Join-Path $compileAliasDirectory 'fixture.mq5'
         $aliasIdentity = [Mql5Coding.CompilerProcessJob]::GetFileIdentity($compileAliasSource)
         $sourceIdentityBeforeReplace = [Mql5Coding.CompilerProcessJob]::GetFileIdentity(
@@ -1290,6 +3660,24 @@ try {
                 Remove-Item -LiteralPath $replacedSourceBackup -Force
             }
         }
+
+        $aliasArgumentsPath = Join-Path $testRoot 'fake-metaeditor-alias-arguments.txt'
+        $aliasCanonical = Invoke-CompilerCase `
+            -SourcePath $compileAliasSource `
+            -MetaEditorPath $metaEditor `
+            -FakeMode 'success' `
+            -ArgumentsPath $aliasArgumentsPath `
+            -SyntaxOnly
+        Assert-True -Condition ($aliasCanonical.ExitCode -eq 0) `
+            -Message "Canonical junction compile failed with exit code $($aliasCanonical.ExitCode)."
+        $aliasCompilerArguments = @([IO.File]::ReadAllLines($aliasArgumentsPath))
+        Assert-True -Condition (
+            $aliasCompilerArguments -contains "/compile:$compileSource" -and
+            $aliasCompilerArguments -notcontains "/compile:$compileAliasSource"
+        ) -Message 'Compiler did not pass its pinned canonical source path to MetaEditor.'
+        Assert-True -Condition (
+            $aliasCompilerArguments -contains "/include:$logicalMql5Root"
+        ) -Message 'Canonical source pinning lost the logical MQL5 include root.'
     }
     finally {
         if (Test-Path -LiteralPath $compileAliasDirectory) {
@@ -1337,6 +3725,82 @@ try {
         (Get-Item -LiteralPath $compileLog).LastWriteTimeUtc -eq $sentinelLogLastWriteUtc
     ) -Message 'Compiler wrapper did not restore the pre-existing log timestamp.'
 
+    $dataJunction = Join-Path $testRoot 'data-junction'
+    $null = New-Item -ItemType Junction -Path $dataJunction -Target $dataPath
+    try {
+        $dataJunctionBlocked = Invoke-RunnerCase `
+            -Name 'preflight-reparse-data-root' `
+            -Mode 'PreflightOnly' `
+            -TerminalPath $terminal `
+            -TerminalDataPath $dataJunction `
+            -ExpertPath $expert `
+            -PresetPath $preset `
+            -ExpertSha256 $expertHash
+    }
+    finally {
+        if (Test-Path -LiteralPath $dataJunction) {
+            [IO.Directory]::Delete($dataJunction)
+        }
+    }
+    Assert-True -Condition ($dataJunctionBlocked.ExitCode -eq 4) `
+        -Message 'A reparse-point terminal data root was not blocked.'
+    Assert-True -Condition (
+        $null -ne $dataJunctionBlocked.Result -and
+        $dataJunctionBlocked.Result.status -eq 'blocked' -and
+        -not [bool]$dataJunctionBlocked.Result.process.execution_attempted
+    ) -Message 'Terminal data reparse rejection did not fail closed before launch.'
+
+    $sourceJunction = Join-Path $testRoot 'source-junction'
+    $null = New-Item -ItemType Junction -Path $sourceJunction -Target $testRoot
+    try {
+        $sourceJunctionBlocked = Invoke-RunnerCase `
+            -Name 'preflight-reparse-source' `
+            -Mode 'PreflightOnly' `
+            -TerminalPath $terminal `
+            -TerminalDataPath $dataPath `
+            -ExpertPath (Join-Path $sourceJunction 'fixture.ex5') `
+            -PresetPath (Join-Path $sourceJunction 'fixture.set') `
+            -ExpertSha256 $expertHash
+    }
+    finally {
+        if (Test-Path -LiteralPath $sourceJunction) {
+            [IO.Directory]::Delete($sourceJunction)
+        }
+    }
+    Assert-True -Condition ($sourceJunctionBlocked.ExitCode -eq 4) `
+        -Message 'A reparse-point source path was not blocked.'
+    Assert-True -Condition (
+        $sourceJunctionBlocked.StandardError -match '(?i)reparse|unsafe or unleaseable'
+    ) -Message 'Source reparse rejection did not explain the unsafe path.'
+
+    $terminalLogsPath = Join-Path $dataPath 'logs'
+    $terminalLogsReal = Join-Path $dataPath 'logs-real'
+    [IO.Directory]::Move($terminalLogsPath, $terminalLogsReal)
+    $null = New-Item -ItemType Junction -Path $terminalLogsPath -Target $terminalLogsReal
+    try {
+        $logJunctionBlocked = Invoke-RunnerCase `
+            -Name 'preflight-reparse-log-root' `
+            -Mode 'PreflightOnly' `
+            -TerminalPath $terminal `
+            -TerminalDataPath $dataPath `
+            -ExpertPath $expert `
+            -PresetPath $preset `
+            -ExpertSha256 $expertHash
+    }
+    finally {
+        if (Test-Path -LiteralPath $terminalLogsPath) {
+            [IO.Directory]::Delete($terminalLogsPath)
+        }
+        [IO.Directory]::Move($terminalLogsReal, $terminalLogsPath)
+    }
+    Assert-True -Condition ($logJunctionBlocked.ExitCode -eq 4) `
+        -Message 'A reparse-point terminal journal directory was not blocked.'
+    Assert-True -Condition (
+        $null -ne $logJunctionBlocked.Result -and
+        $logJunctionBlocked.Result.status -eq 'blocked' -and
+        -not [bool]$logJunctionBlocked.Result.process.execution_attempted
+    ) -Message 'Journal-directory reparse rejection did not fail closed before launch.'
+
     $preflight = Invoke-RunnerCase `
         -Name 'preflight' `
         -Mode PreflightOnly `
@@ -1345,14 +3809,39 @@ try {
         -ExpertPath $expert `
         -PresetPath $preset `
         -ExpertSha256 $expertHash
+    $preflightDiagnostic = if ($null -eq $preflight.Result) {
+        '<no result JSON>'
+    }
+    else {
+        $preflight.Result | ConvertTo-Json -Depth 10 -Compress
+    }
     Assert-True -Condition ($preflight.ExitCode -eq 0) `
-        -Message "Preflight exit code was $($preflight.ExitCode): $($preflight.StandardError)"
+        -Message (
+            "Preflight exit code was $($preflight.ExitCode); " +
+            "stdout=$($preflight.StandardOutput); stderr=$($preflight.StandardError); " +
+            "result=$preflightDiagnostic"
+        )
     Assert-True -Condition ($null -ne $preflight.Result) `
         -Message 'Preflight did not produce result JSON.'
     Assert-True -Condition ($preflight.Result.status -eq 'preflight_passed') `
         -Message "Unexpected preflight status: $($preflight.Result.status)"
     Assert-True -Condition (-not [bool]$preflight.Result.process.process_created) `
         -Message 'Preflight unexpectedly created a terminal process.'
+    Assert-True -Condition (
+        [bool]$preflight.Result.safety.direct_fixed_volume_mapping_required
+    ) -Message 'Preflight did not report its direct fixed-volume requirement.'
+    Assert-True -Condition (
+        [bool]$preflight.Result.safety.mount_manager_drive_registration_required
+    ) -Message 'Preflight did not report its mount-manager drive requirement.'
+    Assert-True -Condition (
+        [bool]$preflight.Result.safety.path_handle_volume_correlation
+    ) -Message 'Preflight did not report its path-handle volume correlation.'
+    Assert-True -Condition (
+        [bool]$preflight.Result.safety.directory_data_write_sharing_denied
+    ) -Message 'Preflight did not report its directory data-write share protection.'
+    Assert-True -Condition (
+        [bool]$preflight.Result.safety.directory_mutation_guards
+    ) -Message 'Preflight did not report its pinned directory mutation guards.'
     Assert-True -Condition (-not [string]::IsNullOrWhiteSpace(
             [string]$preflight.Result.binding.terminal_image.file_identity
         )) -Message 'Preflight did not record the pinned terminal executable identity.'
@@ -1408,6 +3897,77 @@ try {
             $null = $aliasProcess.WaitForExit(5000)
         }
         $aliasProcess.Dispose()
+    }
+
+    $renamedAliasRealDirectory = Join-Path $testRoot 'install-renamed-real'
+    [IO.Directory]::CreateDirectory($renamedAliasRealDirectory) | Out-Null
+    $renamedAliasLeaf = 'renamed-terminal-host.exe'
+    $renamedAliasTerminalReal = Join-Path $renamedAliasRealDirectory $renamedAliasLeaf
+    $null = New-Item `
+        -ItemType HardLink `
+        -Path $renamedAliasTerminalReal `
+        -Target $terminal
+    $renamedAliasJunction = Join-Path $testRoot 'install-renamed-junction'
+    $null = New-Item `
+        -ItemType Junction `
+        -Path $renamedAliasJunction `
+        -Target $renamedAliasRealDirectory
+    $renamedAliasTerminal = Join-Path $renamedAliasJunction $renamedAliasLeaf
+    $renamedAliasConfig = Join-Path $dataPath 'renamed-alias-hold.ini'
+    [IO.File]::WriteAllText(
+        $renamedAliasConfig,
+        '',
+        (New-Object Text.UnicodeEncoding($false, $true))
+    )
+    $renamedAliasReady = Join-Path $dataPath 'renamed-alias-hold-ready'
+    $renamedAliasStartInfo = New-Object Diagnostics.ProcessStartInfo
+    $renamedAliasStartInfo.FileName = $renamedAliasTerminal
+    $renamedAliasStartInfo.Arguments = Quote-NativeArgument -Value ("/config:$renamedAliasConfig")
+    $renamedAliasStartInfo.UseShellExecute = $false
+    $renamedAliasStartInfo.CreateNoWindow = $true
+    $renamedAliasStartInfo.EnvironmentVariables['FAKE_MT5_MODE'] = 'hold'
+    $renamedAliasStartInfo.EnvironmentVariables['FAKE_MT5_READY_PATH'] = $renamedAliasReady
+    $renamedAliasProcess = New-Object Diagnostics.Process
+    $renamedAliasProcess.StartInfo = $renamedAliasStartInfo
+    $renamedAliasStarted = $false
+    try {
+        $null = $renamedAliasProcess.Start()
+        $renamedAliasStarted = $true
+        $renamedAliasDeadline = [datetime]::UtcNow.AddSeconds(10)
+        while (
+            -not (Test-Path -LiteralPath $renamedAliasReady -PathType Leaf) -and
+            [datetime]::UtcNow -lt $renamedAliasDeadline
+        ) {
+            Start-Sleep -Milliseconds 25
+        }
+        Assert-True -Condition (
+            Test-Path -LiteralPath $renamedAliasReady -PathType Leaf
+        ) -Message 'Renamed junction/hard-link terminal fixture did not become ready.'
+
+        $renamedAliasBlocked = Invoke-RunnerCase `
+            -Name 'preflight-renamed-junction-hardlink-running' `
+            -Mode PreflightOnly `
+            -TerminalPath $terminal `
+            -TerminalDataPath $dataPath `
+            -ExpertPath $expert `
+            -PresetPath $preset `
+            -ExpertSha256 $expertHash
+        Assert-True -Condition ($renamedAliasBlocked.ExitCode -eq 4) `
+            -Message 'A renamed hard-link terminal launched through a junction was not blocked.'
+        Assert-True -Condition (
+            $null -ne $renamedAliasBlocked.Result -and
+            $renamedAliasBlocked.Result.status -eq 'blocked'
+        ) -Message 'Renamed junction/hard-link conflict produced the wrong runner status.'
+    }
+    finally {
+        if ($renamedAliasStarted -and -not $renamedAliasProcess.HasExited) {
+            $renamedAliasProcess.Kill()
+            $null = $renamedAliasProcess.WaitForExit(5000)
+        }
+        $renamedAliasProcess.Dispose()
+        if (Test-Path -LiteralPath $renamedAliasJunction) {
+            [IO.Directory]::Delete($renamedAliasJunction)
+        }
     }
 
     $pass = Invoke-RunnerCase `
