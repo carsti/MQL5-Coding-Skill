@@ -283,6 +283,101 @@ if (-not ('Mql5Coding.JobProcessLaunch' -as [type])) {
         -Message 'The tester native helper source could not be extracted for lease tests.'
     Add-Type -TypeDefinition $runnerTypeMatch.Groups['source'].Value
 }
+if (-not ('Mql5Coding.RawDosDeviceProbe' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+
+namespace Mql5Coding
+{
+    public static class RawDosDeviceProbe
+    {
+        private const uint RawTarget = 0x00000001;
+        private const uint RemoveDefinition = 0x00000002;
+        private const uint ExactMatchOnRemove = 0x00000004;
+        private const uint NoBroadcastSystem = 0x00000008;
+
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "QueryDosDeviceW")]
+        private static extern uint QueryDosDevice(
+            string deviceName,
+            StringBuilder targetPath,
+            uint maximumCharacters);
+
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "DefineDosDeviceW")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool DefineDosDevice(
+            uint flags,
+            string deviceName,
+            string targetPath);
+
+        public static bool IsDefined(string deviceName)
+        {
+            StringBuilder target = new StringBuilder(32768);
+            uint length = QueryDosDevice(
+                deviceName,
+                target,
+                unchecked((uint)target.Capacity));
+            if (length != 0)
+                return true;
+            int error = Marshal.GetLastWin32Error();
+            if (error == 2 || error == 3)
+                return false;
+            throw new Win32Exception(
+                error,
+                "QueryDosDevice failed for " + deviceName + ".");
+        }
+
+        public static string Query(string deviceName)
+        {
+            StringBuilder target = new StringBuilder(32768);
+            uint length = QueryDosDevice(
+                deviceName,
+                target,
+                unchecked((uint)target.Capacity));
+            if (length == 0)
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "QueryDosDevice failed for " + deviceName + ".");
+            return target.ToString();
+        }
+
+        public static void Create(string deviceName, string rawTarget)
+        {
+            if (!DefineDosDevice(
+                    RawTarget | NoBroadcastSystem,
+                    deviceName,
+                    rawTarget))
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "DefineDosDevice create failed for " + deviceName + ".");
+        }
+
+        public static void Remove(string deviceName, string rawTarget)
+        {
+            if (!DefineDosDevice(
+                    RawTarget | RemoveDefinition | ExactMatchOnRemove |
+                        NoBroadcastSystem,
+                    deviceName,
+                    rawTarget))
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "DefineDosDevice removal failed for " + deviceName + ".");
+        }
+    }
+}
+'@
+}
+
 
 $skillText = Get-Content -LiteralPath (Join-Path $skillRoot 'SKILL.md') -Raw
 $referenceText = Get-Content -LiteralPath (Join-Path $skillRoot 'references\strategy-tester.md') -Raw
@@ -341,12 +436,19 @@ $redactionProbe = & {
         'ERROR --refresh-token cli-token',
         'ERROR service.api-key: dotted-secret',
         'ERROR password hunter2',
+        'ERROR password is hunter2',
         'ERROR "api key": "sk-secret"',
+        'ERROR api  key: sk-double-space',
+        "ERROR api`tkey=sk-tab",
+        'ERROR DB_PASSWORD=multi word secret',
         'ERROR client secret client-secret-value'
     )
     $negative = @(
         'ERROR token refresh failed',
         'ERROR authorization denied',
+        'ERROR password authentication failed',
+        'ERROR client secret missing',
+        'ERROR api key not configured',
         'ERROR passwordless mode active',
         'ERROR tokenizer=value'
     )
@@ -364,6 +466,8 @@ $redactionProbe = & {
                     "ERROR A OPENAI_API_KEY=selected-secret`r`n" +
                     "ERROR B password selected-password`r`n" +
                     'ERROR C "api key": "selected-api-key"' + "`r`n" +
+                    "ERROR D api  key: selected-double-space`r`n" +
+                    'ERROR E password selected multi word' + "`r`n" +
                     'OK'
                 ) `
                 -Patterns @('(?i)error')
@@ -375,7 +479,8 @@ foreach ($redactedLine in @($redactionProbe.positive)) {
         $redactedLine -match '<(?:SECRET|REDACTED)>' -and
         $redactedLine -notmatch (
             '(?i)sk-openai-secret|azure-secret|db-secret|authorization-secret|' +
-            'cli-token|dotted-secret|hunter2|sk-secret|client-secret-value'
+            'cli-token|dotted-secret|hunter2|sk-secret|sk-double-space|sk-tab|' +
+            'multi word secret|client-secret-value'
         )
     ) -Message "A prefixed secret was not redacted: $redactedLine"
 }
@@ -387,8 +492,11 @@ for ($index = 0; $index -lt $redactionProbe.negative.Count; $index++) {
 }
 $selectedEvidenceText = @($redactionProbe.selected) -join "`n"
 Assert-True -Condition (
-    $redactionProbe.selected.Count -eq 3 -and
-    $selectedEvidenceText -notmatch 'selected-secret|selected-password|selected-api-key' -and
+    $redactionProbe.selected.Count -eq 5 -and
+    $selectedEvidenceText -notmatch (
+        'selected-secret|selected-password|selected-api-key|' +
+        'selected-double-space|selected multi word'
+    ) -and
     $selectedEvidenceText -match '<(?:SECRET|REDACTED)>'
 ) -Message 'Selected journal evidence retained a secret.'
 
@@ -1133,6 +1241,72 @@ try {
         & $substExecutable $substDrive /D 2>$null | Out-Null
         Assert-True -Condition ($LASTEXITCODE -eq 0) `
             -Message "The SUBST regression drive $substDrive could not be removed."
+    }
+
+    $testVolumeRoot = [IO.Path]::GetPathRoot($testRoot)
+    $testVolumeDevice = $testVolumeRoot.Substring(0, 2)
+    $rawDosTarget = [Mql5Coding.RawDosDeviceProbe]::Query($testVolumeDevice)
+    $rawAliasDrive = $null
+    foreach ($letter in [char[]]'ZYXWVUTSRQPONMLKJIHGFED') {
+        $candidateDrive = ([string]$letter) + ':'
+        if ([Mql5Coding.RawDosDeviceProbe]::IsDefined($candidateDrive)) {
+            continue
+        }
+        try {
+            [Mql5Coding.RawDosDeviceProbe]::Create(
+                $candidateDrive,
+                $rawDosTarget
+            )
+            $rawAliasDrive = $candidateDrive
+            break
+        }
+        catch {
+            continue
+        }
+    }
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($rawAliasDrive)) `
+        -Message 'The raw DOS-device regression test could not reserve a drive letter.'
+    try {
+        $rawAliasRoot = $rawAliasDrive + '\'
+        $rawAliasRejected = $false
+        try {
+            $null = [Mql5Coding.JobProcessLaunch]::GetFixedLocalVolumeIdentity(
+                $rawAliasRoot
+            )
+        }
+        catch {
+            $rawAliasRejected = $true
+        }
+        Assert-True -Condition $rawAliasRejected `
+            -Message 'A raw DOS-device alias was accepted as a mount-manager drive.'
+
+        $rawAliasTerminal = $rawAliasRoot + $terminal.Substring($testVolumeRoot.Length)
+        $rawAliasDataPath = $rawAliasRoot + $dataPath.Substring($testVolumeRoot.Length)
+        $rawAliasExpert = $rawAliasRoot + $expert.Substring($testVolumeRoot.Length)
+        $rawAliasPreset = $rawAliasRoot + $preset.Substring($testVolumeRoot.Length)
+        $rawAliasRunnerBlocked = Invoke-RunnerCase `
+            -Name 'preflight-raw-dos-device-alias' `
+            -Mode PreflightOnly `
+            -TerminalPath $rawAliasTerminal `
+            -TerminalDataPath $rawAliasDataPath `
+            -ExpertPath $rawAliasExpert `
+            -PresetPath $rawAliasPreset `
+            -ExpertSha256 $expertHash
+        Assert-True -Condition ($rawAliasRunnerBlocked.ExitCode -in @(2, 4)) `
+            -Message (
+                'A raw DOS-device alias reached tester preflight. ' +
+                "stderr=$($rawAliasRunnerBlocked.StandardError)"
+            )
+        Assert-True -Condition (
+            $rawAliasRunnerBlocked.StandardError -match
+                '(?i)mount manager|direct fixed local volume|mapped|redirected|cannot find path|does not exist'
+        ) -Message 'Raw DOS-device rejection did not explain the unsafe drive mapping.'
+    }
+    finally {
+        [Mql5Coding.RawDosDeviceProbe]::Remove(
+            $rawAliasDrive,
+            $rawDosTarget
+        )
     }
 
     $leaseProbeDirectory = Join-Path $testRoot 'compile-lease-probe'
@@ -1904,6 +2078,12 @@ try {
     Assert-True -Condition (
         [bool]$preflight.Result.safety.direct_fixed_volume_mapping_required
     ) -Message 'Preflight did not report its direct fixed-volume requirement.'
+    Assert-True -Condition (
+        [bool]$preflight.Result.safety.mount_manager_drive_registration_required
+    ) -Message 'Preflight did not report its mount-manager drive requirement.'
+    Assert-True -Condition (
+        [bool]$preflight.Result.safety.path_handle_volume_correlation
+    ) -Message 'Preflight did not report its path-handle volume correlation.'
     Assert-True -Condition (
         [bool]$preflight.Result.safety.directory_data_write_sharing_denied
     ) -Message 'Preflight did not report its directory data-write share protection.'

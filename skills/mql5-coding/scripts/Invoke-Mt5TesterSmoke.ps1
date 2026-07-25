@@ -66,6 +66,7 @@ namespace Mql5Coding
         private const uint ShareReadWrite = 0x00000003;
         private const uint ShareReadWriteDelete = 0x00000007;
         private const uint DriveFixed = 3;
+        private const int ErrorMoreData = 234;
         private const uint OpenExisting = 3;
         private const uint FileAttributeDirectory = 0x00000010;
         private const uint FileAttributeReparsePoint = 0x00000400;
@@ -238,6 +239,34 @@ namespace Mql5Coding
             string volumeMountPoint,
             StringBuilder volumeName,
             uint bufferLength);
+
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "GetVolumePathNamesForVolumeNameW")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetVolumePathNamesForVolumeName(
+            string volumeName,
+            [Out] char[] volumePathNames,
+            uint bufferLength,
+            out uint returnLength);
+
+        [DllImport(
+            "kernel32.dll",
+            CharSet = CharSet.Unicode,
+            SetLastError = true,
+            EntryPoint = "GetVolumeInformationW")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetVolumeInformation(
+            string rootPathName,
+            StringBuilder volumeName,
+            uint volumeNameSize,
+            out uint volumeSerialNumber,
+            out uint maximumComponentLength,
+            out uint fileSystemFlags,
+            StringBuilder fileSystemName,
+            uint fileSystemNameSize);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -516,6 +545,46 @@ namespace Mql5Coding
                 ":" + fileIndex.ToString("X16");
         }
 
+        private static bool VolumePathListContainsRoot(
+            string volumeName,
+            string root)
+        {
+            uint requiredLength;
+            char[] paths = new char[1024];
+            while (!GetVolumePathNamesForVolumeName(
+                volumeName,
+                paths,
+                unchecked((uint)paths.Length),
+                out requiredLength))
+            {
+                int error = Marshal.GetLastWin32Error();
+                if (error != ErrorMoreData ||
+                    requiredLength <= unchecked((uint)paths.Length) ||
+                    requiredLength > 1048576)
+                    throw new Win32Exception(
+                        error,
+                        "GetVolumePathNamesForVolumeName failed for " +
+                        volumeName + ".");
+                paths = new char[checked((int)requiredLength)];
+            }
+
+            int start = 0;
+            while (start < paths.Length && paths[start] != '\0')
+            {
+                int end = start;
+                while (end < paths.Length && paths[end] != '\0')
+                    end++;
+                string volumePath = new string(paths, start, end - start);
+                if (String.Equals(
+                    volumePath,
+                    root,
+                    StringComparison.OrdinalIgnoreCase))
+                    return true;
+                start = end + 1;
+            }
+            return false;
+        }
+
         public static string GetFixedLocalVolumeIdentity(string path)
         {
             if (String.IsNullOrWhiteSpace(path))
@@ -585,9 +654,59 @@ namespace Mql5Coding
                 throw new InvalidOperationException(
                     "The drive root did not resolve to a stable volume GUID: " +
                     root);
+            if (!VolumePathListContainsRoot(volumeName, root))
+                throw new InvalidOperationException(
+                    "The drive letter is not registered for this volume by the " +
+                    "Windows mount manager: " + root);
 
-            return volumeName.ToUpperInvariant() + "|" +
+            uint volumeSerialNumber;
+            uint maximumComponentLength;
+            uint fileSystemFlags;
+            StringBuilder displayName = new StringBuilder(261);
+            StringBuilder fileSystemName = new StringBuilder(261);
+            if (!GetVolumeInformation(
+                    root,
+                    displayName,
+                    unchecked((uint)displayName.Capacity),
+                    out volumeSerialNumber,
+                    out maximumComponentLength,
+                    out fileSystemFlags,
+                    fileSystemName,
+                    unchecked((uint)fileSystemName.Capacity)))
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "GetVolumeInformation failed for " + root + ".");
+
+            return volumeSerialNumber.ToString("X8") + "|" +
+                volumeName.ToUpperInvariant() + "|" +
                 mapping.ToUpperInvariant();
+        }
+
+        public static void VerifyPathEntryLeaseVolume(
+            string path,
+            PathEntryLease lease)
+        {
+            if (lease == null)
+                throw new ArgumentNullException("lease");
+
+            string volumeIdentity = GetFixedLocalVolumeIdentity(path);
+            int separator = volumeIdentity.IndexOf('|');
+            if (separator <= 0)
+                throw new InvalidOperationException(
+                    "The fixed-volume identity is malformed.");
+            string expectedSerial = volumeIdentity.Substring(0, separator);
+            string leaseIdentity = lease.Identity ?? String.Empty;
+            int identitySeparator = leaseIdentity.IndexOf(':');
+            string actualSerial = identitySeparator > 0
+                ? leaseIdentity.Substring(0, identitySeparator)
+                : String.Empty;
+            if (!String.Equals(
+                    expectedSerial,
+                    actualSerial,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "The path-entry lease was opened on a different volume: " +
+                    path);
         }
 
         private static PathEntryLease OpenNonReparsePathEntry(
@@ -865,6 +984,16 @@ function Open-NonReparseDirectoryChain {
         Assert-StableFixedLocalVolumePath -Path $candidate
         $key = ([IO.Path]::GetFullPath($candidate)).ToUpperInvariant()
         if ($LeasesByPath.ContainsKey($key)) {
+            $existingLease = $LeasesByPath[$key]
+            try {
+                [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
+                    $candidate,
+                    $existingLease
+                )
+            }
+            catch {
+                throw "BLOCKED: Directory volume binding changed for '$candidate': $($_.Exception.Message)"
+            }
             continue
         }
         $lease = $null
@@ -872,8 +1001,16 @@ function Open-NonReparseDirectoryChain {
             $lease = [Mql5Coding.JobProcessLaunch]::OpenDirectoryComponentLease(
                 $candidate
             )
+            Assert-StableFixedLocalVolumePath -Path $candidate
+            [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
+                $candidate,
+                $lease
+            )
         }
         catch {
+            if ($null -ne $lease) {
+                $lease.Dispose()
+            }
             throw "BLOCKED: Unsafe or unleaseable directory path component '$candidate': $($_.Exception.Message)"
         }
         $LeasesByPath[$key] = $lease
@@ -903,13 +1040,32 @@ function Open-NonReparseFileLeaf {
 
     $key = $full.ToUpperInvariant()
     if ($LeasesByPath.ContainsKey($key)) {
-        return $LeasesByPath[$key]
+        $existingLease = $LeasesByPath[$key]
+        Assert-StableFixedLocalVolumePath -Path $full
+        try {
+            [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
+                $full,
+                $existingLease
+            )
+        }
+        catch {
+            throw "BLOCKED: File volume binding changed for '$full': $($_.Exception.Message)"
+        }
+        return $existingLease
     }
     $lease = $null
     try {
         $lease = [Mql5Coding.JobProcessLaunch]::OpenFileLeafLease($full)
+        Assert-StableFixedLocalVolumePath -Path $full
+        [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
+            $full,
+            $lease
+        )
     }
     catch {
+        if ($null -ne $lease) {
+            $lease.Dispose()
+        }
         throw "BLOCKED: Unsafe or unleaseable file path '$full': $($_.Exception.Message)"
     }
     $LeasesByPath[$key] = $lease
@@ -2265,16 +2421,16 @@ function Protect-JournalLine {
         '(?i)(?<![A-Za-z0-9_.-])' +
             '(?:' +
                 '(?:[A-Za-z0-9]+[._-])*' +
-                '(?:password|passwd|pwd|access[ ._-]?token|refresh[ ._-]?token|' +
-                    'token|api[ ._-]?key|client[ ._-]?secret|authorization|auth|secret)' +
+                '(?:password|passwd|pwd|access(?:[ \t._-]+)?token|refresh(?:[ \t._-]+)?token|' +
+                    'token|api(?:[ \t._-]+)?key|client(?:[ \t._-]+)?secret|authorization|auth|secret)' +
                 '["'']?\s*[:=]\s*' +
-                '(?:"[^"\r\n]*"|''[^''\r\n]*''|[^\s,;]+)' +
+                '(?:"[^"\r\n]*"|''[^''\r\n]*''|[^\r\n,;]+)' +
                 '|' +
                 '--?(?:[A-Za-z0-9]+[._-])*' +
-                '(?:password|passwd|pwd|access[ ._-]?token|refresh[ ._-]?token|' +
-                    'token|api[ ._-]?key|client[ ._-]?secret|authorization|auth|secret)' +
+                '(?:password|passwd|pwd|access(?:[ \t._-]+)?token|refresh(?:[ \t._-]+)?token|' +
+                    'token|api(?:[ \t._-]+)?key|client(?:[ \t._-]+)?secret|authorization|auth|secret)' +
                 '(?:\s+|\s*=\s*)' +
-                '(?:"[^"\r\n]*"|''[^''\r\n]*''|[^\s,;]+)' +
+                '(?:"[^"\r\n]*"|''[^''\r\n]*''|[^\r\n,;]+)' +
             ')',
         '<SECRET>=<REDACTED>'
     )
@@ -2282,10 +2438,14 @@ function Protect-JournalLine {
         $redacted,
         '(?i)(?<![A-Za-z0-9_.-])' +
             '(?:[A-Za-z0-9]+[._-])*' +
-            '(?:password|passwd|pwd|access[ ._-]?token|refresh[ ._-]?token|' +
-                'api[ ._-]?key|client[ ._-]?secret)' +
+            '(?:password|passwd|pwd|access(?:[ \t._-]+)?token|refresh(?:[ \t._-]+)?token|' +
+                'api(?:[ \t._-]+)?key|client(?:[ \t._-]+)?secret)' +
             '["'']?\s+' +
-            '(?:"[^"\r\n]*"|''[^''\r\n]*''|[^\s,;]+)',
+            '(?:(?:is\s+)(?!(?:authentication|missing|required|invalid|expired|' +
+                'rejected|failed|failure|disabled|enabled|unavailable|empty|absent)\b)|' +
+                '(?!(?:is|authentication|missing|required|invalid|expired|rejected|' +
+                    'failed|failure|disabled|enabled|unavailable|empty|absent|not)\b))' +
+            '(?:"[^"\r\n]*"|''[^''\r\n]*''|[^\r\n,;]+)',
         '<SECRET>=<REDACTED>'
     )
     $redacted = [regex]::Replace(
@@ -2475,6 +2635,8 @@ $result = [ordered]@{
         non_reparse_path_chain_leases = $true
         local_drive_paths_required = $true
         direct_fixed_volume_mapping_required = $true
+        mount_manager_drive_registration_required = $true
+        path_handle_volume_correlation = $true
         directory_data_write_sharing_denied = $true
         directory_mutation_guards = $true
         terminal_process_checks_point_in_time = $true
