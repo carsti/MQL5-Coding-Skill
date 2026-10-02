@@ -25,7 +25,7 @@ jobs:
   validate:
     name: Windows validation
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - name: Check out repository
@@ -66,3 +66,57 @@ jobs:
       - name: Test project profiles with Windows PowerShell 5.1
         shell: powershell
         run: .\tests\Test-ProjectProfiles.ps1
+
+  updater:
+    name: Release updater validation
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Test release packages and updater with PowerShell 7
+        shell: pwsh
+        run: .\tests\Test-SkillReleases.ps1
+      - name: Test release packages and updater with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\Test-SkillReleases.ps1
+
+  release:
+    name: Verified skill release package
+    needs: [validate, updater, compatibility]
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Bind source and tag and build twice
+        shell: pwsh
+        run: |
+          $commit = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $commit -cne $env:GITHUB_SHA) { throw 'Release source commit mismatch.' }
+          if (git status --porcelain) { throw 'Release checkout is not clean.' }
+          $version = (Get-Content .\skills\mql5-coding\version.json -Raw | ConvertFrom-Json).version
+          $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { 'v' + $version }
+          & .\scripts\Package-Skill.ps1 -OutputDirectory .\build\release-first -SourceCommit $commit -Tag $tag
+          & .\scripts\Package-Skill.ps1 -OutputDirectory .\build\release-second -SourceCommit $commit -Tag $tag
+          foreach ($name in @('mql5-coding-windows.zip','mql5-coding-windows.zip.manifest.json')) {
+              $first = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path .\build\release-first $name)).Hash
+              $second = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path .\build\release-second $name)).Hash
+              if ($first -cne $second) { throw 'Release package is not byte reproducible.' }
+              "$name SHA-256: $($first.ToLowerInvariant())" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          }
+      - name: Retain verified release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: mql5-coding-release-${{ github.sha }}
+          path: |
+            build/release-first/mql5-coding-windows.zip
+            build/release-first/mql5-coding-windows.zip.manifest.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

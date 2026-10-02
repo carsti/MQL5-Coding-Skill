@@ -133,6 +133,8 @@ Do not guess tester configuration or EA inputs. Run `-Execute` only after the us
 
 ## Validate and report
 
+When installation, release updates or rollback are requested, read [verified releases](references/releases.md). Use the trusted updater with an explicit version; preserve its verified backup ID and restart guidance. Ordinary MQL5 work does not authorize a skill update.
+
 Run focused checks proportional to the change, then compile every affected `.mq5` entrypoint. This includes unchanged `.mq5` consumers of a changed `.mqh`; if affected consumers cannot be identified, report that validation gap instead of claiming complete compilation coverage. Run Strategy Tester or demo validation only when requested and available.
 
 Lead with the outcome and report:

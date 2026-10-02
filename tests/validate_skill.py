@@ -12,6 +12,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = REPOSITORY_ROOT / "skills" / "mql5-coding"
 
 EXPECTED_SKILL_FILES = {
+    "version.json",
+    "references/releases.md",
+    "scripts/SkillRelease.ps1",
+    "scripts/Update-Mql5Skill.ps1",
     "SKILL.md",
     "agents/openai.yaml",
     "references/strategy-tester.md",
@@ -136,7 +140,11 @@ def main() -> int:
         if phrase not in reference_text:
             fail(f"Strategy Tester reference is missing safeguard: {phrase}")
 
-    for markdown_path in [skill_path, reference_path, SKILL_ROOT / "references" / "environment-health.md", SKILL_ROOT / "references" / "project-profiles.md", REPOSITORY_ROOT / "README.md"]:
+    version = json.loads((SKILL_ROOT / "version.json").read_text(encoding="utf-8"))
+    if set(version) != {"schema_version", "version"} or version["schema_version"] != 1 or not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version["version"]):
+        fail("Invalid skill release version.")
+
+    for markdown_path in [skill_path, reference_path, SKILL_ROOT / "references" / "environment-health.md", SKILL_ROOT / "references" / "project-profiles.md", SKILL_ROOT / "references" / "releases.md", REPOSITORY_ROOT / "README.md"]:
         text = markdown_path.read_text(encoding="utf-8")
         validate_relative_markdown_links(markdown_path, text)
 

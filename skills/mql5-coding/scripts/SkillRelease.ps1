@@ -1,0 +1,171 @@
+#Requires -Version 5.1
+# Trusted release primitives. No code from a downloaded archive is executed.
+function Get-Mql5SkillReleaseFiles {
+    return @('SKILL.md','agents/openai.yaml','references/strategy-tester.md','references/mcp-contract.json',
+        'references/environment-health.md','references/project-profiles.md','references/releases.md',
+        'scripts/Mql5ProjectProfile.ps1','scripts/New-Mql5ProjectProfile.ps1','scripts/Invoke-Mql5Project.ps1',
+        'scripts/Test-Mql5Environment.ps1','scripts/Compile-Mql5.ps1','scripts/CompilationReceipt.ps1',
+        'scripts/CompilerProcessJob.cs','scripts/Invoke-Mt5TesterSmoke.ps1','scripts/TesterEvidence.ps1',
+        'scripts/TesterPathIntegrity.ps1','scripts/TesterProcessJob.cs','scripts/SkillRelease.ps1',
+        'scripts/Update-Mql5Skill.ps1','version.json') | Sort-Object
+}
+function Get-Mql5ReleaseHash([string]$Path) {
+    $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try {return ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-','').ToLowerInvariant()}
+    finally {$sha.Dispose();$stream.Dispose()}
+}
+function Assert-Mql5ReleasePath([string]$Path) {
+    $full=[IO.Path]::GetFullPath($Path)
+    if ($full -notmatch '^[A-Za-z]:\\' -or $full.IndexOf(':',2) -ge 0) {throw 'Release paths must be ordinary absolute local Windows paths.'}
+    $part=$full
+    while ($part) {
+        if ([IO.File]::Exists($part) -or [IO.Directory]::Exists($part)) {
+            if (([IO.File]::GetAttributes($part) -band [IO.FileAttributes]::ReparsePoint) -ne 0) {throw 'Reparse points are not permitted in release paths.'}
+        }
+        $next=[IO.Path]::GetDirectoryName($part)
+        if ($next -eq $part) {break}; $part=$next
+    }
+    return $full.TrimEnd('\')
+}
+function Assert-Mql5ReleaseObject($Object,[string[]]$Fields) {
+    if ($Object -isnot [pscustomobject]) {throw 'Release metadata must be a JSON object.'}
+    $names=@($Object.PSObject.Properties.Name)
+    if ($names.Count -ne $Fields.Count) {throw 'Unsupported release metadata fields.'}
+    foreach ($name in $names) {if ($name -cnotin $Fields) {throw 'Unsupported release metadata fields.'}}
+}
+function Read-Mql5ReleaseJson([string]$Path) {
+    if ((Get-Item -LiteralPath $Path).Length -gt 1048576) {throw 'Release metadata is too large.'}
+    $text=[IO.File]::ReadAllText($Path,(New-Object Text.UTF8Encoding($false,$true)))
+    # Refuse duplicate, case-aliased and escaped JSON keys before ConvertFrom-Json.
+    $stack=New-Object 'Collections.Generic.Stack[object]'
+    foreach ($token in [regex]::Matches($text,'"(?:[^"\\]|\\.)*"|[{}\[\]]')) {
+        switch ($token.Value) {
+            '{' {$stack.Push(@{});continue} '[' {$stack.Push($null);continue}
+            '}' {if ($stack.Count) {[void]$stack.Pop()};continue} ']' {if ($stack.Count) {[void]$stack.Pop()};continue}
+        }
+        $next=$token.Index+$token.Length
+        while ($next -lt $text.Length -and [char]::IsWhiteSpace($text[$next])) {$next++}
+        if ($next -lt $text.Length -and $text[$next] -eq ':' -and $stack.Count -and $null -ne $stack.Peek()) {
+            $key=(('{"k":'+$token.Value+'}') | ConvertFrom-Json).k
+            if ($stack.Peek().ContainsKey($key)) {throw 'Duplicate release metadata keys.'}
+            $stack.Peek()[$key]=$true
+        }
+    }
+    return ($text | ConvertFrom-Json)
+}
+function Write-Mql5ReleaseJson([string]$Path,$Value) {
+    $stream=[IO.File]::Open($Path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    try {
+        $bytes=(New-Object Text.UTF8Encoding($false)).GetBytes(($Value | ConvertTo-Json -Depth 12 -Compress)+"`n")
+        $stream.Write($bytes,0,$bytes.Length); $stream.Flush($true)
+    } finally {$stream.Dispose()}
+}
+function Get-Mql5ReleaseInventory([string]$Root) {
+    $root=Assert-Mql5ReleasePath $Root
+    $result=@()
+    # Enumerate one level at a time, refusing junctions before recursion.
+    $pending=New-Object 'Collections.Generic.Stack[string]'; $pending.Push($root)
+    while ($pending.Count) {
+        foreach ($item in Get-ChildItem -LiteralPath $pending.Pop() -Force) {
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {throw 'Skill tree contains a reparse point.'}
+            if ($item.PSIsContainer) {$pending.Push($item.FullName)}
+            else {$result+=@([pscustomobject][ordered]@{path=$item.FullName.Substring($root.Length+1).Replace('\','/');bytes=$item.Length;sha256=(Get-Mql5ReleaseHash $item.FullName)})}
+        }
+    }
+    return @($result | Sort-Object -Property path)
+}
+function Get-Mql5ReleaseFileMap($Files) {
+    if ($Files -isnot [Array]) {throw 'File records must be an array.'}
+    $expected=@{}
+    foreach ($file in $Files) {
+        Assert-Mql5ReleaseObject $file @('path','bytes','sha256')
+        if ($file.path -isnot [string] -or $file.path.Length -gt 240 -or $file.path -match '[\x00-\x1f\x7f\\:*?"<>|]' -or
+            @($file.path.Split('/') | Where-Object {$_ -in @('','.','..') -or $_ -match '[. ]$' -or $_ -match '^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)'}).Count -or
+            $expected.ContainsKey($file.path) -or $file.sha256 -isnot [string] -or $file.sha256 -cnotmatch '\A[0-9a-f]{64}\z' -or
+            ($file.bytes -isnot [int] -and $file.bytes -isnot [long]) -or $file.bytes -lt 0) {throw 'Invalid release file record.'}
+        $expected[$file.path]=$file
+    }
+    return $expected
+}
+function Assert-Mql5ReleaseInventory([string]$Root,$Files) {
+    $actual=@(Get-Mql5ReleaseInventory $Root)
+    $expected=Get-Mql5ReleaseFileMap $Files
+    if ($actual.Count -ne $Files.Count) {throw 'Skill file inventory differs from the verified inventory.'}
+    foreach ($file in $actual) {
+        if (-not $expected.ContainsKey($file.path) -or $file.path -cne $expected[$file.path].path -or
+            $file.sha256 -cne $expected[$file.path].sha256 -or $file.bytes -ne $expected[$file.path].bytes) {throw 'Skill bytes differ from the verified inventory.'}
+    }
+}
+function Assert-Mql5SkillManifest($Manifest,[string]$Version,[string]$Commit) {
+    Assert-Mql5ReleaseObject $Manifest @('schema_version','repository','tag','version','source_commit','files')
+    if (($Manifest.schema_version -isnot [int] -and $Manifest.schema_version -isnot [long]) -or $Manifest.schema_version -ne 1 -or
+        $Manifest.repository -cne 'shamwi2846/MQL5-Coding-Skill' -or $Manifest.version -cne $Version -or
+        $Manifest.tag -cne ('v'+$Version) -or $Manifest.source_commit -cne $Commit -or
+        $Commit -cnotmatch '\A[0-9a-f]{40}\z' -or $Version -cnotmatch '\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\z') {throw 'Release identity differs from the requested tag and commit.'}
+    $expected=@(Get-Mql5SkillReleaseFiles)
+    if ($Manifest.files -isnot [Array] -or $Manifest.files.Count -lt $expected.Count -or $Manifest.files.Count -gt 128) {throw 'Release file set is incomplete or too large.'}
+    $null=Get-Mql5ReleaseFileMap $Manifest.files
+    foreach ($file in $Manifest.files) {
+        if ($file.path -cnotin @('SKILL.md','version.json') -and $file.path -cnotmatch '\A(?:agents|references|scripts)/') {throw 'Unexpected skill package location.'}
+        if ($file.bytes -gt 4194304) {throw 'Released skill file is too large.'}
+    }
+    foreach ($path in $expected) {if (@($Manifest.files | Where-Object {$_.path -ceq $path}).Count -ne 1) {throw 'Release file set is unexpected.'}}
+}
+function Expand-Mql5SkillRelease([string]$Archive,[string]$Digest,[string]$Version,[string]$Commit,[string]$Stage) {
+    if ($Digest -cnotmatch '\A[0-9a-f]{64}\z' -or (Get-Mql5ReleaseHash $Archive) -cne $Digest) {throw 'Release ZIP SHA-256 differs from the trusted digest.'}
+    if ((Get-Item -LiteralPath $Archive).Length -gt 16777216) {throw 'Release ZIP is too large.'}
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip=[IO.Compression.ZipFile]::OpenRead($Archive)
+    try {
+        $manifests=@($zip.Entries | Where-Object {$_.FullName -ceq 'release-manifest.json'})
+        if ($manifests.Count -ne 1 -or $manifests[0].Length -gt 1048576) {throw 'Release ZIP has no unique bounded manifest.'}
+        [IO.Directory]::CreateDirectory($Stage) | Out-Null
+        $manifestPath=Join-Path $Stage 'release-manifest.json'
+        [IO.Compression.ZipFileExtensions]::ExtractToFile($manifests[0],$manifestPath,$false)
+        $manifest=Read-Mql5ReleaseJson $manifestPath
+        Assert-Mql5SkillManifest $manifest $Version $Commit
+        $expected=@('release-manifest.json')+@($manifest.files | ForEach-Object {'mql5-coding/'+$_.path})
+        if ($zip.Entries.Count -ne $expected.Count) {throw 'Unexpected release ZIP entry count.'}
+        $seen=@{}; $total=0L
+        foreach ($entry in $zip.Entries) {
+            $name=$entry.FullName
+            $unixType=(([long]$entry.ExternalAttributes -shr 16) -band 61440)
+            if ($name -cnotin $expected -or $seen.ContainsKey($name) -or $unixType -eq 40960 -or
+                ($entry.ExternalAttributes -band 1024) -or $entry.Length -gt 4194304) {throw 'Unsafe or unexpected release ZIP entry.'}
+            $seen[$name]=$true; $total+=$entry.Length
+        }
+        if ($total -gt 16777216) {throw 'Uncompressed release ZIP is too large.'}
+        [IO.Directory]::CreateDirectory($Stage) | Out-Null
+        foreach ($entry in $zip.Entries) {
+            if ($entry.FullName -ceq 'release-manifest.json') {continue}
+            $path=Join-Path $Stage $entry.FullName
+            [IO.Directory]::CreateDirectory((Split-Path -Parent $path)) | Out-Null
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry,$path,$false)
+        }
+    } finally {$zip.Dispose()}
+    $manifest=Read-Mql5ReleaseJson (Join-Path $Stage 'release-manifest.json')
+    Assert-Mql5SkillManifest $manifest $Version $Commit
+    Assert-Mql5ReleaseInventory (Join-Path $Stage 'mql5-coding') $manifest.files
+    $identity=Read-Mql5ReleaseJson (Join-Path $Stage 'mql5-coding/version.json')
+    Assert-Mql5ReleaseObject $identity @('schema_version','version')
+    if ($identity.schema_version -ne 1 -or $identity.version -cne $Version) {throw 'Packaged skill version differs from its manifest.'}
+    return $manifest
+}
+function Invoke-Mql5ReleaseGh([string[]]$Arguments) {
+    # gh owns authentication. Never read, print or persist its access token.
+    $result=& gh @Arguments 2>$null
+    if ($LASTEXITCODE -ne 0) {throw 'Authenticated GitHub operation failed. Check gh auth status and repository access.'}
+    return (($result -join "`n") | ConvertFrom-Json)
+}
+function Get-Mql5SkillGitHubRelease([string]$Version) {
+    if ($Version -cnotmatch '\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\z') {throw 'Select an explicit stable version, such as 1.0.0.'}
+    $repo='shamwi2846/MQL5-Coding-Skill'; $tag='v'+$Version
+    $release=Invoke-Mql5ReleaseGh @('api',('repos/'+$repo+'/releases/tags/'+$tag))
+    if ($release.draft -ne $false -or $release.prerelease -ne $false -or $release.tag_name -cne $tag) {throw 'Select a published stable skill release.'}
+    $commit=Invoke-Mql5ReleaseGh @('api',('repos/'+$repo+'/commits/'+$tag))
+    $assets=@($release.assets | Where-Object {$_.name -ceq 'mql5-coding-windows.zip'})
+    if ($assets.Count -ne 1 -or $assets[0].state -cne 'uploaded' -or $assets[0].digest -cnotmatch '\Asha256:[0-9a-f]{64}\z' -or $assets[0].size -lt 1 -or $assets[0].size -gt 16777216 -or $commit.sha -cnotmatch '\A[0-9a-f]{40}\z') {throw 'Release asset has no valid GitHub SHA-256 digest, size or source commit.'}
+    return [pscustomobject]@{version=$Version;tag=$tag;source_commit=$commit.sha;sha256=$assets[0].digest.Substring(7);bytes=$assets[0].size;url=$release.html_url;repository=$repo}
+}

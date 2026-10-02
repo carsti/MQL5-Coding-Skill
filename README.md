@@ -2,6 +2,8 @@
 
 A Windows Codex skill for building, reviewing, compiling, testing, explaining, and debugging MetaTrader 5 MQL5 programs. It uses the installed [MQL5 CHM MCP](https://github.com/shamwi2846/MQL5-CHM-MCP) as the first authority for MQL5 API and language facts.
 
+The first versioned package is **v1.0.0**. Use an explicit [published release](https://github.com/shamwi2846/MQL5-Coding-Skill/releases) for repeatable installation and updates. The trusted `scripts/Update-Mql5Skill.ps1` verifies the authenticated GitHub asset digest, source commit, manifest and every file before publishing the new skill directory. It retains a complete backup and supports verified rollback, including the first upgrade from an unversioned installation. See [commands, recovery and trust limits](skills/mql5-coding/references/releases.md).
+
 The skill covers Expert Advisors, indicators, scripts, services, libraries, `.mq5`, `.mqh`, and `.ex5` files. It intentionally excludes MQL4 and MetaTrader 4.
 
 ## Requirements
@@ -87,12 +89,16 @@ Fully restart Codex after installation.
 ```text
 skills/mql5-coding/
   SKILL.md
+  version.json
   agents/openai.yaml
   references/mcp-contract.json
   references/environment-health.md
   references/project-profiles.md
+  references/releases.md
   references/strategy-tester.md
   scripts/Compile-Mql5.ps1
+  scripts/SkillRelease.ps1
+  scripts/Update-Mql5Skill.ps1
   scripts/Test-Mql5Environment.ps1
   scripts/Mql5ProjectProfile.ps1
   scripts/New-Mql5ProjectProfile.ps1
@@ -114,6 +120,7 @@ GitHub Actions and the local test commands validate:
 - skill metadata, dependency declaration, links, portable paths, and the packaged MCP consumer contract;
 - the actual MCP server against this skill on each trusted push and pull request, with exact repository revisions retained in a compatibility artifact;
 - PowerShell syntax under PowerShell 7 and Windows PowerShell 5.1;
+- reproducible release ZIPs and sidecars, full file verification, authenticated metadata policy, legacy and versioned updates, additional verified resources, backup/rollback, interruption recovery, concurrent updater exclusion, archive tampering and path rejection under both shells;
 - project profiles under both shells: creation/overwrite refusal, moved paths, rejected authorization fields and malformed selections, multiple entrypoints, compiler exit-code propagation, receipt freshness, and synthetic tester delegation;
 - environment-health success and failure cases against a real MCP bundle under both shells, including disabled registrations, checksum failures, source differences, optional dependencies, timeouts, redaction, preserved files, and an editor that must never be launched;
 - compiler-wrapper completion, source-path lease, artifact, exit-code contracts, compilation receipts, and automatic tester verification/rejection of changed evidence without starting real MetaEditor;
@@ -143,9 +150,15 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Skill.ps1
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Skill.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-ProjectProfiles.ps1
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-ProjectProfiles.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-SkillReleases.ps1
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-SkillReleases.ps1
 ```
 
 CI uses an isolated Python 3.12 x64 environment and installs `PyYAML==6.0.3` from `.github/requirements-ci.txt`, which locks the expected wheel hash. The local shared environment was also validated with Python 3.13. Do not modify a global Python environment solely to run repository validation. A real MetaEditor or MT5 fixture run is separate from these synthetic suites and follows the skill's compilation and tester workflow.
+
+## Publishing a stable skill release
+
+Update `skills/mql5-coding/version.json`, commit and push the complete reviewed change, then push a matching `v<version>` tag. The tag's CI must succeed: metadata, compiler/tester and profile suites in both shells, the updater suite in both shells, and the actual MCP pair. The release job binds the checkout SHA and tag, builds twice, compares ZIP and sidecar SHA-256, and retains `mql5-coding-release-<commit>`. Download that successful run's artifact, inspect its manifest/commit, and publish those exact two assets with `gh release create <tag> --verify-tag --notes-file <release-notes-file>`. GitHub publication is a separate maintainer action; CI does not write releases. The updater accepts published stable releases with a GitHub asset digest and validates all packaged files. Keep the source tag and source-commit manifest with each package.
 
 ## MCP compatibility checks
 

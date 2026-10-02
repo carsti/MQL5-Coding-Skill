@@ -229,9 +229,12 @@ try {
     else {
         try {
             $skillFiles=Skill-Files $SkillRoot
-            foreach ($required in @('agents/openai.yaml','references/strategy-tester.md','references/mcp-contract.json','references/environment-health.md','references/project-profiles.md','scripts/Mql5ProjectProfile.ps1','scripts/New-Mql5ProjectProfile.ps1','scripts/Invoke-Mql5Project.ps1','scripts/Test-Mql5Environment.ps1','scripts/Compile-Mql5.ps1','scripts/CompilationReceipt.ps1','scripts/CompilerProcessJob.cs','scripts/Invoke-Mt5TesterSmoke.ps1','scripts/TesterEvidence.ps1','scripts/TesterPathIntegrity.ps1','scripts/TesterProcessJob.cs')) {
+            foreach ($required in @('version.json','references/releases.md','scripts/SkillRelease.ps1','scripts/Update-Mql5Skill.ps1','agents/openai.yaml','references/strategy-tester.md','references/mcp-contract.json','references/environment-health.md','references/project-profiles.md','scripts/Mql5ProjectProfile.ps1','scripts/New-Mql5ProjectProfile.ps1','scripts/Invoke-Mql5Project.ps1','scripts/Test-Mql5Environment.ps1','scripts/Compile-Mql5.ps1','scripts/CompilationReceipt.ps1','scripts/CompilerProcessJob.cs','scripts/Invoke-Mt5TesterSmoke.ps1','scripts/TesterEvidence.ps1','scripts/TesterPathIntegrity.ps1','scripts/TesterProcessJob.cs')) {
                 if (-not $skillFiles.ContainsKey($required)) {throw 'An essential skill file is missing.'}
             }
+            $identity=Get-Content -LiteralPath (Join-Path $SkillRoot 'version.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ((Value $identity 'schema_version') -ne 1 -or (Value $identity 'version') -cnotmatch '\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\z') {throw 'Invalid skill version metadata.'}
+            $report.skill.declared_version=$identity.version
             $report.skill.installed=$true
             $report.skill.file_count=$skillFiles.Count
             $report.skill.fingerprint_sha256=Fingerprint $skillFiles
