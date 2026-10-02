@@ -16,6 +16,12 @@ The skill covers Expert Advisors, indicators, scripts, services, libraries, `.mq
 
 Ordinary source review and explanation do not start MetaTrader, MetaEditor, or Strategy Tester.
 
+## Documentation and compilation
+
+For an identifier lookup, check the returned passage for the complete identifier and inspect `focus_match` when present. An `approximate` or `none` result does not establish support for the requested identifier; continue reading or select another documented result.
+
+Use the bundled `Compile-Mql5.ps1` wrapper as described in the skill. Pass source and include paths as ordinary quoted PowerShell arguments, including paths containing spaces. The wrapper keeps MetaEditor switch prefixes outside quoted path values; do not embed quotation marks inside the supplied path strings.
+
 ## Install with Codex
 
 Ask Codex:
@@ -82,12 +88,28 @@ GitHub Actions and the local test commands validate:
 - compiler-wrapper completion, source-path lease, artifact, and exit-code contracts without starting real MetaEditor;
 - Strategy Tester preflight, mount-manager drive validation, path-handle volume correlation, non-reparse path-chain leases, pinned nonempty-directory guards, pinned journal evidence, stable terminal-image identity checks, secret redaction, unambiguous correlated completion, adversarial log rejection, and timeout cleanup without starting real MT5.
 
-Run locally inside an isolated Python 3.12 x64 environment with `PyYAML==6.0.3` available:
+For local metadata validation, use the shared MQL5 Python environment when it is installed. Supply the validator's absolute path because the launcher starts in its own `work` directory:
 
 ```powershell
-python .\tests\validate_skill.py
+$codexHome = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
+    Join-Path $env:USERPROFILE ".codex"
+} else {
+    $env:CODEX_HOME
+}
+$pythonLauncher = Join-Path $codexHome "tools\mql5-python\mql5-python.cmd"
+if (-not (Test-Path -LiteralPath $pythonLauncher -PathType Leaf)) {
+    throw "Shared MQL5 Python launcher is unavailable: $pythonLauncher"
+}
+$validator = (Resolve-Path -LiteralPath ".\tests\validate_skill.py").Path
+& $pythonLauncher $validator
+if ($LASTEXITCODE -ne 0) { throw "Skill metadata validation failed: $LASTEXITCODE" }
+```
+
+Run the PowerShell suites sequentially after other validation runs finish:
+
+```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Skill.ps1
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Skill.ps1
 ```
 
-CI installs the validator dependency from `.github/requirements-ci.txt`, which locks the expected Windows x64 Python 3.12 wheel hash. Do not modify a global Python environment solely to run repository validation.
+CI uses an isolated Python 3.12 x64 environment and installs `PyYAML==6.0.3` from `.github/requirements-ci.txt`, which locks the expected wheel hash. The local shared environment was also validated with Python 3.13. Do not modify a global Python environment solely to run repository validation. A real MetaEditor or MT5 fixture run is separate from these synthetic suites and follows the skill's compilation and tester workflow.

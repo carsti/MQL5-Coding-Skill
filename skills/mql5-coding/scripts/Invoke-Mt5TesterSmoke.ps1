@@ -360,6 +360,7 @@ try {
             $markerFileOffset,
             $markerFileBytes.Length - $markerFileOffset
         )
+        $markerFileHasMarkers = $false
         foreach ($marker in ($markerFileText -split '\r\n|\n|\r')) {
             if ([string]::IsNullOrWhiteSpace($marker)) {
                 continue
@@ -367,11 +368,12 @@ try {
             Assert-ExpectedApplicationMarker `
                 -Marker $marker `
                 -SourceName 'Each non-empty ExpectedLogMarkerFile line'
+            $markerFileHasMarkers = $true
             if (-not $markers.Contains($marker)) {
                 $markers.Add($marker)
             }
         }
-        if ($markers.Count -eq 0) {
+        if (-not $markerFileHasMarkers) {
             throw 'ExpectedLogMarkerFile contains no non-empty markers.'
         }
         $result.inputs.expected_log_marker_file = $markerFile

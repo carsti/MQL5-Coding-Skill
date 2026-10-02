@@ -132,6 +132,7 @@ function Invoke-RunnerCase {
         [string]$ExpertSha256,
         [string]$FakeMode = 'pass',
         [string]$ExpectedLogMarker,
+        [string]$ExpectedLogMarkerFile,
         [string]$FakeMarker = '',
         [int]$TimeoutSeconds = 15
     )
@@ -176,6 +177,10 @@ function Invoke-RunnerCase {
     if (-not [string]::IsNullOrWhiteSpace($ExpectedLogMarker)) {
         $arguments.Add('-ExpectedLogMarker')
         $arguments.Add((Quote-NativeArgument -Value $ExpectedLogMarker))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedLogMarkerFile)) {
+        $arguments.Add('-ExpectedLogMarkerFile')
+        $arguments.Add((Quote-NativeArgument -Value $ExpectedLogMarkerFile))
     }
 
     $startInfo = New-Object Diagnostics.ProcessStartInfo
@@ -932,7 +937,7 @@ $quoteHelperIndex = $compilerText.IndexOf(
     [StringComparison]::Ordinal
 )
 $quoteHelperUseIndex = $compilerText.IndexOf(
-    'ConvertTo-WindowsCommandLineArgument -Value $_',
+    'ConvertTo-MetaEditorCommandLineArgument -Value $_',
     [StringComparison]::Ordinal
 )
 Assert-True -Condition (
@@ -1939,6 +1944,19 @@ $quoteHelperNode = $compilerAst.Find(
 Assert-True -Condition ($null -ne $quoteHelperNode) `
     -Message 'ConvertTo-WindowsCommandLineArgument was not found for command-line regression testing.'
 $quoteHelperDefinitionText = $quoteHelperNode.Extent.Text
+$metaEditorQuoteHelperNode = $compilerAst.Find(
+    {
+        param($node)
+        return (
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'ConvertTo-MetaEditorCommandLineArgument'
+        )
+    },
+    $true
+)
+Assert-True -Condition ($null -ne $metaEditorQuoteHelperNode) `
+    -Message 'The MetaEditor-specific argument quoting helper is missing.'
+$metaEditorQuoteHelperDefinitionText = $metaEditorQuoteHelperNode.Extent.Text
 $moveLeasedOutputNode = $compilerAst.Find(
     {
         param($node)
@@ -2019,6 +2037,28 @@ foreach ($quoteCase in $quoteCases) {
     } $quoteHelperDefinitionText $quoteCase.Value
     Assert-True -Condition ([string]$quotedValue -ceq [string]$quoteCase.Expected) `
         -Message "Compiler command-line quoting changed for '$($quoteCase.Value)'."
+}
+$metaEditorQuoteCases = @(
+    [pscustomobject]@{
+        Value = '/compile:C:\path with space\fixture.mq5'
+        Expected = '/compile:"C:\path with space\fixture.mq5"'
+    },
+    [pscustomobject]@{
+        Value = '/include:C:\path with space\'
+        Expected = '/include:"C:\path with space\\"'
+    },
+    [pscustomobject]@{ Value = '/include:C:\'; Expected = '/include:C:\' },
+    [pscustomobject]@{ Value = '/s'; Expected = '/s' }
+)
+foreach ($quoteCase in $metaEditorQuoteCases) {
+    $quotedValue = & {
+        param($WindowsDefinition, $MetaEditorDefinition, $Value)
+        . ([scriptblock]::Create($WindowsDefinition))
+        . ([scriptblock]::Create($MetaEditorDefinition))
+        ConvertTo-MetaEditorCommandLineArgument -Value $Value
+    } $quoteHelperDefinitionText $metaEditorQuoteHelperDefinitionText $quoteCase.Value
+    Assert-True -Condition ([string]$quotedValue -ceq [string]$quoteCase.Expected) `
+        -Message "MetaEditor switch prefix was quoted incorrectly for '$($quoteCase.Value)'."
 }
 $discoveryResult = & {
     param([Parameter(Mandatory = $true)][string]$DefinitionText)
@@ -3899,6 +3939,61 @@ try {
         $logJunctionBlocked.Result.status -eq 'blocked' -and
         -not [bool]$logJunctionBlocked.Result.process.execution_attempted
     ) -Message 'Journal-directory reparse rejection did not fail closed before launch.'
+
+    $markerFileProtocol = 'MQL5_CODING_PASS:' + [guid]::NewGuid().ToString('N')
+    $markerFileFixture = Join-Path $testRoot 'expected-markers.txt'
+    foreach ($markerFileCase in @(
+            [pscustomobject]@{ name = 'blank'; text = "`r`n`t `r`n" },
+            [pscustomobject]@{ name = 'empty'; text = '' }
+        )) {
+        [IO.File]::WriteAllText(
+            $markerFileFixture,
+            $markerFileCase.text,
+            (New-Object Text.UTF8Encoding($false))
+        )
+        $invalidMarkerFile = Invoke-RunnerCase `
+            -Name ('preflight-marker-file-' + $markerFileCase.name) `
+            -Mode PreflightOnly `
+            -TerminalPath $terminal `
+            -TerminalDataPath $dataPath `
+            -ExpertPath $expert `
+            -PresetPath $preset `
+            -ExpertSha256 $expertHash `
+            -ExpectedLogMarker $markerFileProtocol `
+            -ExpectedLogMarkerFile $markerFileFixture
+        Assert-True -Condition (
+            $invalidMarkerFile.ExitCode -eq 2 -and
+            $null -eq $invalidMarkerFile.Result -and
+            $invalidMarkerFile.StandardError.Contains(
+                'ExpectedLogMarkerFile contains no non-empty markers.'
+            )
+        ) -Message "A $($markerFileCase.name) marker file was not rejected before staging."
+    }
+    [IO.File]::WriteAllText(
+        $markerFileFixture,
+        ($markerFileProtocol + "`r`n"),
+        (New-Object Text.UTF8Encoding($false))
+    )
+    foreach ($commandMarker in @('', $markerFileProtocol)) {
+        $markerFileCaseName = if ($commandMarker) { 'duplicate' } else { 'file-only' }
+        $validMarkerFile = Invoke-RunnerCase `
+            -Name ('preflight-marker-file-' + $markerFileCaseName) `
+            -Mode PreflightOnly `
+            -TerminalPath $terminal `
+            -TerminalDataPath $dataPath `
+            -ExpertPath $expert `
+            -PresetPath $preset `
+            -ExpertSha256 $expertHash `
+            -ExpectedLogMarker $commandMarker `
+            -ExpectedLogMarkerFile $markerFileFixture
+        Assert-True -Condition (
+            $validMarkerFile.ExitCode -eq 0 -and
+            $null -ne $validMarkerFile.Result -and
+            $validMarkerFile.Result.status -eq 'preflight_passed' -and
+            $validMarkerFile.Result.inputs.expected_log_marker_count -eq 1 -and
+            -not [bool]$validMarkerFile.Result.process.process_created
+        ) -Message "A valid $markerFileCaseName marker file did not pass synthetic preflight."
+    }
 
     $preflight = Invoke-RunnerCase `
         -Name 'preflight' `

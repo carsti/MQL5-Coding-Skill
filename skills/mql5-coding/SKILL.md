@@ -25,7 +25,7 @@ Before asserting or implementing an MQL5 API, language, event, error, trade-retc
 2. Search the exact identifier with `mql5_chm_search`, `source: "mql5"`, and exact expansion disabled first.
 3. Accept identifier support only when `match_kind` is exact and either the standalone topic title/signature matches or an aggregate topic's exact matched term, selected section, or passage contains the requested identifier as a complete identifier token. Never treat fuzzy or typo-fallback results as support for the requested identifier.
 4. If no exact result exists, search a narrowly phrased concept and verify that the returned topic is genuinely relevant before reading it.
-5. Read the authoritative result with `mql5_chm_read`, selecting the relevant section when available, and base the claim or implementation on the returned passage.
+5. Read the authoritative result with `mql5_chm_read`, selecting the relevant section when available, and base the claim or implementation on the returned passage. For identifier lookups, verify the passage contains the requested identifier as a complete token, not a prefix of another name. Check `focus_match` when present: `approximate` or `none` is not proof of the requested identifier. If the passage is insufficient, continue reading, select another section, or search again before asserting support.
 6. Cite the exact title, topic ID, section ID when present, and current corpus or index revision in the response.
 
 Never hard-code a previously observed topic ID or revision as current truth.
@@ -80,6 +80,8 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $compiler -Sourc
 ```
 
 Use `-IncludePath "<absolute-MQL5-root>"` only when a required custom include root cannot be auto-detected. Use `-SyntaxOnly` only when the user explicitly requests a syntax check instead of a compiled artifact. The wrapper canonicalizes directory-junction aliases but rejects a `.mq5` source leaf that is itself a symlink or reparse point, because that pathname cannot be safely pinned for MetaEditor.
+
+Pass source and include paths as ordinary quoted PowerShell arguments, including paths containing spaces. The wrapper keeps MetaEditor switch prefixes outside quoted path values; do not embed quotation marks inside the supplied path strings.
 
 Interpret the wrapper exit code exactly:
 

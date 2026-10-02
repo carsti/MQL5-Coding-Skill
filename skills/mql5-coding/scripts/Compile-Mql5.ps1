@@ -271,6 +271,17 @@ function ConvertTo-WindowsCommandLineArgument {
     return $builder.ToString()
 }
 
+function ConvertTo-MetaEditorCommandLineArgument {
+    param([Parameter(Mandatory = $true)][string]$Value)
+
+    # MetaEditor requires the switch prefix outside the quoted path value.
+    # Quoting the entire /compile:path token is ignored by the real compiler.
+    if ($Value -match '^(/(?:compile|include):)(.*)$') {
+        return $Matches[1] + (ConvertTo-WindowsCommandLineArgument -Value $Matches[2])
+    }
+    return ConvertTo-WindowsCommandLineArgument -Value $Value
+}
+
 function Read-SharedText {
     param(
         [Parameter(Mandatory = $true)][string]$LiteralPath,
@@ -792,7 +803,7 @@ try {
     }
     $arguments = @(
         $argumentTokens | ForEach-Object {
-            ConvertTo-WindowsCommandLineArgument -Value $_
+            ConvertTo-MetaEditorCommandLineArgument -Value $_
         }
     ) -join ' '
 
