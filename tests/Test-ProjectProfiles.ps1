@@ -104,6 +104,23 @@ try {
     Copy-Item -LiteralPath $project -Destination $moved -Recurse
     $movedData=Read-Mql5ProjectProfile (Join-Path $moved 'mql5-project.json')
     Check ($movedData.entrypoints[0] -ieq (Join-Path $moved 'First.mq5')) 'Moved profile resolved to the old project.'
+    $externalRoot=Join-Path $testRoot 'shared resources'
+    [IO.Directory]::CreateDirectory($externalRoot) | Out-Null
+    $externalPreset=Join-Path $externalRoot 'shared.set'
+    [IO.File]::WriteAllText($externalPreset,'FakeInput=2||0||1||N')
+    $externalCreation=$creation.Clone()
+    $externalCreation.ProfilePath=Join-Path $project 'external-profile.json'
+    $externalCreation.IncludePath=$externalRoot
+    $externalCreation.SetPath=$externalPreset
+    $externalSaved=Run 'New-Mql5ProjectProfile.ps1' $externalCreation
+    Check ($externalSaved.code -eq 0) 'External-resource profile creation failed.'
+    $externalData=Get-Content -LiteralPath $externalCreation.ProfilePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    Check ($externalData.include_path -ieq $externalRoot) 'A same-drive external include was made project-relative.'
+    Check ($externalData.tester.set_path -ieq $externalPreset) 'A same-drive external preset was made project-relative.'
+    Copy-Item -LiteralPath $externalCreation.ProfilePath -Destination (Join-Path $moved 'external-profile.json')
+    $movedExternal=Read-Mql5ProjectProfile (Join-Path $moved 'external-profile.json')
+    Check ($movedExternal.include_path -ieq $externalRoot -and $movedExternal.tester.set_path -ieq $externalPreset) 'Moving the project redirected external resources.'
+    Check ((Get-Mql5ProfileStoredPath (Join-Path $externalRoot 'Shared.mq5') $project) -ieq (Join-Path $externalRoot 'Shared.mq5')) 'External source selections were made project-relative.'
     $compileOnly=Copy-Data $base
     $compileOnly.tester=$null
     Check ($null -eq (ConvertTo-Mql5ValidatedProfile $compileOnly $profilePath).tester) 'Compile-only profiles were rejected.'

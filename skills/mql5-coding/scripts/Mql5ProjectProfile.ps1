@@ -18,10 +18,13 @@ function Resolve-Mql5ProfilePath($Value, [string]$Base, [string]$Kind) {
     if (-not (Test-Path -LiteralPath $path -PathType $Kind)) {throw 'A selected profile file or directory is unavailable.'}
     return $path
 }
-function Get-Mql5ProfileStoredPath([string]$Path, [string]$Base) {
+function Get-Mql5ProfileStoredPath([string]$Path, [string]$Base, [switch]$AllowOutsideBase) {
     $path=[IO.Path]::GetFullPath($Path)
     $base=[IO.Path]::GetFullPath($Base).TrimEnd('\')+'\'
     if ($path.TrimEnd('\') -ieq $base.TrimEnd('\')) {return '.'}
+    # External source/include/preset selections must not silently follow a
+    # moved project to a different existing file or directory.
+    if (-not $AllowOutsideBase -and -not $path.StartsWith($base,[StringComparison]::OrdinalIgnoreCase)) {return $path}
     if ([IO.Path]::GetPathRoot($path) -ine [IO.Path]::GetPathRoot($base)) {return $path}
     $baseUri=New-Object Uri($base)
     $pathUri=New-Object Uri($path)

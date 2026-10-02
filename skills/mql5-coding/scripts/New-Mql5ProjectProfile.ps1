@@ -46,7 +46,7 @@ try {
         if ($PSBoundParameters.ContainsKey('SetPath')) {$preset=Get-Mql5ProfileStoredPath (Resolve-Mql5ProfilePath $SetPath $root 'Leaf') $root}
         $tester=[ordered]@{entrypoint=(Get-Mql5ProfileStoredPath (Resolve-Mql5ProfilePath $TesterEntrypoint $root 'Leaf') $root);terminal_path=(Resolve-Mql5ProfilePath $TerminalPath $root 'Leaf');terminal_data_path=(Resolve-Mql5ProfilePath $TerminalDataPath $root 'Container');set_path=$preset;use_expert_defaults=[bool]$UseExpertDefaults;timeout_seconds=$TesterTimeoutSeconds;settings=[ordered]@{symbol=$Symbol;period=$Period;from_date=$FromDate;to_date=$ToDate;model=$Model;deposit=$Deposit;currency=$Currency;leverage=$Leverage;execution_mode=$ExecutionMode}}
     }
-    $data=[ordered]@{schema_version=1;name=$Name;project_root=(Get-Mql5ProfileStoredPath $root $parent);entrypoints=@($entryPaths);include_path=$include;metaeditor_path=$editor;compiler=[ordered]@{timeout_seconds=$CompileTimeoutSeconds;warnings_as_errors=[bool]$WarningsAsErrors};tester=$tester}
+    $data=[ordered]@{schema_version=1;name=$Name;project_root=(Get-Mql5ProfileStoredPath $root $parent -AllowOutsideBase);entrypoints=@($entryPaths);include_path=$include;metaeditor_path=$editor;compiler=[ordered]@{timeout_seconds=$CompileTimeoutSeconds;warnings_as_errors=[bool]$WarningsAsErrors};tester=$tester}
     # Validate the exact data before exclusively creating the requested profile.
     $json=$data | ConvertTo-Json -Depth 8
     [void](ConvertTo-Mql5ValidatedProfile ($json | ConvertFrom-Json) $profilePath)
