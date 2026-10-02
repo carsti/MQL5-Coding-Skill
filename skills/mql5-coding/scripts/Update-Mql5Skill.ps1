@@ -43,6 +43,29 @@ try {
         $pending=@(Get-ChildItem -LiteralPath $stateRoot -Directory | Where-Object {Test-Path -LiteralPath (Join-Path $_.FullName 'pending.json')})
         if ($pending.Count -and ($Action -ne 'Rollback' -or $BackupId -cnotin @($pending.Name))) {throw ('An interrupted transaction requires Rollback with BackupId '+$pending[-1].Name+'.')}
         if ($Action -eq 'Rollback') {
+            # A crash during rollback must recover the intended original snapshot,
+            # rather than restoring the partially published tree saved by that rollback.
+            $visited=@{}
+            for ($depth=0;$depth -lt 32;$depth++) {
+                if ($visited.ContainsKey($BackupId)) {throw 'Cyclic pending rollback recovery.'}
+                $visited[$BackupId]=$true
+                $intentPath=Join-Path (Join-Path $stateRoot $BackupId) 'pending.json'
+                if (-not (Test-Path -LiteralPath $intentPath)) {break}
+                $intent=Read-Mql5ReleaseJson $intentPath
+                $parent=$intent.PSObject.Properties['restore_backup_id']
+                if ($null -eq $parent) {break}
+                if ($intent.action -cne 'rollback' -or $intent.target -cne $target -or $parent.Value -cnotmatch '\A[0-9a-f]{32}\z') {throw 'Invalid pending rollback intent.'}
+                $BackupId=[string]$parent.Value
+            }
+            if ($depth -eq 32) {throw 'Pending rollback recovery is too deep.'}
+            $resolvePending={
+                foreach ($item in $pending) {
+                    $path=Join-Path $item.FullName 'pending.json'
+                    if (-not (Test-Path -LiteralPath $path)) {continue}
+                    $intent=Read-Mql5ReleaseJson $path;$parent=$intent.PSObject.Properties['restore_backup_id']
+                    if ($item.Name -ceq $BackupId -or ($null -ne $parent -and $intent.action -ceq 'rollback' -and $intent.target -ceq $target -and $parent.Value -ceq $BackupId)) {[IO.File]::Delete($path)}
+                }
+            }
             $txn=Assert-Mql5ReleasePath (Join-Path $stateRoot $BackupId)
             $record=Read-Mql5ReleaseJson (Join-Path $txn 'backup.json')
             Assert-Mql5ReleaseObject $record @('schema_version','backup_id','target','had_installation','files')
@@ -53,7 +76,7 @@ try {
                     # The process may have stopped after journaling but before the first rename.
                     if (-not (Test-Path -LiteralPath (Join-Path $txn 'pending.json'))) {throw 'Backup tree is missing.'}
                     Assert-Mql5ReleaseInventory $target $record.files
-                    [IO.File]::Delete((Join-Path $txn 'pending.json'))
+                    & $resolvePending
                     [ordered]@{action='recovered_unchanged';backup_id=$BackupId;target=$target;files_verified=$true} | ConvertTo-Json
                     exit 0
                 }
@@ -65,23 +88,19 @@ try {
             if ($record.had_installation) {
                 Copy-Item -LiteralPath $tree -Destination $restore -Recurse
                 Assert-Mql5ReleaseInventory $restore $record.files
-            }
+            } else {[IO.Directory]::CreateDirectory($restore) | Out-Null}
             $hadCurrent=Test-Path -LiteralPath $target -PathType Container
-            $currentFiles=if ($hadCurrent) {@(Get-Mql5ReleaseInventory $target)} else {@()}
+            $currentFiles=@(if ($hadCurrent) {Get-Mql5ReleaseInventory $target})
+            if ($hadCurrent) {Copy-Mql5ReleaseSnapshot $target (Join-Path $newTxn 'backup-tree') $currentFiles}
             Write-Mql5ReleaseJson (Join-Path $newTxn 'backup.json') ([ordered]@{schema_version=1;backup_id=$newId;target=$target;had_installation=[bool]$hadCurrent;files=@($currentFiles)})
-            Write-Mql5ReleaseJson (Join-Path $newTxn 'pending.json') @{action='rollback';target=$target}
-            $moved=$false;$published=$false
+            Write-Mql5ReleaseJson (Join-Path $newTxn 'pending.json') @{action='rollback';target=$target;restore_backup_id=$BackupId}
             try {
-                if ($hadCurrent) {[IO.Directory]::Move($target,(Join-Path $newTxn 'backup-tree'));$moved=$true;Assert-Mql5ReleaseInventory (Join-Path $newTxn 'backup-tree') $currentFiles}
-                if ($record.had_installation) {
-                    [IO.Directory]::Move($restore,$target);$published=$true
-                    Assert-Mql5ReleaseInventory $target $record.files
-                }
+                Set-Mql5ReleaseContents $target $restore (Join-Path $newTxn 'displaced-tree') $record.files -RemoveRoot:(-not $record.had_installation)
                 [IO.File]::Delete((Join-Path $newTxn 'pending.json'))
-                [IO.File]::Delete((Join-Path $txn 'pending.json'))
+                & $resolvePending
             } catch {
-                if ($published) {[IO.Directory]::Move($target,(Join-Path $newTxn 'failed-tree'))}
-                if ($moved) {[IO.Directory]::Move((Join-Path $newTxn 'backup-tree'),$target)}
+                if ($hadCurrent) {Assert-Mql5ReleaseInventory $target $currentFiles}
+                elseif (Test-Path -LiteralPath $target) {throw 'Recovery remains pending: the previously absent target was not restored.'}
                 [IO.File]::Delete((Join-Path $newTxn 'pending.json'));throw
             }
             [ordered]@{action='rollback';restored_backup_id=$BackupId;backup_id=$newId;target=$target;files_verified=$true;restart_codex=$true} | ConvertTo-Json
@@ -111,20 +130,18 @@ try {
                 exit 0
             }
         }
-        $before=if ($had) {@(Get-Mql5ReleaseInventory $target)} else {@()}
+        $before=@(if ($had) {Get-Mql5ReleaseInventory $target})
+        if ($had) {Copy-Mql5ReleaseSnapshot $target (Join-Path $txn 'backup-tree') $before}
         Write-Mql5ReleaseJson (Join-Path $txn 'backup.json') ([ordered]@{schema_version=1;backup_id=$id;target=$target;had_installation=[bool]$had;files=@($before)})
         Write-Mql5ReleaseJson (Join-Path $txn 'verified-release.json') $manifest
         Write-Mql5ReleaseJson (Join-Path $txn 'pending.json') @{action='update';target=$target}
         [IO.Directory]::CreateDirectory((Split-Path -Parent $target)) | Out-Null
-        $moved=$false;$published=$false
         try {
-            if ($had) {[IO.Directory]::Move($target,(Join-Path $txn 'backup-tree'));$moved=$true;Assert-Mql5ReleaseInventory (Join-Path $txn 'backup-tree') $before}
-            [IO.Directory]::Move((Join-Path $stage 'mql5-coding'),$target);$published=$true
-            Assert-Mql5ReleaseInventory $target $manifest.files
+            Set-Mql5ReleaseContents $target (Join-Path $stage 'mql5-coding') (Join-Path $txn 'displaced-tree') $manifest.files
             [IO.File]::Delete((Join-Path $txn 'pending.json'))
         } catch {
-            if ($published) {[IO.Directory]::Move($target,(Join-Path $txn 'failed-tree'))}
-            if ($moved) {[IO.Directory]::Move((Join-Path $txn 'backup-tree'),$target)}
+            if ($had) {Assert-Mql5ReleaseInventory $target $before}
+            elseif (Test-Path -LiteralPath $target) {throw 'Recovery remains pending: the previously absent target was not restored.'}
             [IO.File]::Delete((Join-Path $txn 'pending.json'));throw
         }
         [ordered]@{action='updated';version=$Version;source_commit=$release.source_commit;archive_sha256=$release.sha256;backup_id=$id;had_previous_installation=[bool]$had;target=$target;files_verified=$true;restart_codex=$true} | ConvertTo-Json

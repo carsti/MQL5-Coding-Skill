@@ -159,6 +159,48 @@ function Invoke-Mql5ReleaseGh([string[]]$Arguments) {
     if ($LASTEXITCODE -ne 0) {throw 'Authenticated GitHub operation failed. Check gh auth status and repository access.'}
     return (($result -join "`n") | ConvertFrom-Json)
 }
+function Move-Mql5ReleaseItem([string]$Source,[string]$Destination) {
+    $source=Assert-Mql5ReleasePath $Source;$destination=Assert-Mql5ReleasePath $Destination
+    if ([IO.Directory]::Exists($source)) {[IO.Directory]::Move($source,$destination)}
+    else {[IO.File]::Move($source,$destination)}
+}
+function Copy-Mql5ReleaseSnapshot([string]$Source,[string]$Destination,$Files) {
+    Assert-Mql5ReleaseInventory $Source $Files
+    Copy-Item -LiteralPath $Source -Destination $Destination -Recurse
+    Assert-Mql5ReleaseInventory $Destination $Files
+    Assert-Mql5ReleaseInventory $Source $Files
+}
+function Set-Mql5ReleaseContents([string]$Target,[string]$Prepared,[string]$Displaced,$Files,[switch]$RemoveRoot) {
+    # Codex's directory watcher can pin the skill root without FILE_SHARE_DELETE.
+    # Preserve that root and publish its children; keep a complete snapshot before calling.
+    $hadRoot=[IO.Directory]::Exists($Target)
+    $null=Get-Mql5ReleaseInventory $Prepared
+    if ($hadRoot) {$null=Get-Mql5ReleaseInventory $Target}
+    [IO.Directory]::CreateDirectory($Target) | Out-Null
+    [IO.Directory]::CreateDirectory($Displaced) | Out-Null
+    $failed=$Displaced+'-failed';[IO.Directory]::CreateDirectory($failed) | Out-Null
+    $old=@();$published=@()
+    try {
+        foreach ($item in @(Get-ChildItem -LiteralPath $Target -Force | Sort-Object Name)) {
+            Move-Mql5ReleaseItem $item.FullName (Join-Path $Displaced $item.Name)
+            $old+=@($item.Name)
+        }
+        foreach ($item in @(Get-ChildItem -LiteralPath $Prepared -Force | Sort-Object Name)) {
+            Move-Mql5ReleaseItem $item.FullName (Join-Path $Target $item.Name)
+            $published+=@($item.Name)
+        }
+        Assert-Mql5ReleaseInventory $Target $Files
+        if ($RemoveRoot) {
+            if ($Files.Count -ne 0) {throw 'Only a verified empty skill root can be removed.'}
+            [IO.Directory]::Delete($Target,$false)
+        }
+    } catch {
+        foreach ($name in $published) {Move-Mql5ReleaseItem (Join-Path $Target $name) (Join-Path $failed $name)}
+        foreach ($name in $old) {Move-Mql5ReleaseItem (Join-Path $Displaced $name) (Join-Path $Target $name)}
+        if (-not $hadRoot) {[IO.Directory]::Delete($Target,$false)}
+        throw
+    }
+}
 function Get-Mql5SkillGitHubRelease([string]$Version) {
     if ($Version -cnotmatch '\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\z') {throw 'Select an explicit stable version, such as 1.0.0.'}
     $repo='shamwi2846/MQL5-Coding-Skill'; $tag='v'+$Version

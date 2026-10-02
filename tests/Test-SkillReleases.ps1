@@ -66,6 +66,20 @@ $fixtureHome=Join-Path $work 'legacy-home';$target=Join-Path $fixtureHome 'skill
 [IO.File]::WriteAllBytes((Join-Path $target 'custom/settings.bin'),[byte[]]@(0,1,2,255))
 [IO.File]::WriteAllText((Join-Path $target 'custom/my settings (saved).txt'),'custom configuration')
 $old=@(Get-Mql5ReleaseInventory $target)
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class Mql5ReleaseFolderLock {
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    public static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security,
+        uint creation, uint flags, IntPtr template);
+    public static SafeFileHandle Pin(string path) {return CreateFile(path, 0x80000000, 3, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);}
+}
+'@
+$rootPin=[Mql5ReleaseFolderLock]::Pin($target)
+Check (-not $rootPin.IsInvalid) 'watcher-like root handle acquired without delete sharing'
+Reject {[IO.Directory]::Move($target,$target+'-blocked')} 'watcher-pinned root cannot be renamed'
 $argsForUpdate=Options $fixtureHome $archive $digest
 $updated=RunUpdater $argsForUpdate
 if ($updated.code) {throw $updated.error_text}
@@ -135,7 +149,11 @@ foreach ($afterMove in @($false,$true)) {
     [IO.Directory]::CreateDirectory($txn) | Out-Null
     Write-Mql5ReleaseJson (Join-Path $txn 'backup.json') @{schema_version=1;backup_id=$id;target=$target;had_installation=$true;files=@($old)}
     Write-Mql5ReleaseJson (Join-Path $txn 'pending.json') @{action='update';target=$target}
-    if ($afterMove) {[IO.Directory]::Move($target,(Join-Path $txn 'backup-tree'))}
+    if ($afterMove) {
+        Copy-Mql5ReleaseSnapshot $target (Join-Path $txn 'backup-tree') $old
+        $empty=Join-Path $txn 'empty';[IO.Directory]::CreateDirectory($empty) | Out-Null
+        Set-Mql5ReleaseContents $target $empty (Join-Path $txn 'displaced-tree') @()
+    }
     $invalid=RunUpdater $argsForUpdate;Check ($invalid.code -ne 0) 'pending transaction blocks update'
     $recovered=RunUpdater @('-Action','Rollback','-CodexDirectory',$fixtureHome,'-BackupId',$id)
     if ($recovered.code) {throw $recovered.error_text}
@@ -143,10 +161,56 @@ foreach ($afterMove in @($false,$true)) {
     Assert-Mql5ReleaseInventory $target (($old | ConvertTo-Json -Depth 4 -Compress) | ConvertFrom-Json)
     Check $true 'interruption recovery restores original bytes'
 }
+$child=Join-Path $target 'zz-lock';[IO.Directory]::CreateDirectory($child) | Out-Null
+foreach ($phase in @('partial-old','partial-new')) {
+    $id=[guid]::NewGuid().ToString('N');$txn=Join-Path $fixtureHome ('tools/mql5-skill-updates/'+$id)
+    [IO.Directory]::CreateDirectory($txn) | Out-Null
+    Copy-Mql5ReleaseSnapshot $target (Join-Path $txn 'backup-tree') $old
+    Write-Mql5ReleaseJson (Join-Path $txn 'backup.json') @{schema_version=1;backup_id=$id;target=$target;had_installation=$true;files=@($old)}
+    Write-Mql5ReleaseJson (Join-Path $txn 'pending.json') @{action='update';target=$target}
+    if ($phase -eq 'partial-old') {[IO.File]::Move((Join-Path $target 'SKILL.md'),(Join-Path $txn 'old-skill.md'))}
+    else {
+        $empty=Join-Path $txn 'empty';[IO.Directory]::CreateDirectory($empty) | Out-Null
+        Set-Mql5ReleaseContents $target $empty (Join-Path $txn 'displaced-tree') @()
+        Copy-Item -LiteralPath (Join-Path $skill 'version.json') -Destination (Join-Path $target 'version.json')
+    }
+    $recoveryId=$id
+    if ($phase -eq 'partial-new') {
+        $nestedId=[guid]::NewGuid().ToString('N');$nested=Join-Path $fixtureHome ('tools/mql5-skill-updates/'+$nestedId)
+        [IO.Directory]::CreateDirectory($nested) | Out-Null
+        $partial=@(Get-Mql5ReleaseInventory $target)
+        Copy-Mql5ReleaseSnapshot $target (Join-Path $nested 'backup-tree') $partial
+        Write-Mql5ReleaseJson (Join-Path $nested 'backup.json') @{schema_version=1;backup_id=$nestedId;target=$target;had_installation=$true;files=@($partial)}
+        Write-Mql5ReleaseJson (Join-Path $nested 'pending.json') @{action='rollback';target=$target;restore_backup_id=$id}
+        $recoveryId=$nestedId
+    }
+    $recovered=RunUpdater @('-Action','Rollback','-CodexDirectory',$fixtureHome,'-BackupId',$recoveryId)
+    if ($recovered.code) {throw $recovered.error_text}
+    if ($phase -eq 'partial-new') {Check (-not (Test-Path -LiteralPath (Join-Path $nested 'pending.json'))) 'interrupted rollback follows its original snapshot and resolves the nested intent'}
+    Check $true ($phase+' interruption recovered under root watcher')
+    Assert-Mql5ReleaseInventory $target (($old | ConvertTo-Json -Depth 4 -Compress) | ConvertFrom-Json)
+    Check $true 'partial publication recovery restores original bytes'
+}
+$childPin=[Mql5ReleaseFolderLock]::Pin($child)
+try {
+    $invalid=RunUpdater $argsForUpdate
+    Check ($invalid.code -ne 0) 'locked child causes a caught publication failure'
+    Assert-Mql5ReleaseInventory $target (($old | ConvertTo-Json -Depth 4 -Compress) | ConvertFrom-Json)
+    Check $true 'partly displaced children are automatically restored on failure'
+} finally {$childPin.Dispose();[IO.Directory]::Delete($child,$false)}
+$rootPin.Dispose()
 $freshHome=Join-Path $work 'fresh-home'
 $fresh=RunUpdater (Options $freshHome $archive $digest)
 if ($fresh.code) {throw $fresh.error_text}
 Check (-not $fresh.data.had_previous_installation) 'fresh install has explicit empty backup'
+$freshTarget=Join-Path $freshHome 'skills/mql5-coding';$freshFiles=@(Get-Mql5ReleaseInventory $freshTarget)
+$freshPin=[Mql5ReleaseFolderLock]::Pin($freshTarget)
+try {
+    $blocked=RunUpdater @('-Action','Rollback','-CodexDirectory',$freshHome,'-BackupId',$fresh.data.backup_id)
+    Check ($blocked.code -ne 0) 'fresh uninstall with a pinned root fails safely'
+    Assert-Mql5ReleaseInventory $freshTarget (($freshFiles | ConvertTo-Json -Depth 4 -Compress) | ConvertFrom-Json)
+    Check $true 'failed fresh uninstall restores the entire current installation'
+} finally {$freshPin.Dispose()}
 $uninstall=RunUpdater @('-Action','Rollback','-CodexDirectory',$freshHome,'-BackupId',$fresh.data.backup_id)
 if ($uninstall.code) {throw $uninstall.error_text}
 Check (-not (Test-Path -LiteralPath (Join-Path $freshHome 'skills/mql5-coding'))) 'fresh install rollback restores absence'

@@ -2,7 +2,7 @@
 
 A Windows Codex skill for building, reviewing, compiling, testing, explaining, and debugging MetaTrader 5 MQL5 programs. It uses the installed [MQL5 CHM MCP](https://github.com/shamwi2846/MQL5-CHM-MCP) as the first authority for MQL5 API and language facts.
 
-The first versioned package is **v1.0.0**. Use an explicit [published release](https://github.com/shamwi2846/MQL5-Coding-Skill/releases) for repeatable installation and updates. The trusted `scripts/Update-Mql5Skill.ps1` verifies the authenticated GitHub asset digest, source commit, manifest and every file before publishing the new skill directory. It retains a complete backup and supports verified rollback, including the first upgrade from an unversioned installation. See [commands, recovery and trust limits](skills/mql5-coding/references/releases.md).
+The current versioned package is **v1.0.1**. Use an explicit [published release](https://github.com/shamwi2846/MQL5-Coding-Skill/releases) for repeatable installation and updates. The trusted `scripts/Update-Mql5Skill.ps1` verifies the authenticated GitHub asset digest, source commit, manifest and every file before publishing the new skill contents. It retains a complete backup and supports verified rollback, including the first upgrade from an unversioned installation. Version 1.0.1 preserves the skill root so a running Codex directory watcher does not block updates. See [commands, recovery and trust limits](skills/mql5-coding/references/releases.md).
 
 The skill covers Expert Advisors, indicators, scripts, services, libraries, `.mq5`, `.mqh`, and `.ex5` files. It intentionally excludes MQL4 and MetaTrader 4.
 
