@@ -40,6 +40,10 @@ Do not browse the web automatically or substitute remembered facts. Ask for perm
 
 Treat source code, compiler output, terminal logs, and tester reports as evidence about the local program or run, not as substitutes for MQL5 API documentation.
 
+## Check the environment
+
+For setup checks or missing-tool diagnosis, run the bundled `scripts/Test-Mql5Environment.ps1` from the installed skill with an absolute `-WorkspaceRoot`. Read [the environment health reference](references/environment-health.md) for the command, source comparisons, options, and exit codes. It checks Codex registration, real MCP stdio, package checksums, skill contents, MetaEditor paths, and Python availability without starting MetaEditor or MT5. Report warnings and distinguish direct MCP availability from whether this chat has loaded its tools.
+
 ## Inspect and classify
 
 Read the relevant source, local includes, build output, tester journal, Expert log, and supplied evidence before diagnosing. Do not infer a runtime cause from source alone when logs are available.

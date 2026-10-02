@@ -16,6 +16,8 @@ EXPECTED_SKILL_FILES = {
     "agents/openai.yaml",
     "references/strategy-tester.md",
     "references/mcp-contract.json",
+    "references/environment-health.md",
+    "scripts/Test-Mql5Environment.ps1",
     "scripts/Compile-Mql5.ps1",
     "scripts/CompilationReceipt.ps1",
     "scripts/CompilerProcessJob.cs",
@@ -130,7 +132,7 @@ def main() -> int:
         if phrase not in reference_text:
             fail(f"Strategy Tester reference is missing safeguard: {phrase}")
 
-    for markdown_path in [skill_path, reference_path, REPOSITORY_ROOT / "README.md"]:
+    for markdown_path in [skill_path, reference_path, SKILL_ROOT / "references" / "environment-health.md", REPOSITORY_ROOT / "README.md"]:
         text = markdown_path.read_text(encoding="utf-8")
         validate_relative_markdown_links(markdown_path, text)
 

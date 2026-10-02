@@ -16,6 +16,20 @@ The skill covers Expert Advisors, indicators, scripts, services, libraries, `.mq
 
 Ordinary source review and explanation do not start MetaTrader, MetaEditor, or Strategy Tester.
 
+## One environment health command
+
+Run the installed read-only checker to report Codex registration, real MCP stdio availability, listed package checksums and versions, source/installed differences, MetaEditor paths/builds, and Python/PyYAML availability:
+
+```powershell
+$codexDirectory = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
+    Join-Path $env:USERPROFILE '.codex'
+} else { $env:CODEX_HOME }
+$healthCommand = Join-Path $codexDirectory 'skills\mql5-coding\scripts\Test-Mql5Environment.ps1'
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $healthCommand -WorkspaceRoot '<absolute-workspace-directory>'
+```
+
+Use `-Json` for structured output and `-ReportPath '<new-report.json>'` to retain evidence. Missing optional compiler/Python tools and source differences are warnings; `-RequireCompiler` and `-RequirePython` make their absence fail. This command never starts MetaEditor/MT5 or changes configuration. Direct stdio success does not establish tool loading in the current chat. See [all options and limits](skills/mql5-coding/references/environment-health.md).
+
 ## Documentation and compilation
 
 For an identifier lookup, check the returned passage for the complete identifier and inspect `focus_match` when present. An `approximate` or `none` result does not establish support for the requested identifier; continue reading or select another documented result.
@@ -73,8 +87,10 @@ skills/mql5-coding/
   SKILL.md
   agents/openai.yaml
   references/mcp-contract.json
+  references/environment-health.md
   references/strategy-tester.md
   scripts/Compile-Mql5.ps1
+  scripts/Test-Mql5Environment.ps1
   scripts/CompilationReceipt.ps1
   scripts/CompilerProcessJob.cs
   scripts/Invoke-Mt5TesterSmoke.ps1
@@ -92,6 +108,7 @@ GitHub Actions and the local test commands validate:
 - skill metadata, dependency declaration, links, portable paths, and the packaged MCP consumer contract;
 - the actual MCP server against this skill on each trusted push and pull request, with exact repository revisions retained in a compatibility artifact;
 - PowerShell syntax under PowerShell 7 and Windows PowerShell 5.1;
+- environment-health success and failure cases against a real MCP bundle under both shells, including disabled registrations, checksum failures, source differences, optional dependencies, timeouts, redaction, preserved files, and an editor that must never be launched;
 - compiler-wrapper completion, source-path lease, artifact, exit-code contracts, compilation receipts, and automatic tester verification/rejection of changed evidence without starting real MetaEditor;
 - Strategy Tester preflight, mount-manager drive validation, path-handle volume correlation, non-reparse path-chain leases, pinned nonempty-directory guards, pinned journal evidence, stable terminal-image identity checks, secret redaction, unambiguous correlated completion, adversarial log rejection, and timeout cleanup without starting real MT5.
 
