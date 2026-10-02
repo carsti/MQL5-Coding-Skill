@@ -15,6 +15,7 @@ EXPECTED_SKILL_FILES = {
     "agents/openai.yaml",
     "references/strategy-tester.md",
     "scripts/Compile-Mql5.ps1",
+    "scripts/CompilationReceipt.ps1",
     "scripts/CompilerProcessJob.cs",
     "scripts/Invoke-Mt5TesterSmoke.ps1",
     "scripts/TesterEvidence.ps1",
@@ -112,6 +113,7 @@ def main() -> int:
     for phrase in [
         "-AcknowledgeSavedAccountRisk",
         "-ExpectedExpertSha256",
+        "-CompilationReceiptPath",
         "-UseExpertDefaults",
         "MQL5_CODING_PASS:",
         "Windows Job Object",

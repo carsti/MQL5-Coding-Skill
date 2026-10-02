@@ -309,6 +309,28 @@ namespace Mql5Coding
                 }
             }
 
+            public byte[] ReadAllBytes(int maximumBytes)
+            {
+                EnsureAvailable();
+                long length = GetLength();
+                if (length < 0 || length > maximumBytes)
+                    throw new IOException("Compiler log exceeds the receipt size limit.");
+                using (FileStream stream = OpenReadStreamCopy())
+                {
+                    stream.Seek(0, SeekOrigin.Begin);
+                    byte[] bytes = new byte[(int)length];
+                    int offset = 0;
+                    while (offset < bytes.Length)
+                    {
+                        int count = stream.Read(bytes, offset, bytes.Length - offset);
+                        if (count == 0)
+                            throw new EndOfStreamException("Compiler log was truncated.");
+                        offset += count;
+                    }
+                    return bytes;
+                }
+            }
+
             public long GetLength()
             {
                 EnsureAvailable();

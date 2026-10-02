@@ -93,6 +93,21 @@ internal static class FakeTerminal
         Dictionary<string, string> config = ReadConfig(configPath);
         string mode = Environment.GetEnvironmentVariable("FAKE_MT5_MODE") ?? "pass";
         string marker = Environment.GetEnvironmentVariable("FAKE_MT5_MARKER") ?? "";
+        string receiptLocks = Environment.GetEnvironmentVariable("FAKE_MT5_RECEIPT_LOCK_PATHS") ?? "";
+        foreach (string lockedPath in receiptLocks.Split(new char[] { '|' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            bool writable = false;
+            try
+            {
+                using (FileStream probe = new FileStream(lockedPath, FileMode.Open,
+                    FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete))
+                    writable = true;
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            if (writable)
+                throw new InvalidOperationException("Compilation evidence was writable while the tester ran.");
+        }
         if (mode == "hold")
         {
             string readyPath = Environment.GetEnvironmentVariable("FAKE_MT5_READY_PATH");

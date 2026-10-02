@@ -14,6 +14,7 @@ $compilerProcessJobSource = Join-Path $skillRoot 'scripts\CompilerProcessJob.cs'
 $testerProcessJobSource = Join-Path $skillRoot 'scripts\TesterProcessJob.cs'
 $testerPathIntegrity = Join-Path $skillRoot 'scripts\TesterPathIntegrity.ps1'
 $testerEvidence = Join-Path $skillRoot 'scripts\TesterEvidence.ps1'
+$compilationReceiptHelper = Join-Path $skillRoot 'scripts\CompilationReceipt.ps1'
 $fakeTerminalSource = Join-Path $PSScriptRoot 'FakeTerminal.cs'
 $fakeMetaEditorSource = Join-Path $PSScriptRoot 'FakeMetaEditor.cs'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('mql5-coding-skill-test-' + [guid]::NewGuid().ToString('N'))
@@ -129,7 +130,9 @@ function Invoke-RunnerCase {
         [Parameter(Mandatory = $true)]
         [string]$PresetPath,
         [Parameter(Mandatory = $true)]
-        [string]$ExpertSha256,
+        [AllowEmptyString()][string]$ExpertSha256,
+        [string]$CompilationReceiptPath,
+        [string[]]$LockedCompilationPaths = @(),
         [string]$FakeMode = 'pass',
         [string]$ExpectedLogMarker,
         [string]$ExpectedLogMarkerFile,
@@ -171,12 +174,17 @@ function Invoke-RunnerCase {
             @('TimeoutSeconds', [string]$TimeoutSeconds),
             @('OutputDirectory', $outputDirectory)
         )) {
+        if ($pair[0] -eq 'ExpectedExpertSha256' -and [string]::IsNullOrWhiteSpace($ExpertSha256)) { continue }
         $arguments.Add('-' + [string]$pair[0])
         $arguments.Add((Quote-NativeArgument -Value ([string]$pair[1])))
     }
     if (-not [string]::IsNullOrWhiteSpace($ExpectedLogMarker)) {
         $arguments.Add('-ExpectedLogMarker')
         $arguments.Add((Quote-NativeArgument -Value $ExpectedLogMarker))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($CompilationReceiptPath)) {
+        $arguments.Add('-CompilationReceiptPath')
+        $arguments.Add((Quote-NativeArgument -Value $CompilationReceiptPath))
     }
     if (-not [string]::IsNullOrWhiteSpace($ExpectedLogMarkerFile)) {
         $arguments.Add('-ExpectedLogMarkerFile')
@@ -192,6 +200,7 @@ function Invoke-RunnerCase {
     $startInfo.RedirectStandardError = $true
     $startInfo.EnvironmentVariables['FAKE_MT5_MODE'] = $FakeMode
     $startInfo.EnvironmentVariables['FAKE_MT5_MARKER'] = $FakeMarker
+    $startInfo.EnvironmentVariables['FAKE_MT5_RECEIPT_LOCK_PATHS'] = $LockedCompilationPaths -join '|'
 
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $startInfo
@@ -300,10 +309,14 @@ function Invoke-CompilerCase {
         $process.Dispose()
     }
 
+    $receiptMatch = [regex]::Match($standardOutput, '(?m)^MQL5_COMPILE_RECEIPT=(.+)\r?$')
+    $receiptPath = if ($receiptMatch.Success) { $receiptMatch.Groups[1].Value.TrimEnd("`r") } else { $null }
     return [pscustomobject]@{
         ExitCode = $exitCode
         StandardOutput = $standardOutput
         StandardError = $standardError
+        ReceiptPath = $receiptPath
+        Receipt = if ($null -ne $receiptPath) { Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json } else { $null }
     }
 }
 
@@ -314,6 +327,7 @@ foreach ($requiredFile in @(
         $testerProcessJobSource,
         $testerPathIntegrity,
         $testerEvidence,
+        $compilationReceiptHelper,
         $fakeTerminalSource,
         $fakeMetaEditorSource
     )) {
@@ -325,6 +339,7 @@ Assert-PowerShellParses -Path $runner
 Assert-PowerShellParses -Path $compiler
 Assert-PowerShellParses -Path $testerPathIntegrity
 Assert-PowerShellParses -Path $testerEvidence
+Assert-PowerShellParses -Path $compilationReceiptHelper
 if (-not ('Mql5Coding.CompilerProcessJob' -as [type])) {
     Add-Type -Path $compilerProcessJobSource
 }
@@ -3337,6 +3352,99 @@ try {
     Assert-True -Condition ($compileSuccess.StandardOutput -match 'MQL5_COMPILE_ARTIFACT=') `
         -Message 'Successful real compilation did not report its artifact.'
 
+    $receipt = $compileSuccess.Receipt
+    Assert-True -Condition (
+        $null -ne $receipt -and $receipt.schema_version -eq 1 -and
+        $receipt.status -ceq 'success' -and $receipt.exit_code -eq 0 -and
+        $receipt.errors -eq 0 -and $receipt.warnings -eq 0 -and
+        -not $receipt.syntax_only -and $receipt.compiler.build -eq 1234 -and
+        $receipt.compiler.file_version -ceq '5.0.0.1234' -and
+        $receipt.source.sha256 -eq (Get-FileHash -LiteralPath $compileSource -Algorithm SHA256).Hash.ToLowerInvariant() -and
+        $receipt.expert.sha256 -eq (Get-FileHash -LiteralPath $compileArtifact -Algorithm SHA256).Hash.ToLowerInvariant() -and
+        $receipt.compiler.sha256 -eq (Get-FileHash -LiteralPath $metaEditor -Algorithm SHA256).Hash.ToLowerInvariant() -and
+        $receipt.log.sha256 -eq (Get-FileHash -LiteralPath $receipt.log.path -Algorithm SHA256).Hash.ToLowerInvariant() -and
+        [IO.File]::ReadAllText($receipt.log.path) -match 'Result: 0 errors, 0 warnings' -and
+        $receipt.log.path -cne $compileLog -and
+        (Get-FileHash -LiteralPath $compileLog -Algorithm SHA256).Hash -eq $sentinelLogHash
+    ) -Message 'Compiler receipt did not commit the exact source, EX5, compiler, and retained run log while preserving the prior log.'
+
+    $receiptArguments = @{
+        Mode = 'PreflightOnly'; TerminalPath = $terminal; TerminalDataPath = $dataPath
+        ExpertPath = $compileArtifact; PresetPath = $preset; ExpertSha256 = ''
+        CompilationReceiptPath = $compileSuccess.ReceiptPath
+    }
+    $receiptPreflight = Invoke-RunnerCase -Name 'receipt-valid' @receiptArguments
+    Assert-True -Condition (
+        $receiptPreflight.ExitCode -eq 0 -and $receiptPreflight.Result.inputs.compilation_receipt.verified -and
+        $receiptPreflight.Result.inputs.expected_expert_sha256 -ceq $receipt.expert.sha256 -and
+        $receiptPreflight.Result.inputs.compilation_receipt.sha256 -ceq
+            (Get-FileHash -LiteralPath $compileSuccess.ReceiptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    ) -Message "Receipt preflight failed or lost its commitment: $($receiptPreflight.StandardError)"
+    $receiptArguments.Mode = 'Execute'
+    $receiptArguments.LockedCompilationPaths = @($compileSuccess.ReceiptPath, $receipt.source.path, $receipt.expert.path, $receipt.log.path)
+    $receiptExecute = Invoke-RunnerCase -Name 'receipt-execute' @receiptArguments
+    Assert-True -Condition ($receiptExecute.ExitCode -eq 0 -and $receiptExecute.Result.inputs.compilation_receipt.verified) `
+        -Message "Receipt-bound synthetic execution failed: $($receiptExecute.StandardError)"
+    $receiptArguments.Mode = 'PreflightOnly'
+    $receiptArguments.Remove('LockedCompilationPaths')
+
+    foreach ($field in @('source', 'expert', 'log')) {
+        $committedPath = $receipt.$field.path
+        $originalBytes = [IO.File]::ReadAllBytes($committedPath)
+        try {
+            [IO.File]::AppendAllText($committedPath, 'tampered')
+            $blocked = Invoke-RunnerCase -Name "receipt-changed-$field" @receiptArguments
+            Assert-True -Condition ($blocked.ExitCode -eq 2 -and $null -eq $blocked.Result) `
+                -Message "Changed receipt $field was staged or accepted."
+        }
+        finally { [IO.File]::WriteAllBytes($committedPath, $originalBytes) }
+    }
+    foreach ($mutation in @('failed', 'syntax', 'counts', 'schema', 'string-count', 'wrong-expert')) {
+        $badReceipt = $receipt | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+        switch ($mutation) {
+            'failed' { $badReceipt.status = 'compile_error'; $badReceipt.exit_code = 1 }
+            'syntax' { $badReceipt.syntax_only = $true }
+            'counts' { $badReceipt.warnings = 1 }
+            'schema' { $badReceipt.schema_version = 999 }
+            'string-count' { $badReceipt.errors = '0' }
+            'wrong-expert' { $badReceipt.expert.path = $expert }
+        }
+        $badPath = Join-Path $compileDirectory "receipt-$mutation.json"
+        [IO.File]::WriteAllText($badPath, ($badReceipt | ConvertTo-Json -Depth 8), (New-Object Text.UTF8Encoding($false)))
+        $receiptArguments.CompilationReceiptPath = $badPath
+        $blocked = Invoke-RunnerCase -Name "receipt-invalid-$mutation" @receiptArguments
+        Assert-True -Condition ($blocked.ExitCode -eq 2 -and $null -eq $blocked.Result) `
+            -Message "Invalid receipt '$mutation' was staged or accepted."
+    }
+    $badPath = Join-Path $compileDirectory 'receipt-malformed.json'
+    [IO.File]::WriteAllText($badPath, '{ malformed')
+    $receiptArguments.CompilationReceiptPath = $badPath
+    $blocked = Invoke-RunnerCase -Name 'receipt-malformed' @receiptArguments
+    Assert-True -Condition ($blocked.ExitCode -eq 2 -and $null -eq $blocked.Result) `
+        -Message 'Malformed receipt was accepted.'
+    $receiptArguments.CompilationReceiptPath = $compileSuccess.ReceiptPath
+    $receiptArguments.ExpertSha256 = ('0' * 64)
+    $blocked = Invoke-RunnerCase -Name 'receipt-conflicting-hash' @receiptArguments
+    Assert-True -Condition ($blocked.ExitCode -eq 2 -and $null -eq $blocked.Result) `
+        -Message 'Receipt silently overrode a conflicting explicit EX5 hash.'
+
+    $writerNode = $compilerAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Write-CompilationReceipt' }, $true)
+    $publicationTarget = Join-Path $compileDirectory 'receipt-publish-collision.json'
+    $publicationLog = Join-Path $compileDirectory 'receipt-publish-collision.log'
+    [IO.File]::WriteAllText($publicationTarget, 'preserved receipt sentinel')
+    $publicationHash = (Get-FileHash -LiteralPath $publicationTarget -Algorithm SHA256).Hash
+    $publicationBlocked = & {
+        param($Definition, $Target, $Log)
+        . ([scriptblock]::Create($Definition))
+        $receiptPath = $Target
+        $receiptLogPath = $Log
+        $receiptLogBytes = [Text.Encoding]::UTF8.GetBytes('Result: 0 errors, 0 warnings')
+        $receipt = [ordered]@{status='success';log=$null}
+        try { Write-CompilationReceipt; return $false } catch { return $true }
+    } $writerNode.Extent.Text $publicationTarget $publicationLog
+    Assert-True -Condition ($publicationBlocked -and (Get-FileHash -LiteralPath $publicationTarget -Algorithm SHA256).Hash -eq $publicationHash) `
+        -Message 'Receipt publication overwrote an existing file or hid a publication failure.'
+
     Assert-True -Condition (
         [Mql5Coding.CompilerProcessJob]::GetFileIdentity($artifactHardlinkSentinel) -ceq
             $artifactHardlinkIdentity -and
@@ -3578,6 +3686,15 @@ try {
         -SyntaxOnly
     Assert-True -Condition ($syntaxOnly.ExitCode -eq 0) `
         -Message "Synthetic syntax-only exit code was $($syntaxOnly.ExitCode)."
+
+    foreach ($case in @($compileError, $warningsAsErrors, $missingArtifact, $staleArtifact)) {
+        Assert-True -Condition ($null -ne $case.Receipt -and $case.Receipt.exit_code -eq $case.ExitCode -and $case.Receipt.status -cne 'success' -and $null -eq $case.Receipt.expert) `
+            -Message 'A failed compilation produced a missing or misleading receipt.'
+    }
+    Assert-True -Condition ($syntaxOnly.Receipt.syntax_only -and $null -eq $syntaxOnly.Receipt.expert -and $syntaxOnly.Receipt.exit_code -eq 0) `
+        -Message 'Syntax-only receipt claimed to produce an EX5.'
+    Assert-True -Condition ($compileSuccess.ReceiptPath -cne $syntaxOnly.ReceiptPath -and (Test-Path -LiteralPath $compileSuccess.ReceiptPath)) `
+        -Message 'A later compilation overwrote an earlier receipt.'
 
     $argumentsPath = Join-Path $testRoot 'fake-metaeditor-arguments.txt'
     $rootInclude = [IO.Path]::GetPathRoot($testRoot)

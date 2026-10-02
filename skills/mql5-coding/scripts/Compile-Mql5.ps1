@@ -75,6 +75,83 @@ $sourceParentLease = $null
 $sourceReadLease = $null
 $compileLaunch = $null
 $compileJobEmpty = $true
+$receiptId = [guid]::NewGuid().ToString('N')
+$receiptPath = $null
+$receiptLogPath = $null
+$receiptParentLease = $null
+$receiptLogBytes = $null
+$receipt = [ordered]@{
+    schema_version = 1
+    kind = 'mql5_compilation_receipt'
+    run_id = $receiptId
+    started_utc = [datetime]::UtcNow.ToString('o')
+    ended_utc = $null
+    status = 'tool_error'
+    exit_code = 2
+    errors = $null
+    warnings = $null
+    syntax_only = [bool]$SyntaxOnly
+    warnings_as_errors = [bool]$WarningsAsErrors
+    include_root = $null
+    compiler = $null
+    source = $null
+    expert = $null
+    log = $null
+    message = $null
+}
+
+function Get-CompilationFileRecord {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)]$Lease)
+    return [ordered]@{
+        path = $Path
+        byte_length = [long]$Lease.GetLength()
+        sha256 = $Lease.GetSha256().ToLowerInvariant()
+    }
+}
+
+function Write-CompilationReceipt {
+    # Unique CreateNew files never replace an earlier receipt, source, or log.
+    # The canonical parent remains leased until both evidence files are closed.
+    $logStream = $null
+    $jsonStream = $null
+    try {
+        if ($null -ne $receiptLogBytes) {
+            $logStream = [IO.File]::Open($receiptLogPath, [IO.FileMode]::CreateNew,
+                [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+            $logStream.Write($receiptLogBytes, 0, $receiptLogBytes.Length)
+            $logStream.Flush($true)
+            $algorithm = [Security.Cryptography.SHA256]::Create()
+            try {
+                $logStream.Position = 0
+                $logHash = ([BitConverter]::ToString($algorithm.ComputeHash($logStream))).Replace('-', '').ToLowerInvariant()
+            }
+            finally { $algorithm.Dispose() }
+            $receipt.log = [ordered]@{
+                path = $receiptLogPath
+                byte_length = [long]$logStream.Length
+                sha256 = $logHash
+            }
+        }
+        $jsonBytes = (New-Object Text.UTF8Encoding($false)).GetBytes(
+            ($receipt | ConvertTo-Json -Depth 8) + [Environment]::NewLine
+        )
+        $pendingPath = $receiptPath + '.pending'
+        $jsonStream = [IO.File]::Open($pendingPath, [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::Write, [IO.FileShare]::Read)
+        $jsonStream.Write($jsonBytes, 0, $jsonBytes.Length)
+        $jsonStream.Flush($true)
+        $jsonStream.Dispose()
+        $jsonStream = $null
+        if ($null -ne $logStream) { $logStream.Dispose(); $logStream = $null }
+        # Publish the complete file atomically, after all writes/flushes/closes.
+        # File.Move refuses an occupied destination rather than overwriting it.
+        [IO.File]::Move($pendingPath, $receiptPath)
+    }
+    finally {
+        if ($null -ne $jsonStream) { $jsonStream.Dispose() }
+        if ($null -ne $logStream) { $logStream.Dispose() }
+    }
+}
 
 function Resolve-ExistingFile {
     param(
@@ -627,6 +704,12 @@ try {
         throw 'Source file resolved outside its pinned canonical parent directory.'
     }
 
+    $receiptParentLease = [Mql5Coding.CompilerProcessJob]::OpenDirectoryIdentityLease($sourceParentPath)
+    $receiptPath = Join-Path $sourceParentPath "mql5-compile-$receiptId.json"
+    $receiptLogPath = Join-Path $sourceParentPath "mql5-compile-$receiptId.log"
+    $receipt.source = Get-CompilationFileRecord -Path $resolvedSource -Lease $sourceReadLease
+    $receipt.include_root = $resolvedInclude
+
     $resolvedMetaEditor = Resolve-MetaEditorExecutable -RequestedPath $MetaEditorPath
     $metaEditorLeaf = [System.IO.Path]::GetFileName($resolvedMetaEditor)
     $metaEditorParentPath = [System.IO.Path]::GetDirectoryName($resolvedMetaEditor)
@@ -644,6 +727,12 @@ try {
         )) {
         throw 'MetaEditor resolved outside its pinned canonical parent directory.'
     }
+
+    $receipt.compiler = Get-CompilationFileRecord -Path $resolvedMetaEditor -Lease $metaEditorReadLease
+    $editorVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($resolvedMetaEditor)
+    $receipt.compiler.file_version = $editorVersion.FileVersion
+    # MetaEditor stores its advertised build in 5.0.0.<build>.
+    $receipt.compiler.build = $editorVersion.FilePrivatePart
 
     $artifactPath = [System.IO.Path]::ChangeExtension($resolvedSource, '.ex5')
     $logPath = [System.IO.Path]::ChangeExtension($resolvedSource, '.log')
@@ -921,6 +1010,7 @@ try {
             $logOutputMovableLease = $logPair.Movable
             $logOutputLease = $logPair.Pinned
             $logText = Read-SharedText -LiteralPath $logPath -Lease $logOutputLease
+            $receiptLogBytes = $logOutputLease.ReadAllBytes(16777216)
             $finalMatches = [regex]::Matches(
                 $logText,
                 '(?im)^\s*Result:\s*(?<errors>\d+)\s+errors?,\s*(?<warnings>\d+)\s+warnings?'
@@ -975,6 +1065,9 @@ try {
                 }
                 else {
                     $artifactAccepted = -not $SyntaxOnly
+                    if ($artifactAccepted) {
+                        $receipt.expert = Get-CompilationFileRecord -Path $artifactPath -Lease $artifactOutputLease
+                    }
                     $exitCode = $ExitSuccess
                     $status = 'success'
                 }
@@ -1174,6 +1267,31 @@ finally {
     }
 }
 
+$receiptPublished = $false
+try {
+    if ($null -ne $receiptParentLease) {
+        # Publish only after process, output restoration, and lock cleanup decide
+        # the final exit code. A failed attempt never receives a success receipt.
+        $receipt.ended_utc = [datetime]::UtcNow.ToString('o')
+        $receipt.status = $status
+        $receipt.exit_code = $exitCode
+        $receipt.errors = $errorCount
+        $receipt.warnings = $warningCount
+        $receipt.message = $errorMessage
+        if ($exitCode -ne $ExitSuccess) { $receipt.expert = $null }
+        Write-CompilationReceipt
+        $receiptPublished = $true
+    }
+}
+catch {
+    $exitCode = $ExitToolError
+    $status = 'tool_error'
+    $errorMessage = "Compilation receipt publication failed: $($_.Exception.Message)"
+}
+finally {
+    if ($null -ne $receiptParentLease) { $receiptParentLease.Dispose() }
+}
+
 if (-not [string]::IsNullOrWhiteSpace($logText)) {
     Write-Output 'MQL5_METAEDITOR_LOG_BEGIN'
     Write-Output $logText.TrimEnd()
@@ -1187,6 +1305,9 @@ if (-not [string]::IsNullOrWhiteSpace($errorMessage)) {
 $errorValue = if ($null -eq $errorCount) { 'unknown' } else { [string]$errorCount }
 $warningValue = if ($null -eq $warningCount) { 'unknown' } else { [string]$warningCount }
 Write-Output "MQL5_COMPILE_SUMMARY status=$status errors=$errorValue warnings=$warningValue exit_code=$exitCode"
+if ($receiptPublished) {
+    Write-Output "MQL5_COMPILE_RECEIPT=$receiptPath"
+}
 if ($exitCode -eq $ExitSuccess -and -not $SyntaxOnly -and $null -ne $artifactPath) {
     Write-Output "MQL5_COMPILE_ARTIFACT=$artifactPath"
 }

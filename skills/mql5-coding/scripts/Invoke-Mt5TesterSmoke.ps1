@@ -3,6 +3,7 @@
 param(
     $ExpertPath,
     $ExpectedExpertSha256,
+    $CompilationReceiptPath,
     $Symbol,
     $Period,
     $FromDate,
@@ -47,6 +48,7 @@ catch {
 try {
     . (Join-Path $PSScriptRoot 'TesterPathIntegrity.ps1')
     . (Join-Path $PSScriptRoot 'TesterEvidence.ps1')
+    . (Join-Path $PSScriptRoot 'CompilationReceipt.ps1')
 }
 catch {
     $helperLoadMessage = 'Tester helper scripts could not be loaded.'
@@ -112,6 +114,8 @@ $result = [ordered]@{
     inputs = [ordered]@{
         expert_path = $ExpertPath
         expected_expert_sha256 = if ([string]::IsNullOrWhiteSpace($ExpectedExpertSha256)) { $null } else { $ExpectedExpertSha256 }
+        compilation_receipt_path = if ([string]::IsNullOrWhiteSpace($CompilationReceiptPath)) { $null } else { $CompilationReceiptPath }
+        compilation_receipt = $null
         set_path = if ([string]::IsNullOrWhiteSpace($SetPath)) { $null } else { $SetPath }
         use_expert_defaults = [bool]$UseExpertDefaults
         symbol = $Symbol
@@ -406,6 +410,13 @@ try {
     }
     if ((Get-Item -LiteralPath $expert).Length -le 0) {
         throw "ExpertPath is empty: $expert"
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($CompilationReceiptPath)) {
+        $stagingReadLocksReleased = $false
+        $result.inputs.compilation_receipt = Test-Mql5CompilationReceipt -Path $CompilationReceiptPath -ExpertPath $expert -ExpectedExpertHash $expectedExpertHash -Tracker $stagingReadLocks -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries
+        $expectedExpertHash = [string]$result.inputs.compilation_receipt.expert_sha256
+        $result.inputs.expected_expert_sha256 = $expectedExpertHash
     }
 
     $preset = $null

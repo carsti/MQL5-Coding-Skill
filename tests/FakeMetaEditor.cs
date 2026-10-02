@@ -4,6 +4,8 @@ using System.IO;
 using System.Text;
 using System.Threading;
 
+[assembly: System.Reflection.AssemblyFileVersion("5.0.0.1234")]
+
 internal static class FakeMetaEditor
 {
     private static string SourcePath(string[] args)

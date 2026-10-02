@@ -93,6 +93,10 @@ Interpret the wrapper exit code exactly:
 
 Report all emitted errors and warnings. Never claim compilation succeeded unless the wrapper returns `0`. A successful compile does not prove correct Strategy Tester behavior, broker compatibility, demo behavior, live behavior, or profitability.
 
+Retain the path emitted as `MQL5_COMPILE_RECEIPT=<absolute-json-path>`. Each compilation with a validated source creates a unique JSON receipt beside the source, plus an exact byte copy of that run's MetaEditor log when available. The receipt records the compiler version/build and hash, errors, warnings, exit code, options, and source/EX5/log hashes and lengths. Existing receipts and project logs are preserved. Failed and syntax-only attempts do not claim an accepted EX5; a receipt publication failure returns tooling exit code `2`.
+
+For a tester run following source compilation, pass that exact receipt to `-CompilationReceiptPath`. The runner verifies and locks the receipt, root source, EX5, and retained log automatically; no manual hash extraction is needed. Receipts record the include-root path but do not fingerprint included `.mqh` files, presets, or runtime dependencies. They are local evidence, not signed attestations or proof of strategy correctness.
+
 When installation into MT5 matters, distinguish the project `.ex5` from the artifact in the exact terminal `MQL5\Experts` location. Verify the installed artifact rather than assuming MetaEditor updated the terminal copy.
 
 ## Analyze tester or trading data

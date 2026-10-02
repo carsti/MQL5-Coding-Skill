@@ -22,6 +22,10 @@ For an identifier lookup, check the returned passage for the complete identifier
 
 Use the bundled `Compile-Mql5.ps1` wrapper as described in the skill. Pass source and include paths as ordinary quoted PowerShell arguments, including paths containing spaces. The wrapper keeps MetaEditor switch prefixes outside quoted path values; do not embed quotation marks inside the supplied path strings.
 
+Each compilation with a validated source emits `MQL5_COMPILE_RECEIPT=<absolute-json-path>` and preserves a unique JSON receipt and available MetaEditor log beside the source. The receipt includes compiler build/version and hash, errors/warnings, options, exit code, source/EX5 hashes, byte lengths, and log location. It preserves earlier receipts and existing project logs. Failed and syntax-only receipts cannot authorize tester staging.
+
+Pass that receipt to `Invoke-Mt5TesterSmoke.ps1 -CompilationReceiptPath "<absolute-json-path>"` with the exact EX5 and explicit tester settings. Preflight and execution verify the receipt and unchanged source, EX5, and log automatically, record the evidence in the tester result, and lock those files through cleanup. An explicit `-ExpectedExpertSha256` must agree if also supplied; the existing trusted-EX5 workflow remains supported. Receipts cover the root source, not included `.mqh` files or runtime dependencies, and are unsigned local evidence.
+
 ## Install with Codex
 
 Ask Codex:
@@ -70,6 +74,7 @@ skills/mql5-coding/
   agents/openai.yaml
   references/strategy-tester.md
   scripts/Compile-Mql5.ps1
+  scripts/CompilationReceipt.ps1
   scripts/CompilerProcessJob.cs
   scripts/Invoke-Mt5TesterSmoke.ps1
   scripts/TesterProcessJob.cs
@@ -85,7 +90,7 @@ GitHub Actions and the local test commands validate:
 
 - skill metadata, dependency declaration, links, and portable paths;
 - PowerShell syntax under PowerShell 7 and Windows PowerShell 5.1;
-- compiler-wrapper completion, source-path lease, artifact, and exit-code contracts without starting real MetaEditor;
+- compiler-wrapper completion, source-path lease, artifact, exit-code contracts, compilation receipts, and automatic tester verification/rejection of changed evidence without starting real MetaEditor;
 - Strategy Tester preflight, mount-manager drive validation, path-handle volume correlation, non-reparse path-chain leases, pinned nonempty-directory guards, pinned journal evidence, stable terminal-image identity checks, secret redaction, unambiguous correlated completion, adversarial log rejection, and timeout cleanup without starting real MT5.
 
 For local metadata validation, use the shared MQL5 Python environment when it is installed. Supply the validator's absolute path because the launcher starts in its own `work` directory:
