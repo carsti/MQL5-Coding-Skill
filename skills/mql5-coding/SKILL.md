@@ -46,6 +46,8 @@ For setup checks or missing-tool diagnosis, run the bundled `scripts/Test-Mql5En
 
 ## Inspect and classify
 
+For saving or reusing an EA's explicit entrypoints, include root, compiler, and optional tester selections, read [the project profile reference](references/project-profiles.md). `New-Mql5ProjectProfile.ps1` creates data-only JSON; `Invoke-Mql5Project.ps1` validates it or delegates an explicitly requested compile/tester action. Profiles never save execution approval, credentials, executable hashes, or receipts. Tester actions still require the full tester workflow and per-run evidence.
+
 Read the relevant source, local includes, build output, tester journal, Expert log, and supplied evidence before diagnosing. Do not infer a runtime cause from source alone when logs are available.
 
 Classify the failure before changing code:

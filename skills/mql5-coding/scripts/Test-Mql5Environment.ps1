@@ -229,7 +229,7 @@ try {
     else {
         try {
             $skillFiles=Skill-Files $SkillRoot
-            foreach ($required in @('agents/openai.yaml','references/strategy-tester.md','references/mcp-contract.json','references/environment-health.md','scripts/Test-Mql5Environment.ps1','scripts/Compile-Mql5.ps1','scripts/CompilationReceipt.ps1','scripts/CompilerProcessJob.cs','scripts/Invoke-Mt5TesterSmoke.ps1','scripts/TesterEvidence.ps1','scripts/TesterPathIntegrity.ps1','scripts/TesterProcessJob.cs')) {
+            foreach ($required in @('agents/openai.yaml','references/strategy-tester.md','references/mcp-contract.json','references/environment-health.md','references/project-profiles.md','scripts/Mql5ProjectProfile.ps1','scripts/New-Mql5ProjectProfile.ps1','scripts/Invoke-Mql5Project.ps1','scripts/Test-Mql5Environment.ps1','scripts/Compile-Mql5.ps1','scripts/CompilationReceipt.ps1','scripts/CompilerProcessJob.cs','scripts/Invoke-Mt5TesterSmoke.ps1','scripts/TesterEvidence.ps1','scripts/TesterPathIntegrity.ps1','scripts/TesterProcessJob.cs')) {
                 if (-not $skillFiles.ContainsKey($required)) {throw 'An essential skill file is missing.'}
             }
             $report.skill.installed=$true

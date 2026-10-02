@@ -55,6 +55,14 @@ jobs:
         shell: pwsh
         run: .\tests\Test-Skill.ps1
 
+      - name: Test project profiles with PowerShell 7
+        shell: pwsh
+        run: .\tests\Test-ProjectProfiles.ps1
+
       - name: Test with Windows PowerShell 5.1
         shell: powershell
         run: .\tests\Test-Skill.ps1
+
+      - name: Test project profiles with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\Test-ProjectProfiles.ps1

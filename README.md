@@ -32,6 +32,8 @@ Use `-Json` for structured output and `-ReportPath '<new-report.json>'` to retai
 
 ## Documentation and compilation
 
+Save each EA's explicit entrypoints, include directory, MetaEditor, and optional terminal/preset/tester settings with `New-Mql5ProjectProfile.ps1`. Use `Invoke-Mql5Project.ps1` to validate resolved paths, compile all or one saved entrypoint, or delegate a requested tester action. Project-relative paths survive moving the EA folder and its profile together. Execution acknowledgement, trusted receipts/hashes, and output paths remain separate per-run inputs. See [commands and limitations](skills/mql5-coding/references/project-profiles.md).
+
 For an identifier lookup, check the returned passage for the complete identifier and inspect `focus_match` when present. An `approximate` or `none` result does not establish support for the requested identifier; continue reading or select another documented result.
 
 Use the bundled `Compile-Mql5.ps1` wrapper as described in the skill. Pass source and include paths as ordinary quoted PowerShell arguments, including paths containing spaces. The wrapper keeps MetaEditor switch prefixes outside quoted path values; do not embed quotation marks inside the supplied path strings.
@@ -88,9 +90,13 @@ skills/mql5-coding/
   agents/openai.yaml
   references/mcp-contract.json
   references/environment-health.md
+  references/project-profiles.md
   references/strategy-tester.md
   scripts/Compile-Mql5.ps1
   scripts/Test-Mql5Environment.ps1
+  scripts/Mql5ProjectProfile.ps1
+  scripts/New-Mql5ProjectProfile.ps1
+  scripts/Invoke-Mql5Project.ps1
   scripts/CompilationReceipt.ps1
   scripts/CompilerProcessJob.cs
   scripts/Invoke-Mt5TesterSmoke.ps1
@@ -108,6 +114,7 @@ GitHub Actions and the local test commands validate:
 - skill metadata, dependency declaration, links, portable paths, and the packaged MCP consumer contract;
 - the actual MCP server against this skill on each trusted push and pull request, with exact repository revisions retained in a compatibility artifact;
 - PowerShell syntax under PowerShell 7 and Windows PowerShell 5.1;
+- project profiles under both shells: creation/overwrite refusal, moved paths, rejected authorization fields and malformed selections, multiple entrypoints, compiler exit-code propagation, receipt freshness, and synthetic tester delegation;
 - environment-health success and failure cases against a real MCP bundle under both shells, including disabled registrations, checksum failures, source differences, optional dependencies, timeouts, redaction, preserved files, and an editor that must never be launched;
 - compiler-wrapper completion, source-path lease, artifact, exit-code contracts, compilation receipts, and automatic tester verification/rejection of changed evidence without starting real MetaEditor;
 - Strategy Tester preflight, mount-manager drive validation, path-handle volume correlation, non-reparse path-chain leases, pinned nonempty-directory guards, pinned journal evidence, stable terminal-image identity checks, secret redaction, unambiguous correlated completion, adversarial log rejection, and timeout cleanup without starting real MT5.
@@ -134,6 +141,8 @@ Run the PowerShell suites sequentially after other validation runs finish:
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Skill.ps1
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Skill.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-ProjectProfiles.ps1
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-ProjectProfiles.ps1
 ```
 
 CI uses an isolated Python 3.12 x64 environment and installs `PyYAML==6.0.3` from `.github/requirements-ci.txt`, which locks the expected wheel hash. The local shared environment was also validated with Python 3.13. Do not modify a global Python environment solely to run repository validation. A real MetaEditor or MT5 fixture run is separate from these synthetic suites and follows the skill's compilation and tester workflow.

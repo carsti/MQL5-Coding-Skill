@@ -341,6 +341,9 @@ Assert-PowerShellParses -Path $testerPathIntegrity
 Assert-PowerShellParses -Path $testerEvidence
 Assert-PowerShellParses -Path $compilationReceiptHelper
 Assert-PowerShellParses -Path (Join-Path $skillRoot 'scripts\Test-Mql5Environment.ps1')
+foreach ($profileScript in @('Mql5ProjectProfile.ps1','New-Mql5ProjectProfile.ps1','Invoke-Mql5Project.ps1')) {
+    Assert-PowerShellParses -Path (Join-Path $skillRoot ('scripts\'+$profileScript))
+}
 if (-not ('Mql5Coding.CompilerProcessJob' -as [type])) {
     Add-Type -Path $compilerProcessJobSource
 }
