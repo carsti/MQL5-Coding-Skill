@@ -30,6 +30,8 @@ Before asserting or implementing an MQL5 API, language, event, error, trade-retc
 
 Never hard-code a previously observed topic ID or revision as current truth.
 
+The packaged [MCP consumer contract](references/mcp-contract.json) records the tools, supported input ranges, and response/citation fields this skill needs. The repositories test this contract against the actual MCP server. A compatibility pass verifies those interfaces and identifier checks; continue verifying each MQL5 claim in the installed CHM as above.
+
 If the installed CHM does not support a required claim, state exactly:
 
 `Not verified in the installed MQL5 CHM`

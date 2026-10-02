@@ -72,6 +72,7 @@ Fully restart Codex after installation.
 skills/mql5-coding/
   SKILL.md
   agents/openai.yaml
+  references/mcp-contract.json
   references/strategy-tester.md
   scripts/Compile-Mql5.ps1
   scripts/CompilationReceipt.ps1
@@ -88,7 +89,8 @@ Repository-level tests use synthetic MetaEditor and terminal executables. They d
 
 GitHub Actions and the local test commands validate:
 
-- skill metadata, dependency declaration, links, and portable paths;
+- skill metadata, dependency declaration, links, portable paths, and the packaged MCP consumer contract;
+- the actual MCP server against this skill on each trusted push and pull request, with exact repository revisions retained in a compatibility artifact;
 - PowerShell syntax under PowerShell 7 and Windows PowerShell 5.1;
 - compiler-wrapper completion, source-path lease, artifact, exit-code contracts, compilation receipts, and automatic tester verification/rejection of changed evidence without starting real MetaEditor;
 - Strategy Tester preflight, mount-manager drive validation, path-handle volume correlation, non-reparse path-chain leases, pinned nonempty-directory guards, pinned journal evidence, stable terminal-image identity checks, secret redaction, unambiguous correlated completion, adversarial log rejection, and timeout cleanup without starting real MT5.
@@ -118,3 +120,11 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Ski
 ```
 
 CI uses an isolated Python 3.12 x64 environment and installs `PyYAML==6.0.3` from `.github/requirements-ci.txt`, which locks the expected wheel hash. The local shared environment was also validated with Python 3.13. Do not modify a global Python environment solely to run repository validation. A real MetaEditor or MT5 fixture run is separate from these synthetic suites and follows the skill's compilation and tester workflow.
+
+## MCP compatibility checks
+
+The packaged `references/mcp-contract.json` describes the documentation interfaces consumed by this skill. Both repositories run `.github/workflows/skill-compatibility.yml` against their current checkout and the counterpart's `main` branch. Manual runs can select a counterpart ref. The tests use the real bundled MCP over stdio with an indexed synthetic corpus, not a mocked server or copied skill. They verify tool names, read-only annotations, inputs, revisions and citation fields, bounded reads and cursors, exact identifier evidence, image bytes, invalid-input rejection, and unchanged corpus files. The artifact records both Git commits and hashes of the server and consumer files. Synthetic fixtures are interface evidence, not MQL5 API documentation or MT5 execution evidence.
+
+For local commands and optional validation of the installed pair, see the counterpart's [compatibility guide](https://github.com/shamwi2846/MQL5-CHM-MCP/blob/main/docs/skill-compatibility.md).
+
+Both repositories are private. Each requires the Actions secret `MQL5_PEER_READ_KEY` containing a dedicated read-only SSH deploy key registered on the counterpart repository. Never reuse an account token or a write-enabled deploy key. Checkouts disable persisted credentials; fork pull requests skip the job that needs this secret. A trusted run with missing credentials fails. Rotate each key on its target repository and replace the consumer secret together. MCP release validation waits for this compatibility job before packaging; skill tag pushes also run the pair check.

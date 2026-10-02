@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "server_name": "mql5-chm",
+  "tools": {
+    "mql5_chm_status": {
+      "required_arguments": [],
+      "outputs": {
+        "active_revision": "sha256",
+        "corpus_revision": "sha256",
+        "index_revision": "sha256",
+        "index_sha256": "sha256",
+        "totals.topics": "integer",
+        "totals.sections": "integer",
+        "sources[].source": "string"
+      }
+    },
+    "mql5_chm_search": {
+      "required_arguments": ["query"],
+      "bounds": {"limit": {"minimum": 1, "maximum": 8}},
+      "enums": {
+        "source": ["all", "mql5", "mql5book", "neuronetworksbook"]
+      },
+      "outputs": {
+        "count": "integer",
+        "corpus_revision": "sha256",
+        "index_sha256": "sha256",
+        "results[].topic_id": "topic_id",
+        "results[].section_id": "nullable_section_id",
+        "results[].title": "string",
+        "results[].signature": "string",
+        "results[].match_kind": "string",
+        "results[].matched_terms": "array",
+        "results[].citation.topic_id": "topic_id",
+        "results[].citation.section_id": "nullable_section_id",
+        "results[].citation.source_revision": "sha256",
+        "results[].citation.corpus_revision": "sha256",
+        "results[].citation.index_revision": "sha256"
+      }
+    },
+    "mql5_chm_read": {
+      "required_arguments": ["topic_id"],
+      "bounds": {"max_chars": {"minimum": 500, "maximum": 8000}},
+      "outputs": {
+        "topic_id": "topic_id",
+        "section_id": "nullable_section_id",
+        "title": "string",
+        "returned_chars": "integer",
+        "next_cursor": "nullable_string",
+        "corpus_revision": "sha256",
+        "index_sha256": "sha256",
+        "citation.topic_id": "topic_id",
+        "citation.section_id": "nullable_section_id",
+        "citation.source_revision": "sha256",
+        "citation.corpus_revision": "sha256",
+        "citation.index_revision": "sha256",
+        "images[].asset_id": "asset_id",
+        "images[].citation.topic_id": "topic_id"
+      }
+    },
+    "mql5_chm_read_image": {
+      "required_arguments": ["asset_id"],
+      "outputs": {
+        "asset_id": "asset_id",
+        "sha256": "sha256",
+        "bytes": "integer",
+        "mime_type": "string",
+        "corpus_revision": "sha256",
+        "index_revision": "sha256",
+        "primary_topic_citation.topic_id": "topic_id"
+      }
+    }
+  }
+}

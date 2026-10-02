@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import json
 import sys
 from pathlib import Path
 
@@ -14,6 +15,7 @@ EXPECTED_SKILL_FILES = {
     "SKILL.md",
     "agents/openai.yaml",
     "references/strategy-tester.md",
+    "references/mcp-contract.json",
     "scripts/Compile-Mql5.ps1",
     "scripts/CompilationReceipt.ps1",
     "scripts/CompilerProcessJob.cs",
@@ -96,6 +98,9 @@ def main() -> int:
     ]:
         fail("agents/openai.yaml must declare exactly the mql5-chm MCP dependency.")
 
+    contract = json.loads((SKILL_ROOT / "references" / "mcp-contract.json").read_text(encoding="utf-8"))
+    validate_mcp_contract(contract, metadata)
+
     required_skill_phrases = [
         "mql5_chm_status",
         "mql5_chm_search",
@@ -149,9 +154,25 @@ def main() -> int:
     return 0
 
 
+def validate_mcp_contract(contract: dict, metadata: dict) -> None:
+    if type(contract.get("schema_version")) is not int or contract["schema_version"] != 1:
+        fail("Unsupported MCP consumer contract schema.")
+    declared = metadata["dependencies"]["tools"]
+    if len(declared) != 1 or declared[0]["type"] != "mcp" or contract.get("server_name") != declared[0]["value"]:
+        fail("MCP contract server_name does not match the skill dependency.")
+    tools = contract.get("tools")
+    if not isinstance(tools, dict) or set(tools) != {
+        "mql5_chm_status", "mql5_chm_search", "mql5_chm_read", "mql5_chm_read_image"
+    }:
+        fail("MCP contract must cover the four required documentation tools.")
+    for name, tool in tools.items():
+        if not isinstance(tool, dict) or not isinstance(tool.get("required_arguments"), list) or not tool.get("outputs"):
+            fail(f"Invalid MCP tool contract: {name}")
+
+
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (AssertionError, KeyError, TypeError, yaml.YAMLError) as error:
+    except (AssertionError, KeyError, TypeError, ValueError, yaml.YAMLError) as error:
         print(f"SKILL_PACKAGE_INVALID: {error}", file=sys.stderr)
         raise SystemExit(1)
