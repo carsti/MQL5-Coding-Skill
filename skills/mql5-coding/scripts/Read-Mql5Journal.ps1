@@ -15,6 +15,13 @@ $ErrorActionPreference='Stop'
 $output=$null
 $result=[ordered]@{schema_version=1;operation='journal read';status='failed';source=$null;recorded_run_status=$null;evidence_status='unavailable';segments=@();groups=@();inspected_lines=0;matched_lines=0;grouped_lines=0;truncated=$false;filter_sha256=@();issues=@();limitations=@('Counts cover inspected evidence only. Patterns are observations, not proven causes.');exit_code=2}
 $groups=@{};$bytesUsed=0;$ranges=@{}
+function Protect-JournalObservationText([AllowEmptyString()][string]$Text) {
+    if ($Text.Length -eq 0) {return ''}
+    # Mask markers before generic redaction can rewrite the nonce, and apply
+    # the same protection to both component and message fields.
+    $masked=[regex]::Replace($Text,'MQL5_CODING_PASS:[0-9a-fA-F]{32,64}(?::[^\s]*)?','<APPLICATION_MARKER>')
+    return Protect-JournalLine -Line $masked
+}
 function Add-JournalObservation([string]$Line,[string]$Kind,[string]$Path,[long]$Offset,[long]$LineNumber,[bool]$Verified) {
     if ($script:result.inspected_lines -ge $MaxLines) {$script:result.truncated=$true;return}
     $script:result.inspected_lines++
@@ -26,9 +33,8 @@ function Add-JournalObservation([string]$Line,[string]$Kind,[string]$Path,[long]
     foreach ($literal in $LiteralMessage) {if ($message.IndexOf($literal,[StringComparison]::Ordinal) -ge 0) {$matched=$true}}
     if (-not $matched) {return}
     $script:result.matched_lines++
-    $safe=Protect-JournalLine -Line $message
-    $safe=[regex]::Replace($safe,'MQL5_CODING_PASS:[0-9a-fA-F]{32,64}(?::[^\s]*)?','<APPLICATION_MARKER>')
-    $component=Protect-JournalLine -Line $component
+    $safe=Protect-JournalObservationText $message
+    $component=Protect-JournalObservationText $component
     $key=$Kind+"`t"+$component+"`t"+$safe
     if (-not $script:groups.ContainsKey($key)) {
         if ($script:groups.Count -ge $MaxGroups) {$script:result.truncated=$true;return}
@@ -59,7 +65,7 @@ try {
         if ($null -eq $journal) {$missingJournals++}
         if (Get-ToolkitValue $journal 'limit_exceeded' $false) {$result.truncated=$true}
         foreach ($segment in $segments) {
-            $record=[ordered]@{journal=$kind;path=(Get-ToolkitValue $segment 'path');source_offset=(Get-ToolkitValue $segment 'source_offset');byte_length=(Get-ToolkitValue $segment 'byte_length');sha256=(Get-ToolkitValue $segment 'sha256');status='unavailable';starts_at_line_boundary=$null;ends_at_line_boundary=$null;reason=$null}
+            $record=[ordered]@{journal=$kind;path=(Get-ToolkitValue $segment 'path');source_offset=(Get-ToolkitValue $segment 'source_offset');byte_length=(Get-ToolkitValue $segment 'byte_length');sha256=(Get-ToolkitValue $segment 'sha256');status='unavailable';hash_verified=$false;starts_at_line_boundary=$null;ends_at_line_boundary=$null;reason=$null}
             try {
                 foreach ($field in @('source_offset','byte_length')) {
                     $value=Get-ToolkitValue $segment $field
@@ -90,6 +96,7 @@ try {
                 $sha=[Security.Cryptography.SHA256]::Create()
                 try {$actual=([BitConverter]::ToString($sha.ComputeHash($buffer))).Replace('-','').ToLowerInvariant()} finally {$sha.Dispose()}
                 if ($actual -cne $segment.sha256) {throw 'Segment integrity mismatch.'}
+                $record.hash_verified=$true
                 $ranges[$fileKey]+=@(@{start=$segment.source_offset;end=$segment.source_offset+$segment.byte_length})
                 $encoding=New-Object Text.UnicodeEncoding($false,$false,$true)
                 $text=$encoding.GetString($buffer)
@@ -104,7 +111,10 @@ try {
                     if ($content.Length) {Add-JournalObservation $content $kind $file ($segment.source_offset+2*$line.Index) $lineNumber $true}
                     if ($result.inspected_lines -ge $MaxLines) {if ($line.Index+$line.Length -lt $text.Length) {$result.truncated=$true};break}
                 }
-            } catch {$record.reason='Segment unavailable, invalid, beyond analysis limits, or hash mismatch.'}
+            } catch {
+                if ($record.hash_verified) {$record.status='processing_failed';$record.reason='Segment hash matched, but observation processing was incomplete.'}
+                else {$record.reason='Segment unavailable, invalid, beyond analysis limits, or hash mismatch.'}
+            }
             $result.segments+=@($record)
         }
         if ($usable -eq 0) {
@@ -123,7 +133,7 @@ try {
         if ($null -ne $journal -and (($expectedBytes -isnot [int] -and $expectedBytes -isnot [long]) -or $expectedBytes -lt 0 -or $expectedBytes -ne $recordedBytes)) {$missingJournals++}
     }
     $result.groups=@($groups.Values | Sort-Object -Property @{Expression={$_.count};Descending=$true},@{Expression={$_.message};Descending=$false})
-    $verified=@($result.segments | Where-Object {$_.status -eq 'hash_verified'}).Count
+    $verified=@($result.segments | Where-Object {$_.hash_verified}).Count
     $unavailable=@($result.segments | Where-Object {$_.status -ne 'hash_verified'}).Count
     $result.evidence_status=if ($result.truncated) {'truncated'} elseif ($verified -gt 0 -and $unavailable -eq 0 -and $missingJournals -eq 0) {'complete_segments'} elseif ($verified -gt 0) {'partial_segments'} elseif ($result.inspected_lines -gt 0) {'bounded_excerpts'} else {'unavailable'}
     if ($unavailable) {$result.issues+=@(@{code='unavailable_segments';count=$unavailable})}

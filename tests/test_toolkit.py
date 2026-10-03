@@ -307,6 +307,18 @@ class ToolkitTests(unittest.TestCase):
         self.assertEqual(read["entrypoints"], [str(alias)])
         self.assertEqual(read["coverage"], "uncertain")
 
+    def test_cli_unicode_output_under_a_legacy_pipe_encoding(self):
+        output = self.root/"analysis-\u7ed3\u679c"
+        env = {**os.environ, "PYTHONIOENCODING": "ascii"}
+        process = subprocess.run([sys.executable, "-B", str(SCRIPTS/"mql5_toolkit.py"), "report", "read",
+                                  "--input", str(FIXTURES/"mixed-trades.htm"), "--output", str(output)],
+                                 capture_output=True, env=env)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertNotIn(b"Traceback", process.stderr)
+        self.assertIn(str(output), process.stdout.decode("utf-8"))
+        self.assertEqual(process.stdout.decode("utf-8").splitlines(), (output/"summary.txt").read_text(encoding="utf-8").splitlines())
+        self.assertEqual(json.loads((output/"result.json").read_text())["exit_code"], 0)
+
     def test_cli_exit_codes_and_no_overwrite(self):
         cli = SCRIPTS/"mql5_toolkit.py"
         def run(args, name):

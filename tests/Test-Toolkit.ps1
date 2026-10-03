@@ -16,6 +16,13 @@ function Run([string]$Script,[string[]]$Arguments,[string]$Root=$scripts) {
     return Invoke-ToolkitProcess $hostExe (@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $Root $Script))+$Arguments) $testRoot 90
 }
 function ReadResult([string]$Output) {return Read-Mql5ReleaseJson (Join-Path $Output 'result.json')}
+function New-JournalCase([string]$Name,[string]$Text) {
+    $path=Join-Path $testRoot ($Name+'.log');[IO.File]::WriteAllText($path,$Text,[Text.Encoding]::Unicode)
+    $length=(Get-Item -LiteralPath $path).Length
+    $runPath=Join-Path $testRoot ($Name+'.json')
+    Save $runPath @{schema_version=2;status='engine_smoke_passed';evidence=@{terminal_journal=@{appended_byte_length=$length;limit_exceeded=$false;segments=@(@{path=$path;source_offset=0;byte_length=$length;sha256=(Get-Mql5ReleaseHash $path)});excerpts=@()};tester_journal=@{appended_byte_length=0;limit_exceeded=$false;segments=@();excerpts=@()}}}
+    return $runPath
+}
 $oldTrace=$env:MQL5_SCENARIO_TEST_TRACE;$oldReport=$env:MQL5_SCENARIO_TEST_REPORT
 try {
     $python=if ($PythonPath) {Get-ToolkitPython $PythonPath} elseif (Get-Command python -ErrorAction SilentlyContinue) {(Get-Command python).Source} else {Get-ToolkitPython ''}
@@ -86,6 +93,25 @@ try {
     $record.source_offset-=2;$record.byte_length+=2;$record.sha256=$hash;$journal.appended_byte_length=$buffer.Length;Save $runPath $run
     $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$runPath,'-OutputDirectory',$out)
     Check ($process.exit_code -eq 2) 'Existing journal output refused'
+
+    $emptyCase=New-JournalCase 'empty-message' "AA`t0`t10:00:01.000`tFixture`t`r`nBB`t0`t10:00:02.000`tFixture`tafter-empty`r`n"
+    $emptyOut=Join-Path $testRoot 'journal-empty-message'
+    $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$emptyCase,'-OutputDirectory',$emptyOut)
+    $emptyRead=ReadResult $emptyOut
+    Check ($process.exit_code -eq 0 -and $emptyRead.inspected_lines -eq 2 -and $emptyRead.grouped_lines -eq 2 -and @($emptyRead.groups | Where-Object {$_.message -eq 'after-empty'}).Count -eq 1) 'Empty journal messages cannot silently stop processing of later observations'
+    $markerCase=New-JournalCase 'marker-fields' ("AA`t0`t10:00:01.000`tMQL5_CODING_PASS:"+('a'*32)+":component_id`tMQL5_CODING_PASS:"+('1'*32)+":application-case`r`n")
+    $markerOut=Join-Path $testRoot 'journal-marker-fields'
+    $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$markerCase,'-OutputDirectory',$markerOut)
+    $markerRead=ReadResult $markerOut;$markerJson=[IO.File]::ReadAllText((Join-Path $markerOut 'result.json'))
+    Check ($process.exit_code -eq 0 -and $markerRead.groups[0].component -eq '<APPLICATION_MARKER>' -and $markerRead.groups[0].message -eq '<APPLICATION_MARKER>' -and $markerJson -notmatch 'MQL5_CODING_PASS|component_id|application-case') 'Marker masking covers component fields and precedes generic numeric redaction'
+    $processingScripts=Join-Path $testRoot 'processing-failure-scripts';Copy-Item -LiteralPath $scripts -Destination $processingScripts -Recurse
+    $journalHelper=Join-Path $processingScripts 'Read-Mql5Journal.ps1'
+    $journalCode=[IO.File]::ReadAllText($journalHelper).Replace('Add-JournalObservation $content $kind $file ($segment.source_offset+2*$line.Index) $lineNumber $true','throw "Synthetic observation failure."')
+    [IO.File]::WriteAllText($journalHelper,$journalCode,(New-Object Text.UTF8Encoding($false)))
+    $failedObservations=Join-Path $testRoot 'journal-processing-failure'
+    $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$emptyCase,'-OutputDirectory',$failedObservations) $processingScripts
+    $failedRead=ReadResult $failedObservations
+    Check ($process.exit_code -eq 4 -and $failedRead.evidence_status -eq 'partial_segments' -and $failedRead.segments[0].status -eq 'processing_failed' -and $failedRead.segments[0].hash_verified -eq $true) 'Verified bytes with failed observation processing cannot become complete journal evidence'
 
     $install=Join-Path $testRoot 'install';$project=Join-Path $testRoot ('project '+[char]0xe9);$data=Join-Path $testRoot 'data'
     foreach ($dir in @($install,$project,(Join-Path $data 'MQL5'),(Join-Path $project 'Include'))) {[IO.Directory]::CreateDirectory($dir) | Out-Null}

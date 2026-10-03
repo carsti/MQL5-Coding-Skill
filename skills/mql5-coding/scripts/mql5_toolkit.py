@@ -89,6 +89,10 @@ def execute(args) -> dict:
 
 
 def main(argv=None) -> int:
+    # Pipes on Windows can inherit a legacy code page. Use the same UTF-8
+    # encoding as the JSON/summary artifacts and the owned process reader.
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
     args = parser().parse_args(argv)
     try:
         output = absolute(args.output)

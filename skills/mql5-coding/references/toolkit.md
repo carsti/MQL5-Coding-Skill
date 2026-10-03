@@ -21,6 +21,8 @@ Every operation reserves a new output directory, whose parent must exist, and wr
 
 Exit codes: `0` processing completed, `1` explicit expectations failed, `2` invalid input/tooling, `3` incompatible comparison, `4` insufficient evidence or unevaluable expectations. Comparison compatibility takes precedence over expectations. Read success describes processing, including disclosed linkage issues; inspect `evidence_linkage` before using recorded run settings. Console summaries are bounded; inspect the JSON for complete measurements, provenance, and issues.
 
+The Python CLI writes UTF-8 to stdout and stderr, including redirected pipes. Unicode evidence paths remain readable without changing the operation's exit status because of a legacy console encoding.
+
 ## Reports and comparisons
 
 Supported input is the English native MT5 HTML Settings/Results table layout covered by repository trading and no-trade fixtures, encoded as UTF-16LE with BOM or UTF-8. Nested/malformed tables, ambiguous duplicate statistics, and other layouts/languages are rejected. Individual absent fields remain missing. Do not use a no-trade fixture alone to validate trading statistics. Source hashes identify exact analyzed bytes, including encoding.
@@ -54,6 +56,8 @@ Run `Read-Mql5Journal.ps1 -TesterResultPath <absolute-smoke-result.json> -Output
 Groups retain redacted message/component, inspected count, first/last recorded timestamp, and up to three evidence locations. Counts cover only inspected lines. Complete segments, partial verified segments, bounded excerpts, unavailable evidence, and truncation are separate; incomplete analysis returns `4`. Overlapping segments are not counted twice; ranges starting or ending inside a journal record disclose truncation even when their hashes match. Excerpts are fallback observations, not hash-verified full journals. Patterns do not prove root causes. Verify runtime error or trade-return interpretations through the MCP.
 
 Overlap detection applies across both journal kinds. The byte budget includes fallback excerpts measured as UTF-16LE bytes; an excerpt that cannot fit is skipped and truncation is reported.
+
+Empty message or component fields are retained without stopping later observations. Application markers are masked in both fields before generic redaction can rewrite their nonces. Segment `hash_verified` records byte integrity separately from processing status: an observation-processing failure has status `processing_failed` and makes the evidence incomplete even when its bytes match the recorded hash.
 
 ## Scenario batches
 
