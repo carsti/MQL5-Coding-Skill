@@ -114,7 +114,7 @@ exit $LASTEXITCODE
     $env:MQL5_SCENARIO_TEST_TRACE=Join-Path $testRoot 'trace.txt'
     $env:MQL5_SCENARIO_TEST_REPORT=Join-Path $PSScriptRoot 'fixtures\reports\no-trades.htm'
     $profiles=@{}
-    foreach ($mode in @('success','compiler-failure','tester-failure','timeout','blocked','missing-result','cleanup-failure','bad-report')) {
+    foreach ($mode in @('success','compiler-failure','tester-failure','timeout','blocked','missing-result','cleanup-failure','bad-report','missing-report','wrong-report-hash')) {
         $path=Join-Path $testRoot ($mode+'-profile.json')
         $profile=@{schema_version=1;name=$mode;project_root=$project;entrypoints=@('Fixture.mq5');include_path='Include';metaeditor_path=$editor;compiler=@{timeout_seconds=5;warnings_as_errors=$false};tester=@{entrypoint='Fixture.mq5';terminal_path=$terminal;terminal_data_path=$data;set_path=$null;use_expert_defaults=$true;timeout_seconds=10;settings=@{symbol='EURUSD';period='M1';from_date='2025.01.12';to_date='2025.02.28';model=0;deposit='100000';currency='USD';leverage=100;execution_mode=0}}}
         Save $path $profile;$profiles[$mode]=$path
@@ -137,6 +137,48 @@ exit $LASTEXITCODE
     $table=Import-Csv -LiteralPath (Join-Path $full 'results.tsv') -Delimiter "`t"
     Check ($table[1].compile_exit -eq '1' -and $table[3].tester_exit -eq '3' -and $table[4].recorded_tester_status -eq 'blocked') 'Combined table retains compiler and tester evidence'
     Check (@($batch.scenarios | Where-Object {$_.cleanup_verified -eq $false}).Count -eq 0) 'Mixed batch owned cleanup verified'
+    foreach ($mode in @('missing-report','wrong-report-hash')) {
+        Save $manifestPath @{schema_version=1;scenarios=@(@{id=$mode;profile=$profiles[$mode]})}
+        $reportEvidence=Join-Path $testRoot ('batch-'+$mode)
+        $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$reportEvidence,'-PythonPath',$python,'-Action','Execute') $fixtureScripts
+        $batch=ReadResult $reportEvidence
+        Check ($process.exit_code -eq 1 -and $batch.scenarios[0].status -eq 'completed' -and $batch.scenarios[0].tester.exit_code -eq 0 -and $batch.scenarios[0].analysis[0].status -eq 'failed') ('Completed tester cannot hide '+$mode+' evidence: exit='+$process.exit_code)
+    }
+    $driftScripts=Join-Path $testRoot 'drift-scripts';Copy-Item -LiteralPath $fixtureScripts -Destination $driftScripts -Recurse
+    foreach ($stage in @('Compile','TesterSmoke')) {
+    foreach ($mode in @('profile','marker','manifest')) {
+        $markerFile=Join-Path $testRoot 'drift-markers.txt';[IO.File]::WriteAllText($markerFile,('MQL5_CODING_PASS:'+('a'*32)+':fixture'),(New-Object Text.UTF8Encoding($false)))
+        Save $manifestPath @{schema_version=1;scenarios=@(@{id='drift';profile=$profiles.success;expected_marker_file=$markerFile},@{id='later';profile=$profiles.success})}
+        $originalProfile=[IO.File]::ReadAllBytes($profiles.success)
+        $change=if ($mode -eq 'profile') {
+            '$p.name="changed"; [IO.File]::WriteAllText($ProfilePath,($p | ConvertTo-Json -Depth 12),(New-Object Text.UTF8Encoding($false)))'
+        } elseif ($mode -eq 'marker') {
+            '[IO.File]::WriteAllText('+"'"+$markerFile.Replace("'","''")+"'"+',"MQL5_CODING_PASS:'+('b'*32)+':fixture",(New-Object Text.UTF8Encoding($false)))'
+        } else {
+            '[IO.File]::AppendAllText('+"'"+$manifestPath.Replace("'","''")+"'"+'," ",(New-Object Text.UTF8Encoding($false)))'
+        }
+        $driftStub=$stub.Replace('exit $LASTEXITCODE',('if ($Action -eq "'+$stage+'") {'+$change+'}; exit $LASTEXITCODE'))
+        [IO.File]::WriteAllText((Join-Path $driftScripts 'Invoke-Mql5Project.ps1'),$driftStub,(New-Object Text.UTF8Encoding($false)))
+        $priorTrace=[IO.File]::ReadAllText($env:MQL5_SCENARIO_TEST_TRACE)
+        $drift=Join-Path $testRoot ('batch-drift-'+$stage+'-'+$mode)
+        $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$drift,'-PythonPath',$python,'-Action','Execute') $driftScripts
+        $batch=ReadResult $drift
+        $traceDelta=[IO.File]::ReadAllText($env:MQL5_SCENARIO_TEST_TRACE).Substring($priorTrace.Length)
+        [IO.File]::WriteAllBytes($profiles.success,$originalProfile)
+        $expectedTrace=if ($stage -eq 'Compile') {"Compile:success`n"} else {"Compile:success`nTesterSmoke:success`n"}
+        $expectedStatus=if ($stage -eq 'Compile') {'failed'} else {'completed'}
+        Check ($process.exit_code -eq 2 -and $batch.scenarios[0].status -eq $expectedStatus -and $batch.scenarios[0].reason -eq 'selection_changed' -and $batch.scenarios[0].analysis.Count -eq 0 -and $batch.scenarios[1].status -eq 'skipped' -and $traceDelta -eq $expectedTrace) ($mode+' drift during '+$stage+' must stop later execution: '+$traceDelta)
+    }
+    }
+    $validationDriftScripts=Join-Path $testRoot 'validation-drift-scripts';Copy-Item -LiteralPath $fixtureScripts -Destination $validationDriftScripts -Recurse
+    $supportPath=Join-Path $validationDriftScripts 'ToolkitSupport.ps1'
+    $replacement='if ($Arguments -contains "--output") {[IO.File]::AppendAllText('+"'"+$manifestPath.Replace("'","''")+"'"+'," ",(New-Object Text.UTF8Encoding($false)))}; return [pscustomobject]$answer'
+    $support=[IO.File]::ReadAllText($supportPath).Replace('return [pscustomobject]$answer',$replacement)
+    [IO.File]::WriteAllText($supportPath,$support,(New-Object Text.UTF8Encoding($false)))
+    Save $manifestPath @{schema_version=1;scenarios=@(@{id='validate-drift';profile=$profiles.success;baseline_report=$env:MQL5_SCENARIO_TEST_REPORT})}
+    $validationDrift=Join-Path $testRoot 'batch-validation-drift';$priorTrace=[IO.File]::ReadAllText($env:MQL5_SCENARIO_TEST_TRACE)
+    $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$validationDrift,'-PythonPath',$python,'-Action','Execute') $validationDriftScripts
+    Check ($process.exit_code -eq 2 -and [IO.File]::ReadAllText($env:MQL5_SCENARIO_TEST_TRACE) -ceq $priorTrace) 'Manifest fingerprint must precede validation and reject drift before compilation'
     foreach ($boundary in @('tester','analysis','missing-analysis')) {
         $limitedScripts=Join-Path $testRoot ($boundary+'-limited-scripts');Copy-Item -LiteralPath $fixtureScripts -Destination $limitedScripts -Recurse
         $supportPath=Join-Path $limitedScripts 'ToolkitSupport.ps1'

@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from toolkit_common import InputError, absolute, load_expectations, publish, read_json, source
-from toolkit_includes import compare_snapshots, inventory, validated_profile
+from toolkit_includes import compare_snapshots, inventory, selected_entrypoint, validated_profile
 from toolkit_reports import compare_reports, native_report
 
 
@@ -68,11 +68,11 @@ def execute(args) -> dict:
                     raise InputError("Profile mode uses saved entrypoints and include root without overrides")
                 profile = validated_profile(profile_path, args.powershell)
                 root = absolute(profile["project_root"], kind="dir")
-                entries = [absolute(p, kind="file") for p in profile["entrypoints"]]
+                entries = [selected_entrypoint(p) for p in profile["entrypoints"]]
                 roots = [absolute(profile["include_path"], kind="dir")] if profile["include_path"] else []
             else:
                 root = absolute(args.root, kind="dir")
-                entries = [absolute(p, kind="file") for p in args.entrypoint]
+                entries = [selected_entrypoint(p) for p in args.entrypoint]
                 roots = [absolute(p, kind="dir") for p in args.include_root]
             return inventory(root, entries, roots, profile_path)
     else:

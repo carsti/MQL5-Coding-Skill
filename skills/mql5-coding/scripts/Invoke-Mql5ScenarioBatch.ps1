@@ -31,6 +31,21 @@ function Save-BatchCheckpoint {
     # Separate progress from the final create-new result; interruption cannot leave a false final completion.
     [IO.File]::WriteAllText((Join-Path $output 'progress.json'),($result | ConvertTo-Json -Depth 12),(New-Object Text.UTF8Encoding($false)))
 }
+function Assert-BatchSelection($Item) {
+    try {
+        if ((Get-Mql5ReleaseHash $result.manifest.path) -cne $result.manifest.sha256 -or
+            (Get-Mql5ReleaseHash $Item.profile_path) -cne $Item.profile_sha256) {throw 'Selection changed.'}
+        foreach ($inputEvidence in $Item.evidence_inputs) {
+            if ((Get-Mql5ReleaseHash $inputEvidence.path) -cne $inputEvidence.sha256) {throw 'Selection changed.'}
+        }
+    } catch {
+        if ($null -ne $current) {
+            $current.reason='selection_changed'
+            if ($null -ne $current.tester) {$current.analysis_skipped_reason='selection_changed'}
+        }
+        throw 'Manifest, profile, or selected evidence changed or became unavailable after selection.'
+    }
+}
 function Get-BatchAnalysisRecord($Process,[string]$Operation,[string]$Root) {
     $record=[ordered]@{operation=$Operation;exit_code=$Process.exit_code;runner_status=$Process.status;status='failed';recorded_status=$null;result_path=$null;output=$Root;reason='analysis_process_failed'}
     if ($Process.status -ne 'completed' -or -not $Process.cleanup_verified) {return $record}
@@ -42,6 +57,9 @@ function Get-BatchAnalysisRecord($Process,[string]$Operation,[string]$Root) {
             ($parsed.exit_code -isnot [int] -and $parsed.exit_code -isnot [long]) -or $parsed.exit_code -ne $Process.exit_code) {throw 'Invalid analysis result.'}
         $record.recorded_status=$parsed.status;$record.result_path=$path
         $record.status=$parsed.status;$record.reason=if ($parsed.status -eq 'completed') {$null} else {'analysis_failed'}
+        if ($Operation -eq 'read' -and $record.status -eq 'completed' -and (Get-ToolkitValue (Get-ToolkitValue $parsed 'evidence_linkage') 'status') -eq 'mismatch') {
+            $record.status='failed';$record.reason='report_run_linkage_mismatch'
+        }
     } catch {$record.reason='analysis_result_missing_or_invalid'}
     return $record
 }
@@ -49,6 +67,7 @@ try {
     $output=New-ToolkitOutput $OutputDirectory
     if ($ManifestPath -notmatch '^[A-Za-z]:[\\/]') {throw 'ManifestPath must be absolute.'}
     $manifestPathResolved=Resolve-ToolkitPath $ManifestPath $PSScriptRoot
+    $result.manifest=@{path=$manifestPathResolved;sha256=(Get-Mql5ReleaseHash $manifestPathResolved)}
     $manifest=Read-Mql5ReleaseJson $manifestPathResolved
     Assert-ToolkitFields $manifest @('schema_version','scenarios')
     Assert-ToolkitVersion $manifest
@@ -65,9 +84,10 @@ try {
         $ids[$scenario.id]=$true
         if ($scenario.profile -isnot [string]) {throw 'Scenario profile must be a path.'}
         $profilePath=Resolve-ToolkitPath $scenario.profile $base
+        $profileHash=Get-Mql5ReleaseHash $profilePath
         $profile=Read-Mql5ProjectProfile $profilePath
         if ($null -eq $profile.tester) {throw 'Each scenario requires a profile with saved tester settings.'}
-        $item=[ordered]@{id=$scenario.id;profile_path=$profilePath;profile=$profile;evidence_inputs=@();expected_marker_file=$null;baseline_report=$null;baseline_result=$null;expectations=$null}
+        $item=[ordered]@{id=$scenario.id;profile_path=$profilePath;profile_sha256=$profileHash;profile=$profile;evidence_inputs=@();expected_marker_file=$null;baseline_report=$null;baseline_result=$null;expectations=$null}
         foreach ($key in @('expected_marker_file','baseline_report','baseline_result','expectations')) {
             $value=Get-ToolkitValue $scenario $key
             if ($null -ne $value) {
@@ -96,11 +116,12 @@ try {
             $parsed=Read-Mql5ReleaseJson (Join-Path $output ('validate-baseline-'+$item.id+'\result.json'))
             if ($parsed.evidence_linkage.status -eq 'mismatch') {throw 'Baseline report linkage mismatch.'}
         }
+        Assert-BatchSelection $item
         $selected+=@([pscustomobject]$item)
     }
-    $result.manifest=@{path=$manifestPathResolved;sha256=(Get-Mql5ReleaseHash $manifestPathResolved)}
+    foreach ($item in $selected) {Assert-BatchSelection $item}
     foreach ($item in $selected) {
-        $result.scenarios+=@([ordered]@{id=$item.id;profile=@{path=$item.profile_path;sha256=(Get-Mql5ReleaseHash $item.profile_path)};evidence_inputs=$item.evidence_inputs;status='skipped';reason=if ($Action -eq 'Validate') {'validation_only'} else {'not_started'};compile=$null;tester=$null;retained_reports=@();analysis=@();analysis_skipped_reason=$null;cleanup_verified=$null;output_directory=$null})
+        $result.scenarios+=@([ordered]@{id=$item.id;profile=@{path=$item.profile_path;sha256=$item.profile_sha256};evidence_inputs=$item.evidence_inputs;status='skipped';reason=if ($Action -eq 'Validate') {'validation_only'} else {'not_started'};compile=$null;tester=$null;retained_reports=@();analysis=@();analysis_skipped_reason=$null;cleanup_verified=$null;output_directory=$null})
     }
     $result.status=if ($Action -eq 'Validate') {'validated'} else {'running'}
     Save-BatchCheckpoint
@@ -114,9 +135,7 @@ try {
             [IO.Directory]::CreateDirectory($scenarioRoot) | Out-Null
             $current.output_directory=$scenarioRoot;$current.status='running';$current.reason=$null
             Save-BatchCheckpoint
-            # Reread the existing profile immediately before compilation; do not silently use changed configuration.
-            if ((Get-Mql5ReleaseHash $item.profile_path) -cne $current.profile.sha256) {throw 'Profile changed after manifest validation.'}
-            foreach ($inputEvidence in $item.evidence_inputs) {if ((Get-Mql5ReleaseHash $inputEvidence.path) -cne $inputEvidence.sha256) {throw 'Selected evidence changed after manifest validation.'}}
+            Assert-BatchSelection $item
             $start=[DateTime]::UtcNow
             $compiled=Invoke-BatchProfile @('-ProfilePath',$item.profile_path,'-Action','Compile','-Entrypoint',$item.profile.tester.entrypoint) ($item.profile.compiler.timeout_seconds+30)
             $current.compile=@{exit_code=$compiled.exit_code;runner_status=$compiled.status;receipt_path=$null}
@@ -134,6 +153,7 @@ try {
             $receipt=Read-Mql5ReleaseJson $receiptPath
             if ($receipt.status -cne 'success' -or $receipt.exit_code -ne 0 -or (Get-Item -LiteralPath $receiptPath).LastWriteTimeUtc -lt $start.AddSeconds(-2) -or $receipt.source.path -ine $item.profile.tester.entrypoint) {throw 'Compilation receipt is not fresh for the selected entrypoint.'}
             $current.compile.receipt_path=$receiptPath
+            Assert-BatchSelection $item
             $arguments=@('-ProfilePath',$item.profile_path,'-Action','TesterSmoke','-CompilationReceiptPath',$receiptPath,'-OutputDirectory',(Join-Path $scenarioRoot 'tester'))
             if ($item.expected_marker_file) {$arguments+=@('-ExpectedLogMarkerFile',$item.expected_marker_file)}
             $tested=Invoke-BatchProfile $arguments ($item.profile.tester.timeout_seconds+60)
@@ -155,13 +175,21 @@ try {
             $reportPaths=@(Get-ChildItem -LiteralPath $scenarioRoot -Recurse -File | Where-Object {$_.Extension -in @('.htm','.html')} | ForEach-Object {$_.FullName})
             $current.retained_reports=$reportPaths
             if ($abort) {$current.analysis_skipped_reason='owned_process_cleanup_uncertain';Save-BatchCheckpoint;continue}
+            Assert-BatchSelection $item
+            if ($reportPaths.Count -eq 0) {
+                if ($current.status -eq 'completed') {
+                    $current.analysis+=@([ordered]@{operation='read';exit_code=$null;runner_status='not_started';status='failed';recorded_status=$null;result_path=$null;output=$null;reason='missing_retained_report'})
+                } else {$current.analysis_skipped_reason='no_retained_reports'}
+            }
             foreach ($reportPath in $reportPaths) {
+                Assert-BatchSelection $item
                 $analysisRoot=Join-Path $scenarioRoot ('analysis-'+[guid]::NewGuid().ToString('N'))
                 $analysisArgs=@('-B','-s',(Join-Path $PSScriptRoot 'mql5_toolkit.py'),'report','read','--input',$reportPath,'--output',$analysisRoot)
                 if ($run) {$analysisArgs+=@('--tester-result',$runPath)}
                 $analyzed=Invoke-ToolkitProcess $python $analysisArgs $scenarioRoot 60
                 $current.analysis+=@(Get-BatchAnalysisRecord $analyzed 'read' $analysisRoot)
                 if (-not $analyzed.cleanup_verified) {$abort=$true;$current.cleanup_verified=$false;$current.reason='analysis_cleanup_uncertain';$current.analysis_skipped_reason='owned_process_cleanup_uncertain';break}
+                Assert-BatchSelection $item
                 if ($item.baseline_report) {
                     $compareRoot=Join-Path $scenarioRoot ('comparison-'+[guid]::NewGuid().ToString('N'))
                     $compareArgs=@('-B','-s',(Join-Path $PSScriptRoot 'mql5_toolkit.py'),'report','compare','--baseline',$item.baseline_report,'--candidate',$reportPath,'--output',$compareRoot)
@@ -171,6 +199,7 @@ try {
                     $compared=Invoke-ToolkitProcess $python $compareArgs $scenarioRoot 60
                     $current.analysis+=@(Get-BatchAnalysisRecord $compared 'compare' $compareRoot)
                     if (-not $compared.cleanup_verified) {$abort=$true;$current.cleanup_verified=$false;$current.reason='analysis_cleanup_uncertain';$current.analysis_skipped_reason='owned_process_cleanup_uncertain';break}
+                    Assert-BatchSelection $item
                 }
             }
             Save-BatchCheckpoint
@@ -181,7 +210,7 @@ try {
     if ($result.status -eq 'completed' -and $analysisFailures) {$result.status='completed_with_failures'}
     $result.exit_code=if ($result.status -in @('validated','completed') -and -not $analysisFailures) {0} elseif ($abort) {2} else {1}
 } catch {
-    if ($null -ne $current -and $current.status -eq 'running') {$current.status='failed';$current.reason='wrapper_failure'}
+    if ($null -ne $current -and $current.status -eq 'running') {$current.status='failed';if ($null -eq $current.reason) {$current.reason='wrapper_failure'}}
     $detail=Protect-JournalLine -Line $_.Exception.Message
     $detail=[regex]::Replace($detail,'MQL5_CODING_PASS:[0-9a-fA-F]{32,64}(?::[^\s]*)?','<APPLICATION_MARKER>')
     $result.issues+=@(@{code='invalid_input_or_tooling';message='Inspect manifest, profile, selected evidence, fresh receipts, and child process results.';detail=$detail})

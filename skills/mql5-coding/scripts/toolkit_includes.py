@@ -10,6 +10,26 @@ from pathlib import Path
 from toolkit_common import InputError, absolute, digest, read_json, source, version
 
 
+def selected_entrypoint(value: str | Path) -> Path:
+    path = Path(value)
+    if not path.is_absolute():
+        raise InputError("CLI paths must be absolute")
+    # Explicit directory selections may be canonicalized, but preserve a source
+    # leaf link so inventory can disclose it without reading its target.
+    path = absolute(path.parent, kind="dir") / path.name
+    if not path.is_file():
+        raise InputError("Selected input file is unavailable")
+    return path
+
+
+def linked_component(path: Path) -> Path | None:
+    # Inspect from the root down; never inspect a leaf through a linked parent.
+    for component in reversed([path, *path.parents]):
+        if component.is_symlink() or component.is_junction():
+            return component
+    return None
+
+
 def validated_profile(path: Path, shell: str | None) -> dict:
     host = shell or shutil.which("pwsh") or shutil.which("powershell.exe")
     if not host:
@@ -96,7 +116,7 @@ def inventory(root: Path, entrypoints: list[Path], include_roots: list[Path], pr
         inspected += len(files)
         if inspected > 50000:
             raise InputError("Project inventory exceeds 50000 files; select a narrower root")
-        known.extend(str((Path(folder)/name).resolve()) for name in files if name.lower().endswith(".mq5"))
+        known.extend(str(Path(folder)/name) for name in files if name.lower().endswith(".mq5"))
         all_sources.extend(Path(folder)/name for name in files if Path(name).suffix.lower() in {".mq5", ".mqh"})
     if not entrypoints:
         entrypoints = [Path(p) for p in sorted(known)]
@@ -134,8 +154,9 @@ def inventory(root: Path, entrypoints: list[Path], include_roots: list[Path], pr
             stack.append(identity)
             if len(stack) > 128 or len(files) > 10000:
                 raise InputError("Include graph exceeds bounded depth or file count")
-            if path.is_symlink() or path.is_junction():
-                issues.append({"code": "linked_source_uncertainty", "path": identity})
+            link = linked_component(path)
+            if link is not None:
+                issues.append({"code": "linked_source_uncertainty", "path": identity, "linked_component": str(link)})
                 stack.pop()
                 return
             data = path.read_bytes()
@@ -181,20 +202,34 @@ def inventory(root: Path, entrypoints: list[Path], include_roots: list[Path], pr
                         if Path(name).is_absolute() or Path(name).drive:
                             edge["resolution"] = "unsupported_absolute_include"
                         else:
-                            matches = list(dict.fromkeys((base/name).resolve() for base in roots if (base/name).is_file()))
+                            matches, links = [], []
+                            for base in roots:
+                                candidate = base/name
+                                link = linked_component(candidate)
+                                if link is not None:
+                                    record = {"path": str(candidate), "linked_component": str(link)}
+                                    links.append(record)
+                                    issues.append({"code": "linked_source_uncertainty", **record})
+                                    consumers.setdefault(str(candidate), set()).add(str(entry))
+                                elif candidate.is_file():
+                                    matches.append(candidate.resolve())
+                            matches = list(dict.fromkeys(matches))
                             edge["resolution"] = "possible" if len(matches) == 1 else "ambiguous" if matches else "unresolved"
+                            if links:
+                                edge["linked_candidates"] = links
+                                edge["resolution"] = "ambiguous" if matches else "linked_source_uncertainty"
                             if form == "quoted":
                                 edge["quoted_rule"] = "declaring_file_directory"
-                                edge["declaring_file_candidate"] = str((path.parent/name).resolve())
-                                if matches and not (path.parent/name).is_file():
+                                declaring = path.parent/name
+                                edge["declaring_file_candidate"] = str(declaring if linked_component(declaring) else declaring.resolve())
+                                if matches and not links and not declaring.is_file():
                                     edge["resolution"] = "uncertain_reference_main_only"
-                            if len(matches) == 1:
+                            if len(matches) == 1 and not links:
                                 edge["target"] = str(matches[0])
-                                visit(matches[0])
-                            if len(matches) > 1:
-                                edge["possible_targets"] = [str(p) for p in matches]
-                                for candidate in matches:
-                                    visit(candidate)
+                            if len(matches) > 1 or links and matches:
+                                edge["possible_targets"] = [str(p) for p in matches] + [p["path"] for p in links]
+                            for candidate in matches:
+                                visit(candidate)
                     edges.append(edge)
                 elif directive == "unsupported":
                     issues.append({"code": "unsupported_construct", "path": identity, "line": line})

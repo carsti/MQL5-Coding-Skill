@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -264,6 +265,47 @@ class ToolkitTests(unittest.TestCase):
         self.assertEqual([d["kind"] for d in diff["differences"]], ["added", "changed"])
         self.assertEqual(diff["possible_affected_entrypoints"], [str(root/"A.mq5"), str(root/"B.mq5")])
         self.assertTrue(all(d["consumer_coverage_unknown"] for d in diff["differences"]))
+
+    def test_linked_include_paths_are_disclosed_without_traversal(self):
+        root, external = self.project()
+        alias = root/"linked"
+        if os.name == "nt":
+            quote = lambda p: "'" + str(p).replace("'", "''") + "'"
+            process = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                                      "New-Item -ItemType Junction -Path " + quote(alias) +
+                                      " -Target " + quote(external) + " | Out-Null"], capture_output=True)
+            self.assertEqual(process.returncode, 0, process.stderr)
+        else:
+            alias.symlink_to(external, target_is_directory=True)
+        (root/"A.mq5").write_text('#include "linked/Shared.mqh"\n', encoding="utf-8")
+        snapshot = inventory(root, [root/"A.mq5"], [])
+        self.assertEqual(snapshot["coverage"], "uncertain")
+        self.assertNotIn(str(external/"Shared.mqh"), {f["path"] for f in snapshot["files"]})
+        edge = snapshot["dependencies"][0]
+        self.assertEqual(edge["resolution"], "linked_source_uncertainty")
+        self.assertEqual(edge["linked_candidates"][0]["path"], str(alias/"Shared.mqh"))
+        self.assertTrue(any(i["code"] == "linked_source_uncertainty" for i in snapshot["issues"]))
+
+    def test_linked_entrypoints_are_not_resolved_before_inspection(self):
+        root, external = self.project()
+        target = external/"Outside.mq5"
+        target.write_text('#include "Shared.mqh"\n', encoding="utf-8")
+        alias = root/"Linked.mq5"
+        try:
+            alias.symlink_to(target)
+        except OSError as exc:
+            self.skipTest("File symlinks unavailable: " + str(exc))
+        snap = inventory(root, [], [external])
+        self.assertIn(str(alias), snap["entrypoints"])
+        self.assertTrue(any(i["code"] == "linked_source_uncertainty" and i["path"] == str(alias) for i in snap["issues"]))
+        self.assertNotIn(str(target), {f["path"] for f in snap["files"]})
+        output = self.root/"linked-entry-cli"
+        proc = subprocess.run([sys.executable, "-B", str(SCRIPTS/"mql5_toolkit.py"), "includes", "inventory",
+                               "--root", str(root), "--entrypoint", str(alias), "--output", str(output)], capture_output=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        read = json.loads((output/"result.json").read_text())
+        self.assertEqual(read["entrypoints"], [str(alias)])
+        self.assertEqual(read["coverage"], "uncertain")
 
     def test_cli_exit_codes_and_no_overwrite(self):
         cli = SCRIPTS/"mql5_toolkit.py"
