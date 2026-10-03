@@ -17,17 +17,23 @@ function Test-Mql5CompilationReceipt {
         throw 'Compilation receipt must contain between 1 byte and 1 MiB.'
     }
     $reader = [IO.StreamReader]::new($Tracker[$Tracker.Count - 1].stream, [Text.Encoding]::UTF8, $true, 4096, $true)
-    try { $receipt = $reader.ReadToEnd() | ConvertFrom-Json }
+    try {
+        $receiptText = $reader.ReadToEnd()
+        # The JSON root must remain an object. ConvertFrom-Json would otherwise
+        # unwrap a single-element array and hide the unsupported receipt shape.
+        if (-not $receiptText.TrimStart().StartsWith('{')) {throw 'Compilation receipt must have a JSON object at its root.'}
+        $receipt = $receiptText | ConvertFrom-Json
+    }
     finally { $reader.Dispose(); $Tracker[$Tracker.Count - 1].stream.Position = 0 }
 
-    if ($receipt.schema_version -ne 1 -or $receipt.kind -cne 'mql5_compilation_receipt' -or
-        $receipt.run_id -cnotmatch '\A[0-9a-f]{32}\z' -or
-        $receipt.status -cne 'success' -or $receipt.exit_code -ne 0 -or
+    if ($receipt.schema_version -ne 1 -or $receipt.kind -isnot [string] -or $receipt.kind -cne 'mql5_compilation_receipt' -or
+        $receipt.run_id -isnot [string] -or $receipt.run_id -cnotmatch '\A[0-9a-f]{32}\z' -or
+        $receipt.status -isnot [string] -or $receipt.status -cne 'success' -or $receipt.exit_code -ne 0 -or
         $receipt.errors -ne 0 -or $receipt.warnings -lt 0 -or
         $receipt.syntax_only -isnot [bool] -or $receipt.syntax_only -or
         $receipt.warnings_as_errors -isnot [bool] -or
         ($receipt.warnings_as_errors -and $receipt.warnings -ne 0) -or
-        $null -eq $receipt.compiler -or $null -eq $receipt.expert -or $null -eq $receipt.log) {
+        $receipt.compiler -isnot [pscustomobject] -or $null -eq $receipt.expert -or $null -eq $receipt.log) {
         throw 'Compilation receipt must describe a successful artifact-producing compilation.'
     }
     foreach ($number in @($receipt.schema_version, $receipt.exit_code, $receipt.errors, $receipt.warnings, $receipt.compiler.build)) {
@@ -36,7 +42,7 @@ function Test-Mql5CompilationReceipt {
         }
     }
     foreach ($file in @($receipt.source, $receipt.expert, $receipt.log, $receipt.compiler)) {
-        if ($null -eq $file -or $file.path -isnot [string] -or
+        if ($file -isnot [pscustomobject] -or $file.path -isnot [string] -or
             $file.sha256 -isnot [string] -or $file.sha256 -cnotmatch '\A[0-9a-f]{64}\z' -or
             ($file.byte_length -isnot [int] -and $file.byte_length -isnot [long]) -or
             $file.byte_length -le 0 -or -not (Test-IsAbsoluteLocalDrivePath -Path $file.path)) {

@@ -1,8 +1,8 @@
 # Reusable project profiles
 
-Use a profile when the user asks to save or reuse an EA project's setup. A profile is a versioned JSON data file, not an execution instruction. Creating it and the default `Validate` action do not start MetaEditor or MT5. Compilation and tester actions delegate to the existing wrappers and retain their exit codes, receipts, path checks, and evidence rules.
+Use a profile when the user asks to save or reuse an EA project's setup. A profile is a versioned JSON data file with one object at its root, not an execution instruction. Wrapping that object in an array is unsupported and rejected. Creating it and the default `Validate` action do not start MetaEditor or MT5. Compilation and tester actions delegate to the existing wrappers and retain their exit codes, receipts, path checks, and evidence rules.
 
-Read the [Strategy Tester workflow](strategy-tester.md) completely before a tester action. A saved profile does not supply user authorization, saved-account risk acknowledgement, executable trust, or proof of a fresh build. Enter the tester workflow only for an explicitly requested execution or readiness check.
+Read the [Strategy Tester workflow](strategy-tester.md) completely before a tester action. A saved profile supplies settings, not executable trust or proof of a fresh build. Enter the tester workflow for execution or readiness checks requested or needed for the task, without a separate approval or saved-account acknowledgement.
 
 ## Save an explicit selection
 
@@ -44,7 +44,9 @@ $selection.Leverage = 100
 $selection.ExecutionMode = 0
 ```
 
-These values illustrate the fields, not recommended settings. Select exactly one `SetPath` or `UseExpertDefaults = $true`, with defaults explicitly accepted by the user. `-TesterTimeoutSeconds` defaults to 300. The tester entrypoint must belong to the saved entrypoints. Profiles cannot contain account/login credentials, execution flags, acknowledgements, receipt paths, EX5 hashes, output paths, custom commands, or expected log markers; these fields are rejected.
+These values illustrate the fields, not recommended settings. Select exactly one `SetPath` or `UseExpertDefaults = $true`; use compiled defaults when no preset is selected, without asking for acceptance. `-TesterTimeoutSeconds` defaults to 300. The tester entrypoint must belong to the saved entrypoints. Profiles cannot contain account/login credentials, execution flags, compatibility switches, receipt paths, EX5 hashes, output paths, custom commands, or expected log markers; these fields are rejected.
+
+Symbol names are preserved exactly, including `#`, which MQL5 permits in custom-symbol names. Profile validation rejects control characters, path separators, `=`, and `;`. Accepting a name does not establish that the selected terminal has that symbol or the required history; tester evidence must establish the run outcome.
 
 ## Validate and compile
 
@@ -56,11 +58,11 @@ $profile = 'D:\EA projects\Breakout\mql5-project.json'
 & $profileCommand -ProfilePath $profile -Action Compile -Entrypoint 'Breakout.mq5'
 ```
 
-Validation prints normalized JSON with absolute paths. It does not verify source correctness, compiler success, terminal/data-root binding, preset contents, or executable trust. Compilation checks all saved entrypoints in order, stopping at the first nonzero wrapper exit code. Keep each emitted `MQL5_COMPILE_RECEIPT` path. Use `-SyntaxOnly` only for an explicitly requested syntax check; its receipt cannot authorize tester staging. Normal compile exit codes remain 0 success, 1 compiler errors, 2 tooling failure, 3 timeout, and 4 warnings promoted to errors.
+Validation prints normalized JSON with absolute paths and accepts PowerShell common parameters such as `-Verbose` and `-ErrorAction Stop`; compile/tester parameters remain invalid for validation. It does not verify source correctness, compiler success, terminal/data-root binding, preset contents, or executable trust. Compilation checks all saved entrypoints in order, stopping at the first nonzero wrapper exit code. Keep each emitted `MQL5_COMPILE_RECEIPT` path. Use `-SyntaxOnly` only for an explicitly requested syntax check; its receipt cannot authorize tester staging. Normal compile exit codes remain 0 success, 1 compiler errors, 2 tooling failure, 3 timeout, and 4 warnings promoted to errors.
 
 ## Use fresh evidence for each tester run
 
-For an explicitly requested readiness check, use the exact successful receipt and an unused output directory. No MT5 process is started:
+For a readiness check, use the exact successful receipt and an unused output directory. No MT5 process is started:
 
 ```powershell
 & $profileCommand -ProfilePath $profile -Action TesterPreflight `
@@ -68,10 +70,12 @@ For an explicitly requested readiness check, use the exact successful receipt an
     -OutputDirectory '<new-absolute-output-directory>'
 ```
 
-After the user explicitly acknowledges the selected terminal's saved-account risk, execution uses `-Action TesterSmoke -AcknowledgeSavedAccountRisk` and the same per-run evidence/output parameters. Supply an expected marker or marker-file only when the selected EA emits it. An explicitly trusted `-ExpectedExpertSha256` remains an alternative to a receipt; if both are supplied they must agree. Interpret `smoke-result.json` and the existing runner exit codes exactly as the tester reference requires. Presets and settings saved in a profile must still reflect the user's current intended run.
+Execution uses `-Action TesterSmoke` and the same per-run evidence/output parameters, with no separate permission prompt or acknowledgement. `-AcknowledgeSavedAccountRisk` remains optional for compatibility with older commands. Supply an expected marker or marker-file only when the selected EA emits it. A trusted `-ExpectedExpertSha256` remains an alternative to a receipt; if both are supplied they must agree. Interpret `smoke-result.json` and the existing runner exit codes exactly as the tester reference requires. Presets and settings saved in a profile must still reflect the user's current intended run.
 
 ## Portability and limits
 
 The generated project root is relative to the profile directory on the same drive. Entrypoints, includes, and presets inside the project are relative to its root. Moving the project and profile together preserves these selections, even when invoked from another working directory. Selections outside the project remain absolute, including on the same drive, so a move cannot silently redirect them to another existing resource. Editor, terminal, and terminal-data selections are also absolute. Review external/tool paths after moving to another computer. Moving the profile alone can change relative selections; validate the resolved paths before an action.
+
+Paths must be relative to their documented base or fully qualified absolute paths. Root-relative values such as `\EA\Main.mq5` and drive-relative values such as `C:Main.mq5` are rejected because their meaning depends on the process's current drive or directory. Use `Main.mq5` for a project-relative source or `C:\EA\Main.mq5` for an absolute selection.
 
 Schema version 1 requires exactly the fields emitted by the creation command. Missing, unknown, duplicate (including differently cased/escaped), incorrectly typed, invalid date/range, or ambiguous input fields fail with exit code 2. Files must still exist. Validation checks both compiler and tester selections, so a stale tester path can block a compile until the profile is corrected. Edit the JSON only when requested, then validate; use a new filename to preserve earlier selections. Profile paths are data, so saving one does not sandbox an executable or authenticate the profile's contents. Receipts retain the original limitation: included headers and runtime dependencies are not fingerprinted.

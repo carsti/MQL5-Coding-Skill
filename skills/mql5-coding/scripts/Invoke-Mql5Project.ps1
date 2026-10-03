@@ -10,6 +10,7 @@ param(
     [string]$OutputDirectory,
     [string]$ExpectedLogMarker,
     [string]$ExpectedLogMarkerFile,
+    # Optional legacy switch retained for command compatibility.
     [switch]$AcknowledgeSavedAccountRisk
 )
 Set-StrictMode -Version Latest
@@ -50,7 +51,8 @@ try {
     . (Join-Path $PSScriptRoot 'Mql5ProjectProfile.ps1')
     $profile=Read-Mql5ProjectProfile $ProfilePath
     if ($Action -eq 'Validate') {
-        if (@($PSBoundParameters.Keys | Where-Object {$_ -notin @('ProfilePath','Action')}).Count) {throw 'Validation accepts only a profile path and action.'}
+        $commonParameters=@([Management.Automation.PSCmdlet]::CommonParameters)+@([Management.Automation.PSCmdlet]::OptionalCommonParameters)
+        if (@($PSBoundParameters.Keys | Where-Object {$_ -notin (@('ProfilePath','Action')+$commonParameters)}).Count) {throw 'Validation accepts only a profile path, action, and PowerShell common parameters.'}
         $profile | ConvertTo-Json -Depth 8
         exit 0
     }
@@ -72,8 +74,6 @@ try {
     }
     if ($SyntaxOnly -or $PSBoundParameters.ContainsKey('Entrypoint')) {throw 'Tester action uses the saved tester entrypoint.'}
     if ($null -eq $profile.tester) {throw 'This profile has no tester configuration.'}
-    if ($Action -eq 'TesterSmoke' -and -not $AcknowledgeSavedAccountRisk) {throw 'Execution requires the separate saved-account risk acknowledgement.'}
-    if ($Action -eq 'TesterPreflight' -and $AcknowledgeSavedAccountRisk) {throw 'Preflight does not record execution approval.'}
     if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {throw 'Select a new output directory for this tester run.'}
     if ([string]::IsNullOrWhiteSpace($CompilationReceiptPath) -and [string]::IsNullOrWhiteSpace($ExpectedExpertSha256)) {throw 'Select the exact successful receipt or trusted EX5 hash for this run.'}
     $t=$profile.tester
@@ -85,6 +85,6 @@ try {
     if ($script:profileToolExit -eq 0 -and -not (Test-Path -LiteralPath (Join-Path $parameters.OutputDirectory 'smoke-result.json') -PathType Leaf)) {throw 'Tester wrapper returned without its result JSON.'}
     exit $script:profileToolExit
 } catch {
-    Write-Error -Message 'Project invocation failed: validate the profile, explicit action, per-run evidence/output path, and separate execution acknowledgement.' -ErrorAction Continue
+    Write-Error -Message 'Project invocation failed: validate the profile, selected action, and per-run evidence/output path.' -ErrorAction Continue
     exit 2
 }

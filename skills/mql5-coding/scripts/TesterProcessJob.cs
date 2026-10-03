@@ -13,6 +13,9 @@ namespace Mql5Coding
     {
         private const uint CreateSuspendedFlag = 0x00000004;
         private const uint CreateNoWindow = 0x08000000;
+        private const uint CreateUnicodeEnvironment = 0x00000400;
+        private const uint ExtendedStartupInfoPresent = 0x00080000;
+        private const uint StartfUseStdHandles = 0x00000100;
         private const uint StartfUseShowWindow = 0x00000001;
         private const short SwHide = 0;
         private const uint JobObjectLimitKillOnJobClose = 0x00002000;
@@ -122,6 +125,48 @@ namespace Mql5Coding
             public uint dwProcessId;
             public uint dwThreadId;
         }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SecurityAttributes
+        {
+            public int Length;
+            public IntPtr Descriptor;
+            [MarshalAs(UnmanagedType.Bool)] public bool InheritHandle;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ProbeStartupInfo
+        {
+            public StartupInfo Startup;
+            public IntPtr Attributes;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CreatePipe(out SafeFileHandle read, out SafeFileHandle write, ref SecurityAttributes attributes, uint size);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetHandleInformation(SafeFileHandle handle, uint mask, uint flags);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, int flags, ref IntPtr size);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, IntPtr attribute, IntPtr value, UIntPtr size, IntPtr previous, IntPtr returned);
+
+        [DllImport("kernel32.dll")]
+        private static extern void DeleteProcThreadAttributeList(IntPtr list);
+
+        [DllImport("kernel32.dll", EntryPoint = "CreateProcessW", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CreateProbeProcess(string application, StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inheritHandles, uint flags, IntPtr environment, string directory, ref ProbeStartupInfo startup, out ProcessInformation process);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetExitCodeProcess(SafeWaitHandle process, out uint exitCode);
 
         [StructLayout(LayoutKind.Sequential)]
         private struct FileTime
@@ -325,6 +370,55 @@ namespace Mql5Coding
         }
 
         public int ProcessId { get; private set; }
+        public StreamReader StandardOutput { get; private set; }
+        public StreamReader StandardError { get; private set; }
+
+        public sealed class ProbeOutput
+        {
+            public string Text { get; private set; }
+            public bool LimitExceeded { get; private set; }
+            internal ProbeOutput(string text, bool limitExceeded)
+            {
+                Text = text;
+                LimitExceeded = limitExceeded;
+            }
+        }
+
+        public static async System.Threading.Tasks.Task<ProbeOutput> ReadProbeOutputAsync(StreamReader reader, int maximumCharacters, bool captureText)
+        {
+            if (reader == null) throw new ArgumentNullException("reader");
+            if (maximumCharacters < 1) throw new ArgumentOutOfRangeException("maximumCharacters");
+            char[] buffer = new char[Math.Min(8192, maximumCharacters)];
+            StringBuilder text = captureText ? new StringBuilder() : null;
+            int received = 0;
+            while (true)
+            {
+                int count = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+                if (count == 0) return new ProbeOutput(captureText ? text.ToString() : null, false);
+                if (count > maximumCharacters - received) return new ProbeOutput(null, true);
+                received += count;
+                if (captureText) text.Append(buffer, 0, count);
+            }
+        }
+
+        public bool WaitForExit(int timeoutMilliseconds)
+        {
+            uint result = WaitForSingleObject(processHandle, unchecked((uint)timeoutMilliseconds));
+            if (result == WaitObject0) return true;
+            if (result == 0x00000102) return false;
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Waiting for the probe process failed.");
+        }
+
+        public int ExitCode
+        {
+            get
+            {
+                uint code;
+                if (!GetExitCodeProcess(processHandle, out code))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Reading the probe exit code failed.");
+                return unchecked((int)code);
+            }
+        }
 
         public sealed class PathEntryLease : IDisposable
         {
@@ -497,6 +591,122 @@ namespace Mql5Coding
                     process.Dispose();
                 if (job != null)
                     job.Dispose();
+            }
+        }
+
+        private static string QuoteProbeArgument(string value)
+        {
+            if (value.Length > 0 && value.IndexOf('"') < 0 && !System.Text.RegularExpressions.Regex.IsMatch(value, @"\s")) return value;
+            StringBuilder quoted = new StringBuilder("\"");
+            int slashes = 0;
+            foreach (char character in value)
+            {
+                if (character == '\\') { slashes++; continue; }
+                if (character == '"') { quoted.Append('\\', slashes * 2 + 1); quoted.Append('"'); }
+                else { quoted.Append('\\', slashes); quoted.Append(character); }
+                slashes = 0;
+            }
+            quoted.Append('\\', slashes * 2);
+            quoted.Append('"');
+            return quoted.ToString();
+        }
+
+        public static JobProcessLaunch CreateSuspendedProbe(string application, string[] arguments, string directory, System.Collections.IDictionary overrides)
+        {
+            SafeWaitHandle job = null, process = null, thread = null;
+            SafeFileHandle inputRead = null, inputWrite = null, outputRead = null, outputWrite = null, errorRead = null, errorWrite = null;
+            StreamReader output = null, error = null;
+            IntPtr attributes = IntPtr.Zero, handles = IntPtr.Zero, environment = IntPtr.Zero;
+            bool attributesInitialized = false;
+            try
+            {
+                SecurityAttributes security = new SecurityAttributes();
+                security.Length = Marshal.SizeOf(typeof(SecurityAttributes));
+                security.InheritHandle = true;
+                if (!CreatePipe(out inputRead, out inputWrite, ref security, 0) ||
+                    !CreatePipe(out outputRead, out outputWrite, ref security, 0) ||
+                    !CreatePipe(out errorRead, out errorWrite, ref security, 0))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Creating probe pipes failed.");
+                inputWrite.Dispose(); inputWrite = null;
+                if (!SetHandleInformation(outputRead, 1, 0) || !SetHandleInformation(errorRead, 1, 0))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Configuring probe pipes failed.");
+                IntPtr size = IntPtr.Zero;
+                InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+                if (size == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "Sizing probe attributes failed.");
+                attributes = Marshal.AllocHGlobal(size);
+                if (!InitializeProcThreadAttributeList(attributes, 1, 0, ref size))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Initializing probe attributes failed.");
+                attributesInitialized = true;
+                handles = Marshal.AllocHGlobal(3 * IntPtr.Size);
+                Marshal.WriteIntPtr(handles, 0, inputRead.DangerousGetHandle());
+                Marshal.WriteIntPtr(handles, IntPtr.Size, outputWrite.DangerousGetHandle());
+                Marshal.WriteIntPtr(handles, 2 * IntPtr.Size, errorWrite.DangerousGetHandle());
+                if (!UpdateProcThreadAttribute(attributes, 0, new IntPtr(0x00020002), handles, new UIntPtr(unchecked((uint)(3 * IntPtr.Size))), IntPtr.Zero, IntPtr.Zero))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Restricting probe handle inheritance failed.");
+
+                System.Collections.Generic.SortedDictionary<string, string> variables = new System.Collections.Generic.SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables()) variables[(string)entry.Key] = (string)entry.Value;
+                foreach (System.Collections.DictionaryEntry entry in overrides)
+                {
+                    if (entry.Value == null) variables.Remove((string)entry.Key);
+                    else variables[(string)entry.Key] = (string)entry.Value;
+                }
+                StringBuilder block = new StringBuilder();
+                foreach (System.Collections.Generic.KeyValuePair<string, string> entry in variables) block.Append(entry.Key).Append('=').Append(entry.Value).Append('\0');
+                block.Append('\0');
+                environment = Marshal.StringToHGlobalUni(block.ToString());
+                job = CreateJobObject(IntPtr.Zero, null);
+                if (job == null || job.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), "Creating the probe job failed.");
+                JobObjectExtendedLimitInformation limits = new JobObjectExtendedLimitInformation();
+                limits.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose;
+                if (!SetInformationJobObject(job, JobObjectExtendedLimitInformationClass, ref limits, unchecked((uint)Marshal.SizeOf(typeof(JobObjectExtendedLimitInformation)))))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Configuring the probe job failed.");
+                ProbeStartupInfo startup = new ProbeStartupInfo();
+                startup.Startup.cb = unchecked((uint)Marshal.SizeOf(typeof(ProbeStartupInfo)));
+                startup.Startup.dwFlags = StartfUseShowWindow | StartfUseStdHandles;
+                startup.Startup.wShowWindow = SwHide;
+                startup.Startup.hStdInput = inputRead.DangerousGetHandle();
+                startup.Startup.hStdOutput = outputWrite.DangerousGetHandle();
+                startup.Startup.hStdError = errorWrite.DangerousGetHandle();
+                startup.Attributes = attributes;
+                StringBuilder command = new StringBuilder(QuoteProbeArgument(application));
+                foreach (string argument in arguments) command.Append(' ').Append(QuoteProbeArgument(argument));
+                ProcessInformation created;
+                if (!CreateProbeProcess(application, command, IntPtr.Zero, IntPtr.Zero, true, CreateSuspendedFlag | CreateNoWindow | CreateUnicodeEnvironment | ExtendedStartupInfoPresent, environment, directory, ref startup, out created))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Creating the suspended probe failed.");
+                process = new SafeWaitHandle(created.hProcess, true);
+                thread = new SafeWaitHandle(created.hThread, true);
+                if (!AssignProcessToJobObject(job, process))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Assigning the suspended probe to its job failed.");
+                output = new StreamReader(new FileStream(outputRead, FileAccess.Read), Encoding.UTF8, true);
+                outputRead = null;
+                error = new StreamReader(new FileStream(errorRead, FileAccess.Read), Encoding.UTF8, true);
+                errorRead = null;
+                JobProcessLaunch launch = new JobProcessLaunch(job, process, thread, unchecked((int)created.dwProcessId));
+                launch.StandardOutput = output;
+                launch.StandardError = error;
+                job = null; process = null; thread = null; output = null; error = null;
+                return launch;
+            }
+            finally
+            {
+                bool cleanupVerified = true;
+                if (job != null) job.Dispose();
+                if (process != null) { TerminateProcess(process, 0xDEAD); cleanupVerified = WaitForSingleObject(process, 5000) == WaitObject0; process.Dispose(); }
+                if (thread != null) thread.Dispose();
+                if (output != null) output.Dispose();
+                if (error != null) error.Dispose();
+                if (inputRead != null) inputRead.Dispose();
+                if (inputWrite != null) inputWrite.Dispose();
+                if (outputRead != null) outputRead.Dispose();
+                if (outputWrite != null) outputWrite.Dispose();
+                if (errorRead != null) errorRead.Dispose();
+                if (errorWrite != null) errorWrite.Dispose();
+                if (attributesInitialized) DeleteProcThreadAttributeList(attributes);
+                if (attributes != IntPtr.Zero) Marshal.FreeHGlobal(attributes);
+                if (handles != IntPtr.Zero) Marshal.FreeHGlobal(handles);
+                if (environment != IntPtr.Zero) Marshal.FreeHGlobal(environment);
+                if (!cleanupVerified) throw new InvalidOperationException("Suspended probe cleanup could not be verified.");
             }
         }
 
@@ -1070,6 +1280,8 @@ namespace Mql5Coding
                 processHandle.Dispose();
                 processHandle = null;
             }
+            if (StandardOutput != null) { StandardOutput.Dispose(); StandardOutput = null; }
+            if (StandardError != null) { StandardError.Dispose(); StandardError = null; }
         }
     }
 }

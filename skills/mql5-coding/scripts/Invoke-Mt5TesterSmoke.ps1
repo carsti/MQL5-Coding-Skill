@@ -24,6 +24,7 @@ param(
     [string[]]$ExpectedLogMarker = @(),
     $ExpectedLogMarkerFile,
 
+    # Optional legacy switch retained for command compatibility.
     [switch]$AcknowledgeSavedAccountRisk,
 
     [switch]$Execute,
@@ -138,6 +139,7 @@ $result = [ordered]@{
     binding = $null
     safety = [ordered]@{
         strategy_tester_requested = [bool]$Execute
+        saved_account_risk_acknowledgement_required = $false
         saved_account_risk_acknowledged = [bool]$AcknowledgeSavedAccountRisk
         saved_terminal_state_isolation_verified = $false
         optimization = $false
@@ -205,13 +207,7 @@ try {
     }
     $hasSetPath = -not [string]::IsNullOrWhiteSpace([string]$SetPath)
     if ($hasSetPath -eq [bool]$UseExpertDefaults) {
-        throw 'Select exactly one EA input source: -SetPath for an explicit .set preset, or -UseExpertDefaults after explicitly accepting the compiled EA defaults.'
-    }
-    if ([bool]$Execute -and -not [bool]$AcknowledgeSavedAccountRisk) {
-        throw '-Execute requires -AcknowledgeSavedAccountRisk after the user explicitly confirms that MT5 may initialize its saved broker account and terminal state.'
-    }
-    if ([bool]$PreflightOnly -and [bool]$AcknowledgeSavedAccountRisk) {
-        throw '-AcknowledgeSavedAccountRisk is valid only with -Execute.'
+        throw 'Select exactly one EA input source: -SetPath for a selected .set preset, or -UseExpertDefaults for the compiled EA defaults.'
     }
 
     foreach ($required in @(

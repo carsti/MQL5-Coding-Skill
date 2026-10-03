@@ -15,6 +15,12 @@ $updater = Join-Path $codexDirectory 'skills/mql5-coding/scripts/Update-Mql5Skil
 
 `Check` reads authenticated release metadata and installed version, without downloading or modifying files. Its `installed_bytes_verified=false` explicitly distinguishes version inspection from byte verification. `Update` downloads the named stable release, verifies its length and GitHub asset SHA-256, resolves the tag's source commit, and checks the complete manifest and every skill file before replacing anything. Drafts, prereleases, missing digests, unlisted files, duplicate paths, links, traversal entries, oversized archives, and mismatched identities are rejected. No downloaded code is executed by the verifier. An already installed identical version is verified and returned as `already_current`; changed bytes at that version fail.
 
+Release manifests, version records, backup records, and pending recovery records require a JSON object at their root. An array around an otherwise valid record is rejected before PowerShell can unwrap it. Manifest repository, tag, version, and source-commit fields require strings; arrays containing an expected string are rejected. Version records require exactly an integer `schema_version` of 1 and a stable version string. Packaging, `Check`, `Update`, and environment health use the same version rules. The manifest's `files` field remains an array inside that object.
+
+Rollback requires a typed backup record with the selected backup ID, exact destination, boolean installation state, and valid file inventory. Before changing installed files or clearing markers, it validates every pending recovery record's action, destination, allowed fields, and any parent backup ID. Invalid records fail while preserving the installation and retained evidence; they must be inspected before retrying recovery.
+
+Absolute drive roots retain their trailing separator through path validation and file inventory. Selecting `X:\` must not become the drive-relative `X:` or follow a current subfolder. Inventories keep correct paths relative to that root, and packaging still refuses an output directory inside the selected skill tree.
+
 Updates preserve the whole previous skill directory, including custom files, under `CODEX_HOME/tools/mql5-skill-updates/<backup_id>/backup-tree`. The result gives that ID. A lock excludes concurrent updater operations. The updater verifies a complete snapshot before changing anything, keeps the installed root directory in place, and stages on the same volume. It journals replacement of the root's children so an open Codex directory watcher does not block an update. Caught publication failures restore displaced children. It retains a pending transaction marker across a process or machine interruption and refuses another update until rollback resolves it. This is recoverable replacement, not a crash-atomic switch of all files. Close programs that lock individual child directories/files if a rename fails, or the root when rolling back a fresh installation to absence.
 
 ```powershell
@@ -22,6 +28,8 @@ Updates preserve the whole previous skill directory, including custom files, und
 ```
 
 Rollback verifies the retained snapshot before restoring it and preserves the displaced installation in a new backup. Rolling back a fresh installation restores the previous absence of the skill. It does not download anything. Backup records and hashes are local integrity evidence, not cryptographic signatures; an actor able to change both can change the evidence. Keep retained backups until they are no longer needed. Project profiles, Python, MCP registration, terminals and broker settings are outside the skill tree and are not changed. Fully restart Codex after a changed installation so new chats load the new instructions.
+
+If rollback is interrupted again, recovery follows the pending intents back to the original snapshot. After verifying the restored files, it clears all related pending markers, removing descendants before their ancestors. A cleanup failure retains the unresolved intent's recovery chain so a later rollback still selects the original snapshot.
 
 For an offline update, supply all trust inputs explicitly:
 

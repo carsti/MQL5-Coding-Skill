@@ -141,7 +141,7 @@ def main() -> int:
             fail(f"Strategy Tester reference is missing safeguard: {phrase}")
 
     version = json.loads((SKILL_ROOT / "version.json").read_text(encoding="utf-8"))
-    if set(version) != {"schema_version", "version"} or version["schema_version"] != 1 or not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version["version"]):
+    if not isinstance(version, dict) or set(version) != {"schema_version", "version"} or type(version["schema_version"]) is not int or version["schema_version"] != 1 or not isinstance(version["version"], str) or not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version["version"]):
         fail("Invalid skill release version.")
 
     for markdown_path in [skill_path, reference_path, SKILL_ROOT / "references" / "environment-health.md", SKILL_ROOT / "references" / "project-profiles.md", SKILL_ROOT / "references" / "releases.md", REPOSITORY_ROOT / "README.md"]:

@@ -26,6 +26,8 @@ function Assert-Mql5ReleasePath([string]$Path) {
         $next=[IO.Path]::GetDirectoryName($part)
         if ($next -eq $part) {break}; $part=$next
     }
+    # Preserve a drive root's separator so later APIs cannot resolve C: through cwd.
+    if ($full -ieq [IO.Path]::GetPathRoot($full)) {return $full}
     return $full.TrimEnd('\')
 }
 function Assert-Mql5ReleaseObject($Object,[string[]]$Fields) {
@@ -34,9 +36,34 @@ function Assert-Mql5ReleaseObject($Object,[string[]]$Fields) {
     if ($names.Count -ne $Fields.Count) {throw 'Unsupported release metadata fields.'}
     foreach ($name in $names) {if ($name -cnotin $Fields) {throw 'Unsupported release metadata fields.'}}
 }
+function Assert-Mql5SkillVersion($Identity) {
+    Assert-Mql5ReleaseObject $Identity @('schema_version','version')
+    if (($Identity.schema_version -isnot [int] -and $Identity.schema_version -isnot [long]) -or
+        $Identity.schema_version -ne 1 -or $Identity.version -isnot [string] -or
+        $Identity.version -cnotmatch '\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\z') {throw 'Invalid skill version metadata.'}
+}
+function Assert-Mql5ReleaseBackup($Record,[string]$BackupId,[string]$Target) {
+    Assert-Mql5ReleaseObject $Record @('schema_version','backup_id','target','had_installation','files')
+    if (($Record.schema_version -isnot [int] -and $Record.schema_version -isnot [long]) -or
+        $Record.schema_version -ne 1 -or $Record.backup_id -isnot [string] -or $Record.backup_id -cne $BackupId -or
+        $Record.target -isnot [string] -or $Record.target -cne $Target -or $Record.had_installation -isnot [bool]) {throw 'Invalid backup record for this destination.'}
+    $null=Get-Mql5ReleaseFileMap $Record.files
+    if (-not $Record.had_installation -and $Record.files.Count -ne 0) {throw 'An empty installation backup must have an empty inventory.'}
+}
+function Assert-Mql5ReleaseIntent($Intent,[string]$Target) {
+    if ($Intent -isnot [pscustomobject] -or $Intent.action -isnot [string] -or $Intent.action -cnotin @('update','rollback') -or
+        $Intent.target -isnot [string] -or $Intent.target -cne $Target) {throw 'Invalid pending release intent.'}
+    if ($Intent.action -ceq 'update') {Assert-Mql5ReleaseObject $Intent @('action','target')}
+    else {
+        Assert-Mql5ReleaseObject $Intent @('action','target','restore_backup_id')
+        if ($Intent.restore_backup_id -isnot [string] -or $Intent.restore_backup_id -cnotmatch '\A[0-9a-f]{32}\z') {throw 'Invalid pending rollback intent.'}
+    }
+}
 function Read-Mql5ReleaseJson([string]$Path) {
     if ((Get-Item -LiteralPath $Path).Length -gt 1048576) {throw 'Release metadata is too large.'}
     $text=[IO.File]::ReadAllText($Path,(New-Object Text.UTF8Encoding($false,$true)))
+    # Refuse array roots before ConvertFrom-Json can unwrap a single element.
+    if (-not $text.TrimStart().StartsWith('{')) {throw 'Release metadata must have a JSON object at its root.'}
     # Refuse duplicate, case-aliased and escaped JSON keys before ConvertFrom-Json.
     $stack=New-Object 'Collections.Generic.Stack[object]'
     foreach ($token in [regex]::Matches($text,'"(?:[^"\\]|\\.)*"|[{}\[\]]')) {
@@ -63,6 +90,7 @@ function Write-Mql5ReleaseJson([string]$Path,$Value) {
 }
 function Get-Mql5ReleaseInventory([string]$Root) {
     $root=Assert-Mql5ReleasePath $Root
+    $rootPrefix=$root.TrimEnd('\')+'\'
     $result=@()
     # Enumerate one level at a time, refusing junctions before recursion.
     $pending=New-Object 'Collections.Generic.Stack[string]'; $pending.Push($root)
@@ -70,7 +98,7 @@ function Get-Mql5ReleaseInventory([string]$Root) {
         foreach ($item in Get-ChildItem -LiteralPath $pending.Pop() -Force) {
             if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {throw 'Skill tree contains a reparse point.'}
             if ($item.PSIsContainer) {$pending.Push($item.FullName)}
-            else {$result+=@([pscustomobject][ordered]@{path=$item.FullName.Substring($root.Length+1).Replace('\','/');bytes=$item.Length;sha256=(Get-Mql5ReleaseHash $item.FullName)})}
+            else {$result+=@([pscustomobject][ordered]@{path=$item.FullName.Substring($rootPrefix.Length).Replace('\','/');bytes=$item.Length;sha256=(Get-Mql5ReleaseHash $item.FullName)})}
         }
     }
     return @($result | Sort-Object -Property path)
@@ -99,6 +127,11 @@ function Assert-Mql5ReleaseInventory([string]$Root,$Files) {
 }
 function Assert-Mql5SkillManifest($Manifest,[string]$Version,[string]$Commit) {
     Assert-Mql5ReleaseObject $Manifest @('schema_version','repository','tag','version','source_commit','files')
+    # PowerShell comparisons filter array operands; an array containing only
+    # the expected identity can otherwise look equal to a required string.
+    foreach ($field in @('repository','tag','version','source_commit')) {
+        if ($Manifest.$field -isnot [string]) {throw 'Release identity fields must be strings.'}
+    }
     if (($Manifest.schema_version -isnot [int] -and $Manifest.schema_version -isnot [long]) -or $Manifest.schema_version -ne 1 -or
         $Manifest.repository -cne 'shamwi2846/MQL5-Coding-Skill' -or $Manifest.version -cne $Version -or
         $Manifest.tag -cne ('v'+$Version) -or $Manifest.source_commit -cne $Commit -or
@@ -149,8 +182,8 @@ function Expand-Mql5SkillRelease([string]$Archive,[string]$Digest,[string]$Versi
     Assert-Mql5SkillManifest $manifest $Version $Commit
     Assert-Mql5ReleaseInventory (Join-Path $Stage 'mql5-coding') $manifest.files
     $identity=Read-Mql5ReleaseJson (Join-Path $Stage 'mql5-coding/version.json')
-    Assert-Mql5ReleaseObject $identity @('schema_version','version')
-    if ($identity.schema_version -ne 1 -or $identity.version -cne $Version) {throw 'Packaged skill version differs from its manifest.'}
+    Assert-Mql5SkillVersion $identity
+    if ($identity.version -cne $Version) {throw 'Packaged skill version differs from its manifest.'}
     return $manifest
 }
 function Invoke-Mql5ReleaseGh([string[]]$Arguments) {

@@ -56,7 +56,10 @@ function Receipt-Path($Result) {
     return $matches[$matches.Count-1].Groups[1].Value.Trim()
 }
 function Reject($Data,[string]$Label) {
-    $bad=Join-Path $testRoot 'bad-profile.json'
+    # Keep project-relative selectors anchored exactly as in the valid fixture.
+    # Moving this JSON to testRoot would fail on missing files regardless of the
+    # invalid field under test, masking validators that accept that field.
+    $bad=Join-Path (Split-Path -Parent $script:profilePath) 'bad-profile.json'
     Save-Json $Data $bad
     $rejected=$false
     try {[void](Read-Mql5ProjectProfile $bad)} catch {$rejected=$true}
@@ -100,6 +103,25 @@ try {
     $resolved=$validated.stdout | ConvertFrom-Json
     Check ($resolved.entrypoints[0] -ieq (Join-Path $project 'First.mq5')) 'Validation depends on the invoking working directory.'
     Check (-not (Test-Path -LiteralPath (Join-Path $project 'First.ex5'))) 'Validation unexpectedly compiled the EA.'
+    $hashProfilePath=$null
+    $hashIndex=0
+    foreach ($symbol in @('#SYNTH','SYNTH#','SY#NTH')) {
+        $hashCreation=$creation.Clone()
+        $hashCreation.Symbol=$symbol
+        $hashCreation.ProfilePath=Join-Path $project ('hash-symbol-'+$hashIndex+'.json')
+        $hashSaved=Run 'New-Mql5ProjectProfile.ps1' $hashCreation
+        Check ($hashSaved.code -eq 0) ('A documented hash symbol was rejected during profile creation: '+$symbol+' '+$hashSaved.stderr)
+        Check ((Read-Mql5ProjectProfile $hashCreation.ProfilePath).tester.settings.symbol -ceq $symbol) 'Profile creation changed a selected hash symbol.'
+        if ($hashIndex -eq 0) {$hashProfilePath=$hashCreation.ProfilePath}
+        $hashIndex++
+    }
+    foreach ($commonParameter in @('Verbose','ErrorAction','WarningAction','InformationAction','Debug','OutVariable','PipelineVariable')) {
+        $validationParameters=@{Action='Validate'}
+        $validationParameters[$commonParameter]=if ($commonParameter -in @('Verbose','Debug')) {$true} elseif ($commonParameter -in @('OutVariable','PipelineVariable')) {'profileValidation'} else {'Stop'}
+        $commonValidation=Invoke-Profile $validationParameters
+        Check ($commonValidation.code -eq 0) ('Validation rejected PowerShell common parameter '+$commonParameter+': '+$commonValidation.stderr)
+        Check (($commonValidation.stdout | ConvertFrom-Json).entrypoints[0] -ieq (Join-Path $project 'First.mq5')) 'Common parameters changed validated paths.'
+    }
     $moved=Join-Path $testRoot 'moved project'
     Copy-Item -LiteralPath $project -Destination $moved -Recurse
     $movedData=Read-Mql5ProjectProfile (Join-Path $moved 'mql5-project.json')
@@ -124,6 +146,27 @@ try {
     $compileOnly=Copy-Data $base
     $compileOnly.tester=$null
     Check ($null -eq (ConvertTo-Mql5ValidatedProfile $compileOnly $profilePath).tester) 'Compile-only profiles were rejected.'
+    $validControl=Join-Path $project 'bad-profile.json'
+    Save-Json $base $validControl
+    Check ((Read-Mql5ProjectProfile $validControl).entrypoints[0] -ieq (Join-Path $project 'First.mq5')) 'The negative-test location does not accept the unmodified valid profile.'
+    $arrayProfile=Join-Path $project 'array-profile.json'
+    [IO.File]::WriteAllText($arrayProfile,('['+($base | ConvertTo-Json -Depth 8)+']'),(New-Object Text.UTF8Encoding($false)))
+    $rejected=$false
+    try {[void](Read-Mql5ProjectProfile $arrayProfile)} catch {$rejected=$true}
+    Check $rejected 'A single-element array was accepted as the root profile object.'
+    foreach ($leadingSeparator in @('\','/')) {
+        $bad=Copy-Data $base
+        $bad.entrypoints=@($leadingSeparator+(Join-Path $project 'First.mq5').Substring(3))
+        Reject $bad 'root-relative existing source depends on the current drive'
+    }
+    $processDirectory=[IO.Directory]::GetCurrentDirectory()
+    try {
+        [IO.Directory]::SetCurrentDirectory($project)
+        $driveRelative=([IO.Path]::GetPathRoot($project)).Substring(0,2)+'First.mq5'
+        $rejected=$false
+        try {[void](Resolve-Mql5ProfilePath $driveRelative $externalRoot 'Leaf')} catch {$rejected=$true}
+        Check $rejected 'A drive-relative path resolved to an existing source outside its declared base.'
+    } finally {[IO.Directory]::SetCurrentDirectory($processDirectory)}
     foreach ($field in @('Execute','AcknowledgeSavedAccountRisk','Login','CompilationReceiptPath','ExpectedExpertSha256','OutputDirectory','ExpectedLogMarker','command')) {
         $bad=Copy-Data $base
         $bad | Add-Member NoteProperty $field 'forbidden'
@@ -149,9 +192,14 @@ try {
         Reject $bad $case
     }
     $acceptedDefaults=Copy-Data $base
+    foreach ($unsafeSymbol in @('SYNTH=Login','SYNTH/test','SYNTH\test','SYNTH;Login')) {
+        $bad=Copy-Data $base
+        $bad.tester.settings.symbol=$unsafeSymbol
+        Reject $bad ('unsafe symbol '+$unsafeSymbol)
+    }
     $acceptedDefaults.tester.set_path=$null
     $acceptedDefaults.tester.use_expert_defaults=$true
-    Check (ConvertTo-Mql5ValidatedProfile $acceptedDefaults $profilePath).tester.use_expert_defaults 'Explicitly accepted defaults were rejected.'
+    Check (ConvertTo-Mql5ValidatedProfile $acceptedDefaults $profilePath).tester.use_expert_defaults 'Compiled EA defaults were rejected.'
     foreach ($key in @('name','Name','\u006eame')) {
         $duplicate=[regex]::Replace(($base | ConvertTo-Json -Depth 8),'"schema_version"\s*:\s*1',('"'+$key+'": "duplicate", "schema_version": 1'))
         $rejected=$false
@@ -198,9 +246,42 @@ try {
     $report=Get-Content -LiteralPath (Join-Path $preflightOutput 'smoke-result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     Check ($report.status -ceq 'preflight_passed') 'Preflight did not report readiness.'
     Check ($report.inputs.deposit -eq 10000.50 -and $report.inputs.model -eq 0 -and $report.inputs.execution_mode -eq 0) 'Explicit decimal/zero settings changed.'
-    $blockedOutput=Join-Path $testRoot 'unapproved'
-    $blocked=Invoke-Profile @{Action='TesterSmoke';CompilationReceiptPath=$receiptPath;OutputDirectory=$blockedOutput}
-    Check ($blocked.code -eq 2 -and -not (Test-Path -LiteralPath $blockedOutput)) 'Tester started without a separate acknowledgement.'
+    $standardProfilePath=$profilePath
+    try {
+        $profilePath=$hashProfilePath
+        $hashPreflightOutput=Join-Path $testRoot 'hash-symbol-preflight'
+        $hashPreflight=Invoke-Profile @{Action='TesterPreflight';CompilationReceiptPath=$receiptPath;OutputDirectory=$hashPreflightOutput}
+        Check ($hashPreflight.code -eq 0) ('Hash-symbol tester preflight failed: '+$hashPreflight.stderr+$hashPreflight.stdout)
+        $hashPreflightReport=Get-Content -LiteralPath (Join-Path $hashPreflightOutput 'smoke-result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        Check ($hashPreflightReport.status -ceq 'preflight_passed' -and $hashPreflightReport.inputs.symbol -ceq '#SYNTH') 'Preflight changed the selected hash symbol.'
+        $env:FAKE_MT5_MODE='pass'
+        $env:FAKE_MT5_MARKER='MQL5_CODING_PASS:0123456789abcdef0123456789abcdef:hash_symbol'
+        $hashSmokeOutput=Join-Path $testRoot 'hash-symbol-smoke'
+        $hashSmoke=Invoke-Profile @{Action='TesterSmoke';CompilationReceiptPath=$receiptPath;OutputDirectory=$hashSmokeOutput;ExpectedLogMarker=$env:FAKE_MT5_MARKER}
+        Check ($hashSmoke.code -eq 0) ('Hash-symbol tester delegation failed: '+$hashSmoke.stderr+$hashSmoke.stdout)
+        $hashSmokeReport=Get-Content -LiteralPath (Join-Path $hashSmokeOutput 'smoke-result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        Check ($hashSmokeReport.status -ceq 'application_marker_passed' -and $hashSmokeReport.inputs.symbol -ceq '#SYNTH') 'Smoke evidence failed to retain the exact hash symbol.'
+        $hashConfig=[IO.File]::ReadAllText((Join-Path $hashSmokeOutput 'tester-start.ini'),[Text.Encoding]::Unicode)
+        Check ($hashConfig -match '(?m)^Symbol=#SYNTH\r?$') 'Tester configuration changed the selected hash symbol.'
+    } finally {$profilePath=$standardProfilePath}
+    $arrayReceipt=Join-Path $project 'array-receipt.json'
+    [IO.File]::WriteAllText($arrayReceipt,('['+[IO.File]::ReadAllText($receiptPath)+']'),(New-Object Text.UTF8Encoding($false)))
+    $malformedReceipt=Invoke-Profile @{Action='TesterPreflight';CompilationReceiptPath=$arrayReceipt;OutputDirectory=(Join-Path $testRoot 'array-receipt-preflight')}
+    Check ($malformedReceipt.code -eq 2) 'A single-element array was accepted as a successful compilation receipt.'
+    foreach ($fileRecord in @('kind','run_id','status','source','expert','log','compiler')) {
+        $nestedReceipt=[IO.File]::ReadAllText($receiptPath) | ConvertFrom-Json
+        $nestedReceipt.$fileRecord=@($nestedReceipt.$fileRecord)
+        $nestedReceiptPath=Join-Path $project ($fileRecord+'-array-receipt.json')
+        Save-Json $nestedReceipt $nestedReceiptPath
+        $malformedReceipt=Invoke-Profile @{Action='TesterPreflight';CompilationReceiptPath=$nestedReceiptPath;OutputDirectory=(Join-Path $testRoot ($fileRecord+'-array-receipt-preflight'))}
+        Check ($malformedReceipt.code -eq 2) ('An array was accepted as the receipt '+$fileRecord+' field.')
+    }
+    $env:FAKE_MT5_MODE='pass';$env:FAKE_MT5_MARKER='MQL5_CODING_PASS:0123456789abcdef0123456789abcdef:no_prompt'
+    $unpromptedOutput=Join-Path $testRoot 'no-confirmation'
+    $unprompted=Invoke-Profile @{Action='TesterSmoke';CompilationReceiptPath=$receiptPath;OutputDirectory=$unpromptedOutput;ExpectedLogMarker=$env:FAKE_MT5_MARKER}
+    Check ($unprompted.code -eq 0) ('Tester delegation without an acknowledgement failed: '+$unprompted.stderr+$unprompted.stdout)
+    $unpromptedReport=Get-Content -LiteralPath (Join-Path $unpromptedOutput 'smoke-result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    Check ($unpromptedReport.status -ceq 'application_marker_passed' -and -not $unpromptedReport.safety.saved_account_risk_acknowledgement_required -and -not $unpromptedReport.safety.saved_account_risk_acknowledged) 'Tester execution still required or fabricated an acknowledgement.'
     $noEvidence=Invoke-Profile @{Action='TesterPreflight';OutputDirectory=(Join-Path $testRoot 'no-evidence')}
     Check ($noEvidence.code -eq 2) 'A saved profile supplied executable trust.'
     [IO.File]::AppendAllText((Join-Path $project 'First.mq5'),' changed')
@@ -213,6 +294,7 @@ try {
     Check ($smoke.code -eq 0) ('Synthetic tester delegation failed: '+$smoke.stderr+$smoke.stdout)
     $smokeReport=Get-Content -LiteralPath (Join-Path $smokeOutput 'smoke-result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     Check ($smokeReport.status -ceq 'application_marker_passed') 'Synthetic tester result was not retained.'
+    Check ($smokeReport.safety.saved_account_risk_acknowledged -and -not $smokeReport.safety.saved_account_risk_acknowledgement_required) 'The optional legacy acknowledgement switch is incompatible.'
     Check ([Convert]::ToBase64String($originalBytes) -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes($profilePath))) 'Project invocation changed the saved profile.'
     Check ([IO.File]::ReadAllText((Join-Path $project 'approved.set')) -ceq 'FakeInput=1||0||1||N') 'Preset was modified.'
     Write-Output ('PROJECT_PROFILE_TESTS='+$checks)

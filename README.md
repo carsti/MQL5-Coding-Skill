@@ -34,15 +34,25 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $healthCommand -
 
 Use `-Json` for structured output and `-ReportPath '<new-report.json>'` to retain evidence. Missing optional compiler/Python tools and source differences are warnings; `-RequireCompiler` and `-RequirePython` make their absence fail. This command never starts MetaEditor/MT5 or changes configuration. Direct stdio success does not establish tool loading in the current chat. See [all options and limits](skills/mql5-coding/references/environment-health.md).
 
+Compiler discovery requires editor file major version 5 and rejects directories containing a non-MT5 terminal, including mixed MT4/MT5 installations. Standalone editors also need an explicit MetaEditor 5 description.
+
 ## Documentation and compilation
 
-Save each EA's explicit entrypoints, include directory, MetaEditor, and optional terminal/preset/tester settings with `New-Mql5ProjectProfile.ps1`. Use `Invoke-Mql5Project.ps1` to validate resolved paths, compile all or one saved entrypoint, or delegate a requested tester action. Project-relative paths survive moving the EA folder and its profile together. Execution acknowledgement, trusted receipts/hashes, and output paths remain separate per-run inputs. See [commands and limitations](skills/mql5-coding/references/project-profiles.md).
+Save each EA's entrypoints, include directory, MetaEditor, and optional terminal/preset/tester settings with `New-Mql5ProjectProfile.ps1`. Use `Invoke-Mql5Project.ps1` to validate resolved paths, compile all or one saved entrypoint, or delegate a selected tester action. Project-relative paths survive moving the EA folder and its profile together. Trusted receipts/hashes and output paths remain separate per-run inputs. Execution requires no separate acknowledgement; the old switch remains optional for command compatibility. See [commands and limitations](skills/mql5-coding/references/project-profiles.md).
+
+Profile paths must use their documented relative base or a fully qualified absolute path. Values such as `\EA\Main.mq5` and `C:Main.mq5` are rejected rather than resolved through the process's current drive or directory. Update recovery also resolves repeated interrupted rollbacks and retains their original snapshot links if marker cleanup fails.
 
 For an identifier lookup, check the returned passage for the complete identifier and inspect `focus_match` when present. An `approximate` or `none` result does not establish support for the requested identifier; continue reading or select another documented result.
 
 Use the bundled `Compile-Mql5.ps1` wrapper as described in the skill. Pass source and include paths as ordinary quoted PowerShell arguments, including paths containing spaces. The wrapper keeps MetaEditor switch prefixes outside quoted path values; do not embed quotation marks inside the supplied path strings.
 
 Each compilation with a validated source emits `MQL5_COMPILE_RECEIPT=<absolute-json-path>` and preserves a unique JSON receipt and available MetaEditor log beside the source. The receipt includes compiler build/version and hash, errors/warnings, options, exit code, source/EX5 hashes, byte lengths, and log location. It preserves earlier receipts and existing project logs. Failed and syntax-only receipts cannot authorize tester staging.
+
+Profiles, compilation receipts, and release metadata require a JSON object at the root. A single-element array around a valid record is rejected before PowerShell can unwrap it.
+
+Packaging, updates, and health inspection enforce the same exact version-record fields and JSON types. Rollback validates backup identities and all pending recovery records before changing installed files or removing markers, so malformed recovery metadata preserves the installation and retained evidence.
+
+Release helpers preserve absolute drive roots such as `X:\` and inventory the complete selected tree even when the current folder is below that root. Packaging output must remain outside the skill tree, including when the skill occupies a drive root.
 
 Pass that receipt to `Invoke-Mt5TesterSmoke.ps1 -CompilationReceiptPath "<absolute-json-path>"` with the exact EX5 and explicit tester settings. Preflight and execution verify the receipt and unchanged source, EX5, and log automatically, record the evidence in the tester result, and lock those files through cleanup. An explicit `-ExpectedExpertSha256` must agree if also supplied; the existing trusted-EX5 workflow remains supported. Receipts cover the root source, not included `.mqh` files or runtime dependencies, and are unsigned local evidence.
 
@@ -79,12 +89,13 @@ Fully restart Codex after installation.
 
 ## Safety boundaries
 
-- MQL5 API and language claims must use the installed MQL5 CHM first.
-- Review and diagnosis do not authorize edits.
+- The skill completes the requested task and necessary supporting actions without additional permission prompts. Codex, tool, operating-system, and account requirements still apply.
+- MQL5 API and language claims use the installed MQL5 CHM first, with cited primary-source fallback when the CHM cannot verify a necessary fact or the MCP is unavailable.
+- Review and diagnosis preserve source files unless the task also includes changes.
 - Compilation does not prove Strategy Tester, broker, demo, or live behavior.
-- Strategy Tester execution is opt-in and requires informed acknowledgement that the selected terminal may initialize saved account state.
+- Strategy Tester execution and EA default inputs need no additional acceptance. The selected terminal may initialize saved account state; execution evidence still requires verified artifacts, settings, and process cleanup.
 - The bundled runner is not a sandbox. Never execute an untrusted `.ex5`.
-- The skill never authorizes placing, modifying, or cancelling live trades without explicit account-scoped user authorization.
+- Trade operations stay within the actions and account scope established by the user's task. Review, compilation, and tester smoke validation do not initiate trades.
 
 ## Repository layout
 
@@ -123,7 +134,7 @@ GitHub Actions and the local test commands validate:
 - the actual MCP server against this skill on each trusted push and pull request, with exact repository revisions retained in a compatibility artifact;
 - PowerShell syntax under PowerShell 7 and Windows PowerShell 5.1;
 - reproducible release ZIPs and sidecars, full file verification, authenticated metadata policy, legacy and versioned updates, additional verified resources, backup/rollback, interruption recovery, concurrent updater exclusion, archive tampering and path rejection under both shells;
-- project profiles under both shells: creation/overwrite refusal, moved paths, rejected authorization fields and malformed selections, multiple entrypoints, compiler exit-code propagation, receipt freshness, and synthetic tester delegation;
+- project profiles under both shells: creation/overwrite refusal, moved paths, rejected execution fields and malformed selections, multiple entrypoints, compiler exit-code propagation, receipt freshness, and synthetic tester delegation without an acknowledgement switch;
 - environment-health success and failure cases against a real MCP bundle under both shells, including disabled registrations, checksum failures, source differences, optional dependencies, timeouts, redaction, preserved files, and an editor that must never be launched;
 - compiler-wrapper completion, source-path lease, artifact, exit-code contracts, compilation receipts, and automatic tester verification/rejection of changed evidence without starting real MetaEditor;
 - Strategy Tester preflight, mount-manager drive validation, path-handle volume correlation, non-reparse path-chain leases, pinned nonempty-directory guards, pinned journal evidence, stable terminal-image identity checks, secret redaction, unambiguous correlated completion, adversarial log rejection, and timeout cleanup without starting real MT5.
@@ -150,6 +161,8 @@ Run the PowerShell suites sequentially after other validation runs finish:
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Skill.ps1
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Skill.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-HealthProbe.ps1
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-HealthProbe.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-ProjectProfiles.ps1
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-ProjectProfiles.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-SkillReleases.ps1

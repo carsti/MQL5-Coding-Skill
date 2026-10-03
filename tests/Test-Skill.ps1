@@ -153,9 +153,6 @@ function Invoke-RunnerCase {
         $arguments.Add((Quote-NativeArgument -Value ([string]$value)))
     }
     $arguments.Add("-$Mode")
-    if ($Mode -eq 'Execute') {
-        $arguments.Add('-AcknowledgeSavedAccountRisk')
-    }
     foreach ($pair in @(
             @('ExpertPath', $ExpertPath),
             @('ExpectedExpertSha256', $ExpertSha256),

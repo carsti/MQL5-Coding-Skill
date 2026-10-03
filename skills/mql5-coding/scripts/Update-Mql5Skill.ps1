@@ -33,7 +33,10 @@ try {
     }
     if ($Action -eq 'Check') {
         $installed=$null
-        if (Test-Path -LiteralPath (Join-Path $target 'version.json')) {$installed=(Read-Mql5ReleaseJson (Join-Path $target 'version.json')).version}
+        if (Test-Path -LiteralPath (Join-Path $target 'version.json')) {
+            $identity=Read-Mql5ReleaseJson (Join-Path $target 'version.json')
+            Assert-Mql5SkillVersion $identity;$installed=$identity.version
+        }
         [ordered]@{action='check';installed_version=$installed;release=$release;installed_bytes_verified=$false} | ConvertTo-Json -Depth 6
         exit 0
     }
@@ -43,33 +46,54 @@ try {
         $pending=@(Get-ChildItem -LiteralPath $stateRoot -Directory | Where-Object {Test-Path -LiteralPath (Join-Path $_.FullName 'pending.json')})
         if ($pending.Count -and ($Action -ne 'Rollback' -or $BackupId -cnotin @($pending.Name))) {throw ('An interrupted transaction requires Rollback with BackupId '+$pending[-1].Name+'.')}
         if ($Action -eq 'Rollback') {
+            # Validate the recovery metadata before publishing or clearing any
+            # files. A malformed sibling must not fail only after restoration.
+            $pendingIntents=@{}
+            foreach ($item in $pending) {
+                if ($item.Name -cnotmatch '\A[0-9a-f]{32}\z') {throw 'Invalid pending transaction ID.'}
+                $path=Assert-Mql5ReleasePath (Join-Path $item.FullName 'pending.json')
+                $intent=Read-Mql5ReleaseJson $path;Assert-Mql5ReleaseIntent $intent $target
+                $pendingIntents[$item.Name]=[pscustomobject]@{id=$item.Name;path=$path;value=$intent}
+            }
             # A crash during rollback must recover the intended original snapshot,
             # rather than restoring the partially published tree saved by that rollback.
             $visited=@{}
             for ($depth=0;$depth -lt 32;$depth++) {
                 if ($visited.ContainsKey($BackupId)) {throw 'Cyclic pending rollback recovery.'}
                 $visited[$BackupId]=$true
-                $intentPath=Join-Path (Join-Path $stateRoot $BackupId) 'pending.json'
-                if (-not (Test-Path -LiteralPath $intentPath)) {break}
-                $intent=Read-Mql5ReleaseJson $intentPath
-                $parent=$intent.PSObject.Properties['restore_backup_id']
-                if ($null -eq $parent) {break}
-                if ($intent.action -cne 'rollback' -or $intent.target -cne $target -or $parent.Value -cnotmatch '\A[0-9a-f]{32}\z') {throw 'Invalid pending rollback intent.'}
-                $BackupId=[string]$parent.Value
+                if (-not $pendingIntents.ContainsKey($BackupId)) {break}
+                $intent=$pendingIntents[$BackupId].value
+                if ($intent.action -ceq 'update') {break}
+                $BackupId=$intent.restore_backup_id
             }
             if ($depth -eq 32) {throw 'Pending rollback recovery is too deep.'}
             $resolvePending={
-                foreach ($item in $pending) {
-                    $path=Join-Path $item.FullName 'pending.json'
-                    if (-not (Test-Path -LiteralPath $path)) {continue}
-                    $intent=Read-Mql5ReleaseJson $path;$parent=$intent.PSObject.Properties['restore_backup_id']
-                    if ($item.Name -ceq $BackupId -or ($null -ne $parent -and $intent.action -ceq 'rollback' -and $intent.target -ceq $target -and $parent.Value -ceq $BackupId)) {[IO.File]::Delete($path)}
+                # A rollback can itself be interrupted repeatedly. Collect the
+                # entire verified recovery family before deleting any intents;
+                # deleting only direct children leaves later attempts pending.
+                $resolved=@{};$resolved[$BackupId]=0
+                $intents=@()
+                foreach ($item in $pendingIntents.Values) {
+                    $intent=$item.value
+                    if ($item.id -ceq $BackupId -or $intent.action -ceq 'rollback') {
+                        $intents+=@([pscustomobject]@{id=$item.id;path=$item.path;parent=if ($intent.action -ceq 'rollback') {$intent.restore_backup_id} else {$null}})
+                    }
                 }
+                do {
+                    $expanded=$false
+                    foreach ($intent in $intents) {
+                        if (-not $resolved.ContainsKey($intent.id) -and $null -ne $intent.parent -and $resolved.ContainsKey($intent.parent)) {
+                            $resolved[$intent.id]=$resolved[$intent.parent]+1;$expanded=$true
+                        }
+                    }
+                } while ($expanded)
+                # Delete descendants first. If cleanup stops, any surviving
+                # intent still has the full path to its original backup.
+                foreach ($intent in @($intents | Where-Object {$resolved.ContainsKey($_.id)} | Sort-Object {$resolved[$_.id]} -Descending)) {[IO.File]::Delete($intent.path)}
             }
             $txn=Assert-Mql5ReleasePath (Join-Path $stateRoot $BackupId)
             $record=Read-Mql5ReleaseJson (Join-Path $txn 'backup.json')
-            Assert-Mql5ReleaseObject $record @('schema_version','backup_id','target','had_installation','files')
-            if ($record.schema_version -ne 1 -or $record.backup_id -cne $BackupId -or $record.target -cne $target -or $record.had_installation -isnot [bool]) {throw 'Invalid backup record for this destination.'}
+            Assert-Mql5ReleaseBackup $record $BackupId $target
             $tree=Assert-Mql5ReleasePath (Join-Path $txn 'backup-tree')
             if ($record.had_installation) {
                 if (-not (Test-Path -LiteralPath $tree -PathType Container)) {
@@ -81,7 +105,7 @@ try {
                     exit 0
                 }
                 Assert-Mql5ReleaseInventory $tree $record.files
-            } elseif ($record.files -isnot [Array] -or $record.files.Count -ne 0) {throw 'An empty installation backup must have an empty inventory.'}
+            }
             $newId=[guid]::NewGuid().ToString('N');$newTxn=Join-Path $stateRoot $newId
             [IO.Directory]::CreateDirectory($newTxn) | Out-Null
             $restore=Join-Path $newTxn 'restore-tree'
@@ -122,7 +146,7 @@ try {
         if ((Test-Path -LiteralPath $target) -and -not $had) {throw 'The skill destination is not a directory.'}
         if ($had -and (Test-Path -LiteralPath (Join-Path $target 'version.json'))) {
             $current=Read-Mql5ReleaseJson (Join-Path $target 'version.json')
-            if ($current.version -cnotmatch '\A[0-9]+\.[0-9]+\.[0-9]+\z') {throw 'Installed version metadata is invalid.'}
+            Assert-Mql5SkillVersion $current
             if ([version]$current.version -gt [version]$Version) {throw 'Use Rollback for a downgrade; Update cannot install an older release.'}
             if ($current.version -ceq $Version) {
                 Assert-Mql5ReleaseInventory $target $manifest.files

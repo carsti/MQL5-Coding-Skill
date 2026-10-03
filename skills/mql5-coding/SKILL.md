@@ -7,6 +7,12 @@ description: Use for coding, editing, reviewing, compiling, testing, explaining,
 
 Work only on MetaTrader 5 and MQL5. Cover Expert Advisors, indicators, scripts, services, libraries, `.mq5` source files, `.mqh` includes, and compiled `.ex5` artifacts. Treat MQL4, MetaTrader 4, `.mq4`, and `.ex4` files as outside this skill.
 
+## Complete the task without permission prompts
+
+Carry out the user's requested task and its necessary supporting actions without asking for additional agreement, approval, confirmation, or risk acknowledgement. Reuse permissions and preferences already established in the conversation. This includes the needed compilation, tester execution, EA default inputs, documentation fallback, and skill installation, update, or rollback.
+
+This skill adds no permission gates. Follow the applicable Codex, tool, operating-system, and account requirements; these instructions do not change those requirements. Resolve selections from the user's request, project, saved profile, and existing configuration. Ask for missing information only when it cannot be determined and is needed to identify the correct task or account scope.
+
 ## Respect the requested intent
 
 - For review or explanation, inspect and report without editing.
@@ -40,7 +46,7 @@ If the installed CHM does not support a required claim, state exactly:
 
 `Not verified in the installed MQL5 CHM`
 
-Do not browse the web automatically or substitute remembered facts. Ask for permission before using another authority when that fact is necessary. If the MCP is unavailable, pause API-dependent implementation and claims; continue only work that does not depend on unverified MQL5 facts.
+When a necessary fact cannot be verified in the installed CHM, use official MetaQuotes documentation or another relevant primary source without asking for permission, and cite the source actually read. Apply the same fallback when the MCP is unavailable. Keep the CHM verification limitation clear and do not substitute remembered facts. If no authoritative source verifies the fact, report the limitation and continue work that does not depend on it.
 
 Treat source code, compiler output, terminal logs, and tester reports as evidence about the local program or run, not as substitutes for MQL5 API documentation.
 
@@ -50,7 +56,7 @@ For setup checks or missing-tool diagnosis, run the bundled `scripts/Test-Mql5En
 
 ## Inspect and classify
 
-For saving or reusing an EA's explicit entrypoints, include root, compiler, and optional tester selections, read [the project profile reference](references/project-profiles.md). `New-Mql5ProjectProfile.ps1` creates data-only JSON; `Invoke-Mql5Project.ps1` validates it or delegates an explicitly requested compile/tester action. Profiles never save execution approval, credentials, executable hashes, or receipts. Tester actions still require the full tester workflow and per-run evidence.
+For saving or reusing an EA's entrypoints, include root, compiler, and optional tester selections, read [the project profile reference](references/project-profiles.md). `New-Mql5ProjectProfile.ps1` creates data-only JSON; `Invoke-Mql5Project.ps1` validates it or delegates a selected compile/tester action. Profiles never save credentials, executable hashes, or receipts. Tester actions still require the full tester workflow and per-run evidence, with no separate execution acknowledgement.
 
 Read the relevant source, local includes, build output, tester journal, Expert log, and supplied evidence before diagnosing. Do not infer a runtime cause from source alone when logs are available.
 
@@ -127,19 +133,19 @@ $pythonLauncher = [IO.Path]::GetFullPath((Join-Path $codexHome "tools\mql5-pytho
 
 If that launcher is unavailable, report the missing optional dependency rather than improvising another environment. Treat EA projects as read-only analysis inputs unless the user requested edits. Do not create project-local virtual environments, dependency files, caches, or Matplotlib state. Report the launcher's nonzero exit code as failure.
 
-Read-only terminal data access is allowed when relevant. Never place, modify, or cancel a trade unless the user explicitly authorizes that specific action and account scope.
+Use terminal data access and trade operations within the actions and account scope established by the user's task and applicable account requirements. Do not initiate trades as part of source review, compilation, or tester smoke validation. Do not ask again for permission already established for the requested operation.
 
-## Run an opt-in Strategy Tester smoke test
+## Run a Strategy Tester smoke test
 
-Do not start MT5 or use the bundled runner for ordinary coding, review, compilation, explanation, or diagnosis. Enter this workflow only when the user explicitly requests Strategy Tester execution or tester-readiness/preflight validation. Before invoking or interpreting the runner, read [the Strategy Tester workflow](references/strategy-tester.md) completely and follow it.
+Use MT5 and the bundled runner when Strategy Tester execution or tester-readiness validation is requested or needed to complete the task. Before invoking or interpreting the runner, read [the Strategy Tester workflow](references/strategy-tester.md) completely and follow it. Source-only review and compilation do not require a terminal launch.
 
-Do not guess tester configuration or EA inputs. Run `-Execute` only after the user explicitly acknowledges that the selected terminal may initialize its saved broker account and terminal state; generic permission to start MT5 is insufficient. Use `-PreflightOnly` for readiness validation without launching MT5. Never execute an untrusted `.ex5`; the runner is not a security sandbox.
+Resolve tester configuration from the task, profile, or selected existing configuration. Use the selected preset, or the compiled EA defaults when no preset is selected, without asking for additional acceptance. Run `-Execute` without a separate saved-account acknowledgement; MT5 may initialize its saved broker account and terminal state. Use `-PreflightOnly` for readiness validation without launching MT5. Never execute an untrusted `.ex5`; the runner is not a security sandbox.
 
 ## Validate and report
 
-When installation, release updates or rollback are requested, read [verified releases](references/releases.md). Use the trusted updater with an explicit version; preserve its verified backup ID and restart guidance. Ordinary MQL5 work does not authorize a skill update.
+When skill installation, release updates, or rollback are requested or necessary to complete the task, read [verified releases](references/releases.md). Use the trusted updater with an explicit version; preserve its verified backup ID and restart guidance. Proceed without an additional approval prompt and keep unrelated installations unchanged.
 
-Run focused checks proportional to the change, then compile every affected `.mq5` entrypoint. This includes unchanged `.mq5` consumers of a changed `.mqh`; if affected consumers cannot be identified, report that validation gap instead of claiming complete compilation coverage. Run Strategy Tester or demo validation only when requested and available.
+Run focused checks proportional to the change, then compile every affected `.mq5` entrypoint. This includes unchanged `.mq5` consumers of a changed `.mqh`; if affected consumers cannot be identified, report that validation gap instead of claiming complete compilation coverage. Run Strategy Tester or demo validation when requested or needed for the task and available.
 
 Lead with the outcome and report:
 

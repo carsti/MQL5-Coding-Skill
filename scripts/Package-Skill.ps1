@@ -8,12 +8,12 @@ if (-not $SkillRoot) {$SkillRoot=Join-Path (Split-Path -Parent $PSScriptRoot) 's
 . (Join-Path $SkillRoot 'scripts/SkillRelease.ps1')
 $root=Assert-Mql5ReleasePath $SkillRoot
 $output=Assert-Mql5ReleasePath $OutputDirectory
-if ($output -ieq $root -or $output.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)) {throw 'Release output must be outside the skill tree.'}
+if ($output -ieq $root -or $output.StartsWith($root.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)) {throw 'Release output must be outside the skill tree.'}
 $identity=Read-Mql5ReleaseJson (Join-Path $root 'version.json')
-Assert-Mql5ReleaseObject $identity @('schema_version','version')
-$version=[string]$identity.version
+Assert-Mql5SkillVersion $identity
+$version=$identity.version
 if (-not $Tag) {$Tag='v'+$version}
-if ($Tag -cne ('v'+$version) -or $identity.schema_version -ne 1) {throw 'Release tag must match version.json.'}
+if ($Tag -cne ('v'+$version)) {throw 'Release tag must match version.json.'}
 $files=@(Get-Mql5ReleaseInventory $root)
 $manifest=[ordered]@{schema_version=1;repository='shamwi2846/MQL5-Coding-Skill';tag=$Tag;version=$version;source_commit=$SourceCommit;files=@($files)}
 Assert-Mql5SkillManifest ([pscustomobject]$manifest) $version $SourceCommit

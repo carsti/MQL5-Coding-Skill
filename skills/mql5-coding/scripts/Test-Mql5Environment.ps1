@@ -28,6 +28,11 @@ function Value($Object, [string]$Name, $Default=$null) {
     return $Default
 }
 function Full-Path([string]$Path) {return [IO.Path]::GetFullPath($Path)}
+function Directory-Path([string]$Path) {
+    $full=Full-Path $Path
+    if ($full -ieq [IO.Path]::GetPathRoot($full)) {return $full}
+    return $full.TrimEnd('\')
+}
 function Same-Path([string]$First, [string]$Second) {
     if ([string]::IsNullOrWhiteSpace($First) -or [string]::IsNullOrWhiteSpace($Second)) {return $false}
     return (Full-Path $First).TrimEnd('\') -ieq (Full-Path $Second).TrimEnd('\')
@@ -39,51 +44,67 @@ function Hash-File([string]$Path) {
     try {return [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-','').ToLowerInvariant()}
     finally {$algorithm.Dispose(); $stream.Dispose()}
 }
-function Quote-Argument([string]$Text) {
-    if ($Text.Length -gt 0 -and $Text -notmatch '[\s"]') {return $Text}
-    return '"' + ($Text -replace '(\\*)"','$1$1\"' -replace '(\\+)$','$1$1') + '"'
+function Absolute-LaunchPath($Path) {
+    return $Path -is [string] -and [IO.Path]::IsPathRooted($Path) -and ($Path -match '^[A-Za-z]:[\\/]' -or $Path -match '^\\\\[^\\/]+[\\/][^\\/]+')
+}
+function Assert-RegistrationShape($Registration) {
+    if ($Registration -isnot [pscustomobject] -or (Value $Registration 'name') -isnot [string] -or (Value $Registration 'enabled') -isnot [bool]) {throw 'Unsupported registration fields.'}
+    $transport=Value $Registration 'transport'
+    if ($transport -isnot [pscustomobject] -or (Value $transport 'type') -isnot [string] -or (Value $transport 'command') -isnot [string]) {throw 'Unsupported registration transport.'}
+    $arguments=$transport.PSObject.Properties['args']
+    if ($null -eq $arguments -or $arguments.Value -isnot [array]) {throw 'Unsupported registration arguments.'}
+    foreach ($argument in $arguments.Value) {if ($argument -isnot [string]) {throw 'Unsupported registration argument.'}}
+    foreach ($selection in @(@($Registration,'enabled_tools'),@($Registration,'disabled_tools'),@($transport,'env_vars'))) {
+        $values=$selection[0].PSObject.Properties[$selection[1]]
+        if ($null -ne $values -and $null -ne $values.Value) {
+            if ($values.Value -isnot [array]) {throw 'Unsupported registration array.'}
+            foreach ($item in $values.Value) {if ($item -isnot [string]) {throw 'Unsupported registration array value.'}}
+        }
+    }
+    $cwd=Value $transport 'cwd'
+    if ($null -ne $cwd -and $cwd -isnot [string]) {throw 'Unsupported registration working directory.'}
+    $environment=Value $transport 'env'
+    if ($null -ne $environment) {
+        if ($environment -isnot [pscustomobject]) {throw 'Unsupported registration environment.'}
+        foreach ($entry in $environment.PSObject.Properties) {if ([string]::IsNullOrWhiteSpace($entry.Name) -or $entry.Value -isnot [string]) {throw 'Unsupported registration environment value.'}}
+    }
 }
 function Invoke-Probe([string]$Executable, [string[]]$Arguments, [string]$Directory, [int]$Seconds=$TimeoutSeconds) {
-    $process = New-Object Diagnostics.Process
-    $process.StartInfo = New-Object Diagnostics.ProcessStartInfo
-    $process.StartInfo.FileName = $Executable
-    $process.StartInfo.Arguments = (@($Arguments | ForEach-Object {Quote-Argument $_}) -join ' ')
-    $process.StartInfo.WorkingDirectory = $Directory
-    $process.StartInfo.UseShellExecute = $false
-    $process.StartInfo.CreateNoWindow = $true
-    $process.StartInfo.RedirectStandardOutput = $true
-    $process.StartInfo.RedirectStandardError = $true
-    # These probes must not use an ambient corpus override or create Python caches.
-    [void]$process.StartInfo.EnvironmentVariables.Remove('MQL5_CHM_MCP_ROOT')
-    $process.StartInfo.EnvironmentVariables['PYTHONDONTWRITEBYTECODE']='1'
-    $process.StartInfo.EnvironmentVariables['CODEX_HOME']=$CodexHome
-    $started=$false
+    $job=$null
+    $answer=@{ok=$false;reason='launch_failed';text=$null;exit_code=$null}
     try {
-        $started=$process.Start()
-        $stdout=$process.StandardOutput.ReadToEndAsync()
-        $stderr=$process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit($Seconds*1000)) {
-            if (-not $process.HasExited) {
-                # Kill only this owned probe process and its descendants.
-                $taskkill=Join-Path $env:WINDIR 'System32\taskkill.exe'
-                & $taskkill /PID $process.Id /T /F *> $null
-                if (-not $process.WaitForExit(5000)) {$process.Kill()}
-            }
-            return @{ok=$false;reason='timeout';text=$null;exit_code=$null}
-        }
-        if (-not $stdout.Wait(3000) -or -not $stderr.Wait(3000)) {
-            return @{ok=$false;reason='output_timeout';text=$null;exit_code=$process.ExitCode}
-        }
-        $text=$stdout.Result
-        if ($text.Length -gt 1048576) {return @{ok=$false;reason='oversized_output';text=$null;exit_code=$process.ExitCode}}
-        return @{ok=($process.ExitCode -eq 0);reason='completed';text=$text;exit_code=$process.ExitCode}
+        if (-not ('Mql5Coding.JobProcessLaunch' -as [type])) {Add-Type -Path (Join-Path $PSScriptRoot 'TesterProcessJob.cs')}
+        $environment=@{MQL5_CHM_MCP_ROOT=$null;PYTHONDONTWRITEBYTECODE='1';CODEX_HOME=$CodexHome}
+        $job=[Mql5Coding.JobProcessLaunch]::CreateSuspendedProbe($Executable,$Arguments,$Directory,$environment)
+        $stdout=[Mql5Coding.JobProcessLaunch]::ReadProbeOutputAsync($job.StandardOutput,1048576,$true)
+        $stderr=[Mql5Coding.JobProcessLaunch]::ReadProbeOutputAsync($job.StandardError,1048576,$false)
+        $job.Resume()
+        $deadline=[Diagnostics.Stopwatch]::StartNew()
+        $exited=$false
+        $oversized=$false
+        do {
+            $oversized=($stdout.IsCompleted -and $stdout.Result.LimitExceeded) -or ($stderr.IsCompleted -and $stderr.Result.LimitExceeded)
+            if ($oversized) {break}
+            $remaining=[int]($Seconds*1000-$deadline.ElapsedMilliseconds)
+            if ($remaining -le 0) {break}
+            $exited=$job.WaitForExit([Math]::Min(100,$remaining))
+        } while (-not $exited)
+        if ($oversized) {$answer=@{ok=$false;reason='oversized_output';text=$null;exit_code=$null}}
+        elseif (-not $exited) {$answer=@{ok=$false;reason='timeout';text=$null;exit_code=$null}}
+        elseif (-not $stdout.Wait(3000) -or -not $stderr.Wait(3000)) {$answer=@{ok=$false;reason='output_timeout';text=$null;exit_code=$job.ExitCode}}
+        elseif ($stdout.Result.LimitExceeded -or $stderr.Result.LimitExceeded) {$answer=@{ok=$false;reason='oversized_output';text=$null;exit_code=$job.ExitCode}}
+        else {$answer=@{ok=($job.ExitCode -eq 0);reason='completed';text=$stdout.Result.Text;exit_code=$job.ExitCode}}
     } catch {
         # Never put subprocess output, config contents, or exception text in the report.
-        return @{ok=$false;reason='launch_failed';text=$null;exit_code=$null}
+        $answer=@{ok=$false;reason='launch_failed';text=$null;exit_code=$null}
     } finally {
-        if ($started -and -not $process.HasExited) {$process.Kill(); [void]$process.WaitForExit(3000)}
-        $process.Dispose()
+        if ($null -ne $job) {
+            try {$job.TerminateAndWaitForEmpty(5000)}
+            catch {$answer=@{ok=$false;reason='cleanup_failed';text=$null;exit_code=$null}}
+            finally {$job.Dispose()}
+        }
     }
+    return $answer
 }
 function Find-Codex {
     if ($CodexPath) {return Full-Path $CodexPath}
@@ -103,6 +124,8 @@ function Find-Codex {
     return $null
 }
 function Skill-Files([string]$Root) {
+    $Root=Directory-Path $Root
+    $rootPrefix=$Root.TrimEnd('\')+'\'
     $result=@{}
     $directories=New-Object 'Collections.Generic.Stack[string]'
     $directories.Push($Root)
@@ -112,7 +135,7 @@ function Skill-Files([string]$Root) {
         foreach ($entry in Get-ChildItem -LiteralPath $directory -Force) {
             if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) {throw 'Unsupported skill link.'}
             if ($entry.PSIsContainer) {$directories.Push($entry.FullName)}
-            else {$result[$entry.FullName.Substring($Root.Length+1).Replace('\','/')]=Hash-File $entry.FullName}
+            else {$result[$entry.FullName.Substring($rootPrefix.Length).Replace('\','/')]=Hash-File $entry.FullName}
         }
     }
     return $result
@@ -194,19 +217,20 @@ function Find-Editors {
         foreach ($path in $paths) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {continue}
             $file=Get-Item -LiteralPath $path
-            if ($file.Name -notin @('metaeditor64.exe','metaeditor.exe') -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)) {continue}
+            if ($file.Name -notin @('metaeditor64.exe','metaeditor.exe') -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $file.VersionInfo.FileMajorPart -ne 5) {continue}
             # MT4 also ships an editor with product major version 5. Check its
             # associated terminal first, then the explicit MetaEditor 5 label.
-            $terminalFound=$false; $mt5=$false
+            $terminalFound=$false; $mt5=$false; $incompatibleTerminal=$false
             foreach ($terminalName in @('terminal64.exe','terminal.exe')) {
                 $terminal=Join-Path $file.DirectoryName $terminalName
                 if (Test-Path -LiteralPath $terminal -PathType Leaf) {
                     $terminalFound=$true
                     if ((Get-Item -LiteralPath $terminal).VersionInfo.FileMajorPart -eq 5) {$mt5=$true}
+                    else {$incompatibleTerminal=$true}
                 }
             }
             if (-not $terminalFound) {$mt5=$file.VersionInfo.FileDescription -match '^MetaEditor\s+5\b'}
-            if (-not $mt5) {continue}
+            if (-not $mt5 -or $incompatibleTerminal) {continue}
             if (@($editors | Where-Object {Same-Path $_.path $file.FullName}).Count) {continue}
             $editors+=@([ordered]@{path=$file.FullName;file_version=$file.VersionInfo.FileVersion;build=$file.VersionInfo.FilePrivatePart})
         }
@@ -223,7 +247,7 @@ try {
     $report.workspace_root=$WorkspaceRoot
     $report.codex_home=$CodexHome
     if (-not $SkillRoot) {$SkillRoot=Join-Path $CodexHome 'skills\mql5-coding'}
-    $SkillRoot=(Full-Path $SkillRoot).TrimEnd('\')
+    $SkillRoot=Directory-Path $SkillRoot
     $report.skill.root=$SkillRoot
     if (-not (Test-Path -LiteralPath (Join-Path $SkillRoot 'SKILL.md') -PathType Leaf)) {Add-Issue 'skill_missing' 'error' 'The installed mql5-coding skill is missing.'}
     else {
@@ -232,8 +256,11 @@ try {
             foreach ($required in @('version.json','references/releases.md','scripts/SkillRelease.ps1','scripts/Update-Mql5Skill.ps1','agents/openai.yaml','references/strategy-tester.md','references/mcp-contract.json','references/environment-health.md','references/project-profiles.md','scripts/Mql5ProjectProfile.ps1','scripts/New-Mql5ProjectProfile.ps1','scripts/Invoke-Mql5Project.ps1','scripts/Test-Mql5Environment.ps1','scripts/Compile-Mql5.ps1','scripts/CompilationReceipt.ps1','scripts/CompilerProcessJob.cs','scripts/Invoke-Mt5TesterSmoke.ps1','scripts/TesterEvidence.ps1','scripts/TesterPathIntegrity.ps1','scripts/TesterProcessJob.cs')) {
                 if (-not $skillFiles.ContainsKey($required)) {throw 'An essential skill file is missing.'}
             }
-            $identity=Get-Content -LiteralPath (Join-Path $SkillRoot 'version.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ((Value $identity 'schema_version') -ne 1 -or (Value $identity 'version') -cnotmatch '\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\z') {throw 'Invalid skill version metadata.'}
+            # Use this invoked checker's trusted companion, not code from the
+            # selected tree being inspected. Share the updater's version rules.
+            . (Join-Path $PSScriptRoot 'SkillRelease.ps1')
+            $identity=Read-Mql5ReleaseJson (Join-Path $SkillRoot 'version.json')
+            Assert-Mql5SkillVersion $identity
             $report.skill.declared_version=$identity.version
             $report.skill.installed=$true
             $report.skill.file_count=$skillFiles.Count
@@ -242,7 +269,7 @@ try {
             if ((Value $contract 'server_name') -cne 'mql5-chm') {throw 'Wrong consumer dependency.'}
             if (-not $SkillSourceRoot) {$SkillSourceRoot=Find-Source @((Join-Path $WorkspaceRoot 'skills\mql5-coding'),(Join-Path $WorkspaceRoot 'MQL5-Coding-Skill\skills\mql5-coding'),(Join-Path $WorkspaceRoot 'MQL5-Coding-Skill-main\MQL5-Coding-Skill-main\skills\mql5-coding')) 'SKILL.md'}
             if ($SkillSourceRoot) {
-                $SkillSourceRoot=(Full-Path $SkillSourceRoot).TrimEnd('\')
+                $SkillSourceRoot=Directory-Path $SkillSourceRoot
                 try {
                     $report.skill.source_comparison=Compare-Files (Skill-Files $SkillSourceRoot) $skillFiles $SkillSourceRoot 'complete_skill_inventory'
                     if ($report.skill.source_comparison.status -eq 'different') {Add-Issue 'skill_source_differs' 'warning' 'Skill source and installed files differ; inspect the listed differences.'}
@@ -260,10 +287,12 @@ try {
         $result=Invoke-Probe $codex @('mcp','get','mql5-chm','--json') $WorkspaceRoot
         try {
             if (-not $result.ok) {throw 'Codex query failed.'}
+            if (-not $result.text.TrimStart().StartsWith('{')) {throw 'Registration must be a JSON object.'}
             $registration=$result.text | ConvertFrom-Json
+            Assert-RegistrationShape $registration
             if ((Value $registration 'name') -cne 'mql5-chm' -or (Value (Value $registration 'transport') 'type') -cne 'stdio') {throw 'Unexpected registration.'}
             $report.codex.registration_state='enabled'
-            if ((Value $registration 'enabled' $true) -eq $false) {$report.codex.registration_state='disabled'; Add-Issue 'mcp_disabled' 'error' 'The mql5-chm registration is disabled.'}
+            if (-not $registration.enabled) {$report.codex.registration_state='disabled'; Add-Issue 'mcp_disabled' 'error' 'The mql5-chm registration is disabled.'}
             $allowed=@(Value $registration 'enabled_tools' @())
             $allowListPresent=$null -ne $registration.PSObject.Properties['enabled_tools'] -and $null -ne $registration.enabled_tools
             $denied=@(Value $registration 'disabled_tools' @())
@@ -272,10 +301,12 @@ try {
             }
             $transport=$registration.transport
             $arguments=@(Value $transport 'args' @())
-            if ($arguments.Count -ne 1 -or -not [IO.Path]::IsPathRooted([string]$arguments[0])) {throw 'Unsupported launch arguments.'}
+            if ($arguments.Count -ne 1 -or -not (Absolute-LaunchPath $arguments[0]) -or -not (Absolute-LaunchPath $transport.command)) {throw 'Unsupported launch arguments.'}
             $registeredRoot=Split-Path -Parent (Split-Path -Parent ([string]$arguments[0]))
             if (-not $McpPackageRoot) {$McpPackageRoot=$registeredRoot}
-            if (-not (Same-Path $McpPackageRoot $registeredRoot) -or -not (Same-Path $transport.command (Join-Path $McpPackageRoot 'runtime\node.exe')) -or -not (Same-Path ([string]$arguments[0]) (Join-Path $McpPackageRoot 'app\server.mjs')) -or -not (Same-Path (Value $transport 'cwd' '') $McpPackageRoot)) {Add-Issue 'mcp_registration_mismatch' 'error' 'Codex command, server argument, and working directory do not all select the tested package.'}
+            $cwdProperty=$transport.PSObject.Properties['cwd']
+            $cwdMatches=$null -eq $cwdProperty -or $null -eq $cwdProperty.Value -or ((Absolute-LaunchPath $cwdProperty.Value) -and (Same-Path $cwdProperty.Value $McpPackageRoot))
+            if (-not (Same-Path $McpPackageRoot $registeredRoot) -or -not (Same-Path $transport.command (Join-Path $McpPackageRoot 'runtime\node.exe')) -or -not (Same-Path ([string]$arguments[0]) (Join-Path $McpPackageRoot 'app\server.mjs')) -or -not $cwdMatches) {Add-Issue 'mcp_registration_mismatch' 'error' 'Codex command and server argument must select the tested package; an explicit working directory must select that same package.'}
             if (@((Value $transport 'env' ([pscustomobject]@{})).PSObject.Properties | Where-Object {$_.Name -eq 'MQL5_CHM_MCP_ROOT'}).Count -or 'MQL5_CHM_MCP_ROOT' -in @(Value $transport 'env_vars' @())) {Add-Issue 'mcp_ambient_root' 'error' 'The registration sets an unsupported ambient corpus-root override.'}
             if (@((Value $transport 'env' ([pscustomobject]@{})).PSObject.Properties).Count -gt 0 -or @(Value $transport 'env_vars' @()).Count -gt 0) {Add-Issue 'mcp_custom_environment' 'warning' 'Registration has custom environment settings. The direct package probe does not reproduce them, so configured startup is not fully verified.'}
         } catch {$registration=$null; $report.codex.registration_state='unavailable'; Add-Issue 'codex_registration_unavailable' 'error' 'Codex could not return a supported mql5-chm registration in this workspace.'}
@@ -285,7 +316,7 @@ try {
     }
     if (-not $McpPackageRoot) {Add-Issue 'mcp_package_missing' 'error' 'The MCP package could not be resolved. Supply -McpPackageRoot when registration is unavailable.'}
     else {
-        $McpPackageRoot=(Full-Path $McpPackageRoot).TrimEnd('\')
+        $McpPackageRoot=Directory-Path $McpPackageRoot
         $report.mcp.package_root=$McpPackageRoot
         $mcpPhase='package_metadata'
         try {
@@ -299,7 +330,7 @@ try {
             $mcpPhase='source_comparison'
             if (-not $McpSourceRoot) {$McpSourceRoot=Find-Source @($WorkspaceRoot,(Join-Path $WorkspaceRoot 'MQL5-CHM-MCP'),(Join-Path $WorkspaceRoot 'MQL5-CHM-MCP-main\MQL5-CHM-MCP-main')) 'src\server.mjs'}
             if ($McpSourceRoot) {
-                $McpSourceRoot=(Full-Path $McpSourceRoot).TrimEnd('\')
+                $McpSourceRoot=Directory-Path $McpSourceRoot
                 try {
                     $source=@{}; $installed=@{}
                     foreach ($name in $installedFiles.Keys) {

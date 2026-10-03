@@ -47,10 +47,66 @@ function ChangeZip([string]$Name,[string]$Entry,[string]$Content,[switch]$Add) {
     } finally {$zip.Dispose()}
     return $path
 }
+function ChangeVerifiedVersion([string]$Name,[string]$Content) {
+    $path=ChangeZip $Name 'mql5-coding/version.json' $Content
+    # Rehash the changed version file and the ZIP. Rejection must be caused by
+    # its metadata contract, not an unrelated file or archive hash mismatch.
+    $zip=[IO.Compression.ZipFile]::Open($path,[IO.Compression.ZipArchiveMode]::Update)
+    try {
+        $reader=New-Object IO.StreamReader($zip.GetEntry('release-manifest.json').Open())
+        try {$manifest=$reader.ReadToEnd() | ConvertFrom-Json} finally {$reader.Dispose()}
+        $bytes=(New-Object Text.UTF8Encoding($false)).GetBytes($Content)
+        $sha=[Security.Cryptography.SHA256]::Create()
+        try {$hash=([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-','').ToLowerInvariant()} finally {$sha.Dispose()}
+        $record=@($manifest.files | Where-Object {$_.path -ceq 'version.json'})[0]
+        $record.bytes=$bytes.Length;$record.sha256=$hash
+        $zip.GetEntry('release-manifest.json').Delete()
+        $stream=$zip.CreateEntry('release-manifest.json').Open()
+        try {$text=(New-Object Text.UTF8Encoding($false)).GetBytes(($manifest | ConvertTo-Json -Depth 12 -Compress));$stream.Write($text,0,$text.Length)} finally {$stream.Dispose()}
+    } finally {$zip.Dispose()}
+    return $path
+}
 foreach ($file in @((Join-Path $repo 'scripts/Package-Skill.ps1'))+@(Get-ChildItem -LiteralPath (Join-Path $skill 'scripts') -Filter '*.ps1' | ForEach-Object {$_.FullName})) {
     $tokens=$null;$parseErrors=$null
     [void][Management.Automation.Language.Parser]::ParseFile($file,[ref]$tokens,[ref]$parseErrors)
     Check ($parseErrors.Count -eq 0) ('syntax '+[IO.Path]::GetFileName($file))
+}
+# Exercise a real, disposable drive root while the ambient directory is nested.
+# No files on an existing drive root are inventoried or changed.
+$rootFixture=Join-Path $work 'drive-root'
+Copy-Item -LiteralPath $skill -Destination $rootFixture -Recurse
+[void][IO.Directory]::CreateDirectory((Join-Path $rootFixture 'scripts/ambient'))
+[IO.File]::WriteAllText((Join-Path $rootFixture 'scripts/ambient/marker.txt'),'nested fixture')
+$expectedRootFiles=@(Get-Mql5ReleaseInventory $rootFixture)
+$usedLetters=@([Environment]::GetLogicalDrives() | ForEach-Object {$_.Substring(0,1)})+@(Get-PSDrive -PSProvider FileSystem | Select-Object -ExpandProperty Name)
+$availableLetters=@('Z','Y','X','W','V','U','T','S','R' | Where-Object {$_ -notin $usedLetters})
+if ($availableLetters.Count -eq 0) {throw 'No free drive letter for the root-path regression.'}
+$rootLetter=$availableLetters[0];$rootDrive=$rootLetter+':'
+$absoluteRoot=$rootDrive+'\';$subst=Join-Path $env:SystemRoot 'System32/subst.exe'
+$previousLocation=(Get-Location).Path;$previousDirectory=[Environment]::CurrentDirectory
+$rootMapped=$false;$rootProvider=$false
+try {
+    & $subst $rootDrive $rootFixture
+    if ($LASTEXITCODE -ne 0) {throw 'Could not map the disposable root-path fixture.'};$rootMapped=$true
+    if (-not (Get-PSDrive -Name $rootLetter -ErrorAction SilentlyContinue)) {[void](New-PSDrive -Name $rootLetter -PSProvider FileSystem -Root $absoluteRoot);$rootProvider=$true}
+    Set-Location -LiteralPath ($absoluteRoot+'scripts/ambient')
+    [Environment]::CurrentDirectory=$absoluteRoot+'scripts/ambient'
+    $resolvedRoot=Assert-Mql5ReleasePath $absoluteRoot
+    Check ($resolvedRoot -ceq $absoluteRoot) 'release drive roots remain fully qualified'
+    Check ([IO.Path]::GetFullPath($resolvedRoot) -ceq $absoluteRoot) 'root normalization is independent of ambient directory'
+    $actualRootFiles=@(Get-Mql5ReleaseInventory $absoluteRoot)
+    Check (($actualRootFiles | ConvertTo-Json -Depth 4 -Compress) -ceq ($expectedRootFiles | ConvertTo-Json -Depth 4 -Compress)) 'drive-root inventory includes all files with correct relative paths'
+    $insideOutput=$absoluteRoot+'package-output'
+    Reject {& (Join-Path $repo 'scripts/Package-Skill.ps1') -SkillRoot $absoluteRoot -OutputDirectory $insideOutput -SourceCommit $commit} 'packaging output inside a drive-root skill is rejected'
+    Check (-not (Test-Path -LiteralPath $insideOutput)) 'inside-root packaging refusal creates no output'
+    $rootOutput=Join-Path $work 'drive-root-package'
+    & (Join-Path $repo 'scripts/Package-Skill.ps1') -SkillRoot $absoluteRoot -OutputDirectory $rootOutput -SourceCommit $commit -Tag ('v'+$version) | Out-Null
+    Check (Test-Path -LiteralPath (Join-Path $rootOutput 'mql5-coding-windows.zip')) 'valid drive-root skill packages successfully to an outside destination'
+} finally {
+    [Environment]::CurrentDirectory=$previousDirectory
+    Set-Location -LiteralPath $previousLocation
+    if ($rootProvider) {Remove-PSDrive -Name $rootLetter -Force}
+    if ($rootMapped) {& $subst $rootDrive /D;if ($LASTEXITCODE -ne 0) {throw 'Could not remove the owned root-path fixture drive.'}}
 }
 $first=Join-Path $work 'first';$second=Join-Path $work 'second'
 & (Join-Path $repo 'scripts/Package-Skill.ps1') -SkillRoot $skill -OutputDirectory $first -SourceCommit $commit -Tag ('v'+$version) | Out-Null
@@ -124,13 +180,45 @@ foreach ($case in @(
 Check (-not (Test-Path -LiteralPath (Join-Path $work 'escape.ps1'))) 'traversal never extracted'
 $zip=[IO.Compression.ZipFile]::OpenRead($archive)
 try {$reader=New-Object IO.StreamReader($zip.GetEntry('release-manifest.json').Open());try {$manifestText=$reader.ReadToEnd()} finally {$reader.Dispose()}} finally {$zip.Dispose()}
+$validManifest=$manifestText | ConvertFrom-Json
+Assert-Mql5SkillManifest $validManifest $version $commit
+Check $true 'valid release identity accepted before testing malformed field types'
+foreach ($field in @('repository','tag','version','source_commit')) {
+    $arrayIdentity=$manifestText | ConvertFrom-Json
+    $arrayIdentity.$field=@($arrayIdentity.$field)
+    Reject {Assert-Mql5SkillManifest $arrayIdentity $version $commit} ('array-valued release identity rejected: '+$field)
+}
+$validVersion='{"schema_version":1,"version":"'+$version+'"}'
+$versionControl=ChangeVerifiedVersion 'version-control' $validVersion
+$null=Expand-Mql5SkillRelease $versionControl (Get-Mql5ReleaseHash $versionControl) $version $commit (Join-Path $work 'verified-version-control')
+Check $true 'rehashed version control archive passes before malformed metadata tests'
+$versionCases=@(
+    @{name='array-version';text=('{"schema_version":1,"version":["'+$version+'"]}')},
+    @{name='array-schema';text=('{"schema_version":[1],"version":"'+$version+'"}')},
+    @{name='boolean-schema';text=('{"schema_version":true,"version":"'+$version+'"}')},
+    @{name='string-schema';text=('{"schema_version":"1","version":"'+$version+'"}')},
+    @{name='decimal-schema';text=('{"schema_version":1.0,"version":"'+$version+'"}')},
+    @{name='extra-version-field';text=('{"schema_version":1,"version":"'+$version+'","extra":true}')}
+)
+foreach ($case in $versionCases) {
+    $bad=ChangeVerifiedVersion $case.name $case.text
+    Reject {Expand-Mql5SkillRelease $bad (Get-Mql5ReleaseHash $bad) $version $commit (Join-Path $work ('verified-'+$case.name))} ($case.name+' version record rejected with matching file hashes')
+}
+$invalidSkill=Join-Path $work 'invalid-version-skill';Copy-Item -LiteralPath $skill -Destination $invalidSkill -Recurse
+foreach ($case in $versionCases) {
+    [IO.File]::WriteAllText((Join-Path $invalidSkill 'version.json'),$case.text)
+    $output=Join-Path $work ('package-'+$case.name)
+    Reject {& (Join-Path $repo 'scripts/Package-Skill.ps1') -SkillRoot $invalidSkill -OutputDirectory $output -SourceCommit $commit} ('packager rejects '+$case.name+' before coercing version fields')
+    Check (-not (Test-Path -LiteralPath $output)) 'invalid version does not publish package output'
+}
 foreach ($case in @(
     @{name='wrong-commit';text=$manifestText.Replace($commit,('b'*40))},
     @{name='wrong-version';text=$manifestText.Replace('"version":"'+$version+'"','"version":"9.0.0"')},
     @{name='unknown-field';text=$manifestText.Replace('"schema_version":1','"schema_version":1,"execute":true')},
     @{name='duplicate-key';text=$manifestText.Replace('"schema_version":1','"schema_version":1,"schema_version":1')},
     @{name='escaped-key';text=$manifestText.Replace('"schema_version":1','"schema_version":1,"\u0073chema_version":1')},
-    @{name='wrong-hash';text=$manifestText.Replace('"sha256":"','"sha256":"0')}
+    @{name='wrong-hash';text=$manifestText.Replace('"sha256":"','"sha256":"0')},
+    @{name='array-manifest';text=('['+$manifestText+']')}
 )) {
     $bad=ChangeZip $case.name 'release-manifest.json' $case.text
     $invalid=RunUpdater (Options $fixtureHome $bad (Get-Mql5ReleaseHash $bad))
@@ -143,6 +231,49 @@ $invalid=RunUpdater @('-Action','Rollback','-CodexDirectory',$fixtureHome,'-Back
 Check ($invalid.code -ne 0) 'backup path traversal rejected'
 $lock=[IO.File]::Open((Join-Path $fixtureHome 'tools/mql5-skill-updates/.lock'),[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
 try {$invalid=RunUpdater $argsForUpdate;Check ($invalid.code -ne 0) 'concurrent update excluded'} finally {$lock.Dispose()}
+# Invalid recovery metadata must leave both the installation and retained
+# evidence unchanged. Each fixture can restore different bytes if accepted.
+foreach ($case in @('backup-array-schema','backup-string-schema','backup-boolean-schema','backup-array-id','backup-array-target',
+    'intent-wrong-action','intent-wrong-target','intent-array-action','intent-array-target','intent-extra-field','intent-array-parent','intent-missing-parent','malformed-sibling')) {
+    $recoveryHome=Join-Path $work $case;$destination=Join-Path $recoveryHome 'skills/mql5-coding'
+    [void][IO.Directory]::CreateDirectory($destination);[IO.File]::WriteAllText((Join-Path $destination 'SKILL.md'),'current installation')
+    $current=@(Get-Mql5ReleaseInventory $destination)
+    $id=[guid]::NewGuid().ToString('N');$txn=Join-Path $recoveryHome ('tools/mql5-skill-updates/'+$id)
+    $tree=Join-Path $txn 'backup-tree';[void][IO.Directory]::CreateDirectory($tree)
+    [IO.File]::WriteAllText((Join-Path $tree 'SKILL.md'),'original installation')
+    $record=[pscustomobject]@{schema_version=1;backup_id=$id;target=$destination;had_installation=$true;files=@(Get-Mql5ReleaseInventory $tree)}
+    switch ($case) {
+        'backup-array-schema' {$record.schema_version=@(1)}
+        'backup-string-schema' {$record.schema_version='1'}
+        'backup-boolean-schema' {$record.schema_version=$true}
+        'backup-array-id' {$record.backup_id=@($id)}
+        'backup-array-target' {$record.target=@($destination)}
+    }
+    Write-Mql5ReleaseJson (Join-Path $txn 'backup.json') $record
+    if ($case -like 'intent-*' -or $case -eq 'malformed-sibling') {
+        $intent=[pscustomobject]@{action='update';target=$destination}
+        switch ($case) {
+            'intent-wrong-action' {$intent.action='unexpected'}
+            'intent-wrong-target' {$intent.target=$destination+'-other'}
+            'intent-array-action' {$intent.action=@('update')}
+            'intent-array-target' {$intent.target=@($destination)}
+            'intent-extra-field' {$intent | Add-Member -NotePropertyName extra -NotePropertyValue $true}
+            'intent-array-parent' {$intent.action='rollback';$intent | Add-Member -NotePropertyName restore_backup_id -NotePropertyValue @($id)}
+            'intent-missing-parent' {$intent.action='rollback'}
+        }
+        Write-Mql5ReleaseJson (Join-Path $txn 'pending.json') $intent
+        if ($case -eq 'malformed-sibling') {
+            $sibling=Join-Path $recoveryHome ('tools/mql5-skill-updates/'+[guid]::NewGuid().ToString('N'))
+            [void][IO.Directory]::CreateDirectory($sibling);[IO.File]::WriteAllText((Join-Path $sibling 'pending.json'),'{malformed')
+        }
+    }
+    $retained=@(Get-Mql5ReleaseInventory (Join-Path $recoveryHome 'tools/mql5-skill-updates'))
+    $invalid=RunUpdater @('-Action','Rollback','-CodexDirectory',$recoveryHome,'-BackupId',$id)
+    Check ($invalid.code -ne 0) ($case+' rejected before restoration')
+    Assert-Mql5ReleaseInventory $destination $current
+    $after=@(Get-Mql5ReleaseInventory (Join-Path $recoveryHome 'tools/mql5-skill-updates') | Where-Object {$_.path -cne '.lock'})
+    Check (($after | ConvertTo-Json -Compress -Depth 6) -ceq ($retained | ConvertTo-Json -Compress -Depth 6)) 'invalid recovery metadata preserves the installation and all retained evidence'
+}
 # Simulate process interruption before and after the first directory rename.
 foreach ($afterMove in @($false,$true)) {
     $id=[guid]::NewGuid().ToString('N');$txn=Join-Path $fixtureHome ('tools/mql5-skill-updates/'+$id)
@@ -175,22 +306,59 @@ foreach ($phase in @('partial-old','partial-new')) {
         Copy-Item -LiteralPath (Join-Path $skill 'version.json') -Destination (Join-Path $target 'version.json')
     }
     $recoveryId=$id
+    $nestedIntents=@()
     if ($phase -eq 'partial-new') {
-        $nestedId=[guid]::NewGuid().ToString('N');$nested=Join-Path $fixtureHome ('tools/mql5-skill-updates/'+$nestedId)
-        [IO.Directory]::CreateDirectory($nested) | Out-Null
-        $partial=@(Get-Mql5ReleaseInventory $target)
-        Copy-Mql5ReleaseSnapshot $target (Join-Path $nested 'backup-tree') $partial
-        Write-Mql5ReleaseJson (Join-Path $nested 'backup.json') @{schema_version=1;backup_id=$nestedId;target=$target;had_installation=$true;files=@($partial)}
-        Write-Mql5ReleaseJson (Join-Path $nested 'pending.json') @{action='rollback';target=$target;restore_backup_id=$id}
-        $recoveryId=$nestedId
+        # Repeated interruptions produce a chain of rollback intents. Recovering
+        # its latest member must resolve every intent after restoring the original.
+        for ($interruption=0;$interruption -lt 2;$interruption++) {
+            $nestedId=[guid]::NewGuid().ToString('N');$nested=Join-Path $fixtureHome ('tools/mql5-skill-updates/'+$nestedId)
+            [IO.Directory]::CreateDirectory($nested) | Out-Null
+            $partial=@(Get-Mql5ReleaseInventory $target)
+            Copy-Mql5ReleaseSnapshot $target (Join-Path $nested 'backup-tree') $partial
+            Write-Mql5ReleaseJson (Join-Path $nested 'backup.json') @{schema_version=1;backup_id=$nestedId;target=$target;had_installation=$true;files=@($partial)}
+            $intentPath=Join-Path $nested 'pending.json'
+            Write-Mql5ReleaseJson $intentPath @{action='rollback';target=$target;restore_backup_id=$recoveryId}
+            $nestedIntents+=@($intentPath);$recoveryId=$nestedId
+        }
     }
     $recovered=RunUpdater @('-Action','Rollback','-CodexDirectory',$fixtureHome,'-BackupId',$recoveryId)
     if ($recovered.code) {throw $recovered.error_text}
-    if ($phase -eq 'partial-new') {Check (-not (Test-Path -LiteralPath (Join-Path $nested 'pending.json'))) 'interrupted rollback follows its original snapshot and resolves the nested intent'}
+    foreach ($intentPath in $nestedIntents) {Check (-not (Test-Path -LiteralPath $intentPath)) 'repeatedly interrupted rollback resolves every nested intent'}
     Check $true ($phase+' interruption recovered under root watcher')
     Assert-Mql5ReleaseInventory $target (($old | ConvertTo-Json -Depth 4 -Compress) | ConvertFrom-Json)
     Check $true 'partial publication recovery restores original bytes'
 }
+# A cleanup failure must retain all ancestors of an unresolved rollback intent.
+# Otherwise resuming that intent could select a partial snapshot as the original.
+$cleanupIds=@(('0'*31+'1'),('0'*31+'2'),('0'*31+'3'))
+$cleanupIntents=@()
+for ($level=0;$level -lt $cleanupIds.Count;$level++) {
+    $cleanupTxn=Join-Path $fixtureHome ('tools/mql5-skill-updates/'+$cleanupIds[$level])
+    [IO.Directory]::CreateDirectory($cleanupTxn) | Out-Null
+    $savedFiles=@(Get-Mql5ReleaseInventory $target)
+    Copy-Mql5ReleaseSnapshot $target (Join-Path $cleanupTxn 'backup-tree') $savedFiles
+    Write-Mql5ReleaseJson (Join-Path $cleanupTxn 'backup.json') @{schema_version=1;backup_id=$cleanupIds[$level];target=$target;had_installation=$true;files=@($savedFiles)}
+    $cleanupIntent=Join-Path $cleanupTxn 'pending.json';$cleanupIntents+=@($cleanupIntent)
+    if ($level -eq 0) {
+        Write-Mql5ReleaseJson $cleanupIntent @{action='update';target=$target}
+        $empty=Join-Path $cleanupTxn 'empty';[IO.Directory]::CreateDirectory($empty) | Out-Null
+        Set-Mql5ReleaseContents $target $empty (Join-Path $cleanupTxn 'displaced-tree') @()
+        Copy-Item -LiteralPath (Join-Path $skill 'version.json') -Destination (Join-Path $target 'version.json')
+    } else {Write-Mql5ReleaseJson $cleanupIntent @{action='rollback';target=$target;restore_backup_id=$cleanupIds[$level-1]}}
+}
+$intentPin=[IO.File]::Open($cleanupIntents[-1],[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+try {
+    $blocked=RunUpdater @('-Action','Rollback','-CodexDirectory',$fixtureHome,'-BackupId',$cleanupIds[-1])
+    Check ($blocked.code -ne 0) 'locked pending marker causes a reported cleanup failure'
+    foreach ($intentPath in $cleanupIntents) {Check (Test-Path -LiteralPath $intentPath) 'failed cleanup retains the unresolved intent and every recovery ancestor'}
+    Assert-Mql5ReleaseInventory $target (($old | ConvertTo-Json -Depth 4 -Compress) | ConvertFrom-Json)
+    Check $true 'cleanup failure retains the verified original files'
+} finally {$intentPin.Dispose()}
+$recovered=RunUpdater @('-Action','Rollback','-CodexDirectory',$fixtureHome,'-BackupId',$cleanupIds[-1])
+if ($recovered.code) {throw $recovered.error_text}
+Assert-Mql5ReleaseInventory $target (($old | ConvertTo-Json -Depth 4 -Compress) | ConvertFrom-Json)
+Check $true 'cleanup retry restores the original snapshot rather than an intermediate snapshot'
+foreach ($intentPath in $cleanupIntents) {Check (-not (Test-Path -LiteralPath $intentPath)) 'cleanup retry resolves the entire recovery family'}
 $childPin=[Mql5ReleaseFolderLock]::Pin($child)
 try {
     $invalid=RunUpdater $argsForUpdate
@@ -221,6 +389,22 @@ $nextSkill=Join-Path $work 'next-skill';Copy-Item -LiteralPath $skill -Destinati
 [IO.File]::WriteAllText((Join-Path $nextSkill 'references/new-reference.md'),'A future release can add a verified resource.')
 & (Join-Path $repo 'scripts/Package-Skill.ps1') -SkillRoot $nextSkill -OutputDirectory (Join-Path $work 'next-package') -SourceCommit $commit -Tag 'v1.1.0' | Out-Null
 $nextArchive=Join-Path $work 'next-package/mql5-coding-windows.zip'
+$installedVersion=Join-Path $freshHome 'skills/mql5-coding/version.json'
+$installedText=[IO.File]::ReadAllText($installedVersion)
+foreach ($case in @(
+    @{name='array-schema';text=('{"schema_version":[1],"version":"'+$version+'"}')},
+    @{name='string-schema';text=('{"schema_version":"1","version":"'+$version+'"}')},
+    @{name='boolean-schema';text=('{"schema_version":true,"version":"'+$version+'"}')},
+    @{name='extra-field';text=('{"schema_version":1,"version":"'+$version+'","extra":true}')}
+)) {
+    [IO.File]::WriteAllText($installedVersion,$case.text)
+    $preserved=@(Get-Mql5ReleaseInventory (Split-Path -Parent $installedVersion))
+    try {
+        $invalid=RunUpdater @('-Action','Update','-Version','1.1.0','-CodexDirectory',$freshHome,'-ArchivePath',$nextArchive,'-ExpectedArchiveSha256',(Get-Mql5ReleaseHash $nextArchive),'-ExpectedSourceCommit',$commit)
+        Check ($invalid.code -ne 0) ('installed '+$case.name+' version record rejected before upgrade')
+        Assert-Mql5ReleaseInventory (Split-Path -Parent $installedVersion) $preserved
+    } finally {[IO.File]::WriteAllText($installedVersion,$installedText)}
+}
 $upgrade=RunUpdater @('-Action','Update','-Version','1.1.0','-CodexDirectory',$freshHome,'-ArchivePath',$nextArchive,'-ExpectedArchiveSha256',(Get-Mql5ReleaseHash $nextArchive),'-ExpectedSourceCommit',$commit)
 if ($upgrade.code) {throw $upgrade.error_text}
 Check ($upgrade.data.action -ceq 'updated' -and (Test-Path -LiteralPath (Join-Path $freshHome 'skills/mql5-coding/references/new-reference.md'))) 'versioned upgrade accepts verified additional resources'

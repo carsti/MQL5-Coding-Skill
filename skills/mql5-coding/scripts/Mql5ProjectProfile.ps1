@@ -14,6 +14,11 @@ function Assert-Mql5ProfileInteger($Value, [int]$Minimum, [int]$Maximum) {
 }
 function Resolve-Mql5ProfilePath($Value, [string]$Base, [string]$Kind) {
     Assert-Mql5ProfileText $Value
+    # IsPathRooted also accepts \file and C:file. Those depend on ambient
+    # drive/directory state rather than the profile's declared base.
+    if ([IO.Path]::IsPathRooted($Value) -and $Value -notmatch '\A[A-Za-z]:[\\/]' -and $Value -notmatch '\A[\\/]{2}[^\\/]+[\\/][^\\/]+') {
+        throw 'Profile paths must be relative to their declared base or fully qualified absolute paths.'
+    }
     $path=if ([IO.Path]::IsPathRooted($Value)) {[IO.Path]::GetFullPath($Value)} else {[IO.Path]::GetFullPath((Join-Path $Base $Value))}
     if (-not (Test-Path -LiteralPath $path -PathType $Kind)) {throw 'A selected profile file or directory is unavailable.'}
     return $path
@@ -91,12 +96,12 @@ function ConvertTo-Mql5ValidatedProfile($Data, [string]$ProfilePath) {
         if ($t.use_expert_defaults -isnot [bool]) {throw 'Tester input choice must be boolean.'}
         $preset=$null
         if ($null -ne $t.set_path) {$preset=Resolve-Mql5ProfilePath $t.set_path $root 'Leaf'; if ([IO.Path]::GetExtension($preset) -ine '.set') {throw 'Tester preset must be a SET file.'}}
-        if (($null -ne $preset) -eq $t.use_expert_defaults) {throw 'Select exactly one preset or explicitly accepted EA defaults.'}
+        if (($null -ne $preset) -eq $t.use_expert_defaults) {throw 'Select exactly one preset or compiled EA defaults.'}
         Assert-Mql5ProfileInteger $t.timeout_seconds 10 86400
         $settings=$t.settings
         Assert-Mql5ProfileObject $settings @('symbol','period','from_date','to_date','model','deposit','currency','leverage','execution_mode')
         Assert-Mql5ProfileText $settings.symbol 64
-        if ($settings.symbol -match '[\\/=;#]') {throw 'Invalid tester symbol.'}
+        if ($settings.symbol -match '[\\/=;]') {throw 'Invalid tester symbol.'}
         Assert-Mql5ProfileText $settings.period 16
         if ($settings.period -cnotmatch '\A[A-Za-z0-9_]+\z') {throw 'Invalid tester period.'}
         foreach ($date in @($settings.from_date,$settings.to_date)) {
@@ -124,6 +129,9 @@ function Read-Mql5ProjectProfile([string]$Path) {
         $reader=New-Object IO.StreamReader($stream,(New-Object Text.UTF8Encoding($false,$true)),$true)
         try {$text=$reader.ReadToEnd()} finally {$reader.Dispose()}
     } finally {$stream.Dispose()}
+    # ConvertFrom-Json enumerates a one-item root array in both supported
+    # shells. Check the serialized root before that array can become an object.
+    if (-not $text.TrimStart().StartsWith('{')) {throw 'Profile metadata must have a JSON object at its root.'}
     Assert-Mql5ProfileJsonKeys $text
     $data=$text | ConvertFrom-Json
     return ConvertTo-Mql5ValidatedProfile $data $path
