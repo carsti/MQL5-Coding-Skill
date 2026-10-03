@@ -71,7 +71,7 @@ class ProfileTests(unittest.TestCase):
     def test_invalid_recorded_build_conditions(self):
         recorded = json.loads((FIXTURES/"native-functions-conditions.json").read_text())
         path = self.root/"conditions.json"
-        for field, value in (("metaeditor_build", True), ("architecture", 64), ("profiling_inlining", "unknown")):
+        for field, value in (("metaeditor_build", True), ("architecture", 64), ("architecture", 64.0), ("profiling_inlining", "unknown")):
             changed = copy.deepcopy(recorded)
             changed["build_conditions"][field] = value
             path.write_text(json.dumps(changed), encoding="utf-8")
@@ -107,6 +107,51 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(compare_profiles(self.profile(), candidate)["compatibility"]["status"], "comparable")
         self.assertIsInstance(candidate["recorded_identity"]["recorded_build_conditions"]["metaeditor_build"], str)
         self.assertIsInstance(self.profile()["recorded_identity"]["recorded_build_conditions"]["metaeditor_build"], int)
+
+    def test_workload_json_types_and_numeric_equality(self):
+        template = json.loads((FIXTURES/"native-functions-conditions.json").read_text())
+        expectations = {"metrics": [{"metric": "OnStart.self_cpu_samples", "target": "candidate", "minimum": "0"}]}
+        cases = ((True, 1, "incompatible"), (False, 0, "incompatible"), (1.5, "1.5", "incompatible"),
+                 (1, "1", "incompatible"), (1, 1.0, "comparable"), (True, True, "comparable"))
+        for index, (before, after, expected) in enumerate(cases):
+            profiles = []
+            for side, value in enumerate((before, after)):
+                recorded = copy.deepcopy(template)
+                recorded["workload"] = {"settings": [{"value": value}]}
+                path = self.root/("workload-" + str(index) + "-" + str(side) + ".json")
+                path.write_text(json.dumps(recorded), encoding="utf-8")
+                profiles.append(native_profile(FIXTURES/"native-functions.csv", path))
+            compared = compare_profiles(*profiles, expectations)
+            with self.subTest(baseline=before, candidate=after):
+                self.assertEqual(compared["compatibility"]["status"], expected)
+                self.assertEqual(compared["expectations"]["status"], "pass" if expected == "comparable" else "not_evaluable")
+                if expected == "incompatible":
+                    kinds = compared["compatibility"]["differences"][0]["type_differences"]
+                    self.assertEqual(kinds[0]["path"], ["workload", "settings", 0, "value"])
+                    self.assertNotEqual(kinds[0]["baseline_type"], kinds[0]["candidate_type"])
+
+    def test_decimal_condition_outputs_preserve_type_mismatch_evidence(self):
+        template = json.loads((FIXTURES/"native-functions-conditions.json").read_text())
+        paths = []
+        for index, value in enumerate((1.5, "1.5")):
+            recorded = copy.deepcopy(template)
+            recorded["workload"] = {"value": value}
+            recorded["elapsed_duration_milliseconds"] = 12.5
+            path = self.root/("decimal-condition-" + str(index) + ".json")
+            path.write_text(json.dumps(recorded), encoding="utf-8")
+            paths.append(path)
+        output = self.root/"decimal-condition-output"
+        process = subprocess.run([sys.executable, "-B", str(SCRIPTS/"mql5_toolkit.py"), "profile", "compare",
+                                  "--baseline", str(FIXTURES/"native-functions.csv"), "--candidate", str(FIXTURES/"native-functions.csv"),
+                                  "--baseline-conditions", str(paths[0]), "--candidate-conditions", str(paths[1]), "--output", str(output)], capture_output=True)
+        self.assertEqual(process.returncode, 3, process.stderr)
+        self.assertNotIn(b"Traceback", process.stderr)
+        recorded = json.loads((output/"result.json").read_text(encoding="utf-8"))
+        difference = recorded["compatibility"]["differences"][0]
+        self.assertEqual(difference["type_differences"], [{"path": ["workload", "value"], "baseline_type": "number", "candidate_type": "string"}])
+        self.assertEqual(recorded["baseline"]["conditions"]["workload"]["value"], "1.5")
+        self.assertEqual(recorded["baseline"]["recorded_identity"]["elapsed_duration_milliseconds"]["value"], "12.5")
+        self.assertEqual(recorded["baseline"]["evidence_linkage"]["source"]["sha256"], digest(paths[0].read_bytes()))
 
     def test_hash_mismatch_and_explicit_evidence(self):
         conditions = json.loads((FIXTURES/"native-functions-conditions.json").read_text())

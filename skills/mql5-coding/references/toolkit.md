@@ -23,6 +23,8 @@ A percentage suffix cannot replace an explicitly required currency, ratio, count
 
 Tester-result, profiler-conditions, comparison-expectation, and include-snapshot JSON fingerprints use the exact byte buffers consumed by their readers. If another process changes a file after it is read, the fingerprint continues to describe the analyzed snapshot rather than the later file contents. Separate inputs are not read as one atomic transaction.
 
+JSON decimal numbers retain their numeric type and exact value during validation and comparison; they cannot satisfy fields that require strings. Results serialize finite decimals as strings. Comparison differences include `type_differences` paths when JSON types differ, so numeric values remain distinguishable from strings in the published evidence.
+
 Exit codes: `0` processing completed, `1` explicit expectations failed, `2` invalid input/tooling, `3` incompatible comparison, `4` insufficient evidence or unevaluable expectations. Comparison compatibility takes precedence over expectations. Read success describes processing, including disclosed linkage issues; inspect `evidence_linkage` before using recorded run settings. Console summaries are bounded; inspect the JSON for complete measurements, provenance, and issues.
 
 The Python CLI writes UTF-8 to stdout and stderr, including redirected pipes. Unicode evidence paths remain readable without changing the operation's exit status because of a legacy console encoding.
@@ -44,6 +46,8 @@ Deposit conditions use an exact decimal identity: trailing fractional zeros and 
 Copy [the expectation template](../assets/comparison-expectations.template.json) into the project and replace its example bounds with independently specified requirements. Schema 1 has a nonempty `metrics` array. Each item has `metric`, `target` (`candidate`, `difference`, or `percentage_difference`), and one or both decimal-string `minimum`/`maximum`. Unknown fields, nonfinite bounds, and duplicate JSON keys are invalid. Percent difference is `(candidate-baseline)/abs(baseline)*100`; zero baseline makes it undefined while signed/absolute differences remain available. Missing metrics produce `not_evaluable`. Results are `pass`, `fail`, `not_evaluable`, or `not_requested`; lower profit alone is only an observed difference.
 
 Optional `required_conditions` can add `terminal_image_sha256`, `terminal_build`, `history_quality`, `bars`, `ticks`, or `symbols`. `required_evidence` accepts `linked_run`, `source_hash`, `expert_hash`, `preset_hash`; `require_successful_runs` requires linked recorded successful smoke statuses, without turning them into independent execution verification.
+
+Required numeric data-quality conditions compare their exact values, so equivalent formatting such as `99%` and `99.00%` does not create an incompatibility. Original statistics and labels remain in the report evidence.
 
 ## Include inventory
 
@@ -96,5 +100,7 @@ CSV does not carry a source filename, full signature, workload, or build configu
 Comparisons match exact unique function names within the recorded compilation-unit context; duplicate names, unmatched functions, and uncertain mappings remain visible. There is no fuzzy matching or assertion of individual included-file identity. Workload, source context, and build conditions must match. Additional required evidence accepts `linked_conditions`, `source_hash`, or `elapsed_duration`. Metric names have the form `OnStart.self_cpu_samples` or `OnStart.self_cpu_percent`. Percentage changes alone establish no overall speed improvement; comparable workloads and repeated timing evidence are needed.
 
 Equivalent integer and digit-string MetaEditor build numbers compare as the same build. The original recorded build-condition representation remains available in `recorded_identity.recorded_build_conditions`.
+
+Workload objects and arrays compare recursively by JSON type and value. Booleans, numbers, and strings remain distinct; equal integer and decimal JSON numbers compare as the same numeric value. Type mismatches make conditions incompatible and prevent expectation evaluation.
 
 See native definitions at [MT5 testing reports](https://www.metatrader5.com/en/terminal/help/algotrading/testing_report) and [MetaEditor profiling](https://www.metatrader5.com/en/metaeditor/help/development/profiling). Tests retain genuine sanitized input provenance. UI actions used once to prepare those fixtures are not shipped as runtime automation.

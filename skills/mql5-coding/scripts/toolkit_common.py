@@ -57,9 +57,9 @@ def read_json(path: Path, limit: int = 32 * 1024 * 1024, *, data: bytes | None =
         raise InputError("JSON exceeds the supported size limit")
     try:
         value = json.loads(data.decode("utf-8-sig"), object_pairs_hook=object_keys,
-                           parse_float=lambda s: s,
+                           parse_float=Decimal,
                            parse_constant=lambda s: (_ for _ in ()).throw(InputError("Nonstandard JSON number")))
-    except (UnicodeError, json.JSONDecodeError) as exc:
+    except (UnicodeError, json.JSONDecodeError, InvalidOperation) as exc:
         raise InputError("Invalid UTF-8 JSON") from exc
     if not isinstance(value, dict):
         raise InputError("JSON root must be an object")
@@ -179,13 +179,49 @@ def evaluate(expectations: dict | None, metrics: dict, ready: bool) -> dict:
     return {"status": status, "checks": checks}
 
 
+def condition_kind(value) -> str:
+    if type(value) in {int, Decimal}:
+        return "number"
+    for kind, classes in (("string", str), ("boolean", bool), ("array", list), ("object", dict)):
+        if isinstance(value, classes):
+            return kind
+    if value is None:
+        return "null"
+    raise InputError("Unsupported comparison condition type")
+
+
+def equal_conditions(a, b, type_differences: list, path: tuple) -> bool:
+    before, after = condition_kind(a), condition_kind(b)
+    if before != after:
+        type_differences.append({"path": list(path), "baseline_type": before, "candidate_type": after})
+        return False
+    if before == "object":
+        equal = a.keys() == b.keys()
+        for key in sorted(a.keys() & b.keys()):
+            if not equal_conditions(a[key], b[key], type_differences, path + (key,)):
+                equal = False
+        return equal
+    if before == "array":
+        equal = len(a) == len(b)
+        for index, (left, right) in enumerate(zip(a, b)):
+            if not equal_conditions(left, right, type_differences, path + (index,)):
+                equal = False
+        return equal
+    return a == b
+
+
 def compatibility(a: dict, b: dict, required: list[str]) -> dict:
     missing, changed = [], []
     for key in required:
         if a.get(key) is None or b.get(key) is None:
             missing.append(key)
-        elif a[key] != b[key]:
-            changed.append({"condition": key, "baseline": a[key], "candidate": b[key]})
+        else:
+            type_differences = []
+            if not equal_conditions(a[key], b[key], type_differences, (key,)):
+                difference = {"condition": key, "baseline": a[key], "candidate": b[key]}
+                if type_differences:
+                    difference["type_differences"] = type_differences
+                changed.append(difference)
     status = "incompatible" if changed else "insufficient_evidence" if missing else "comparable"
     return {"status": status, "required": required, "missing": missing, "differences": changed}
 
@@ -202,12 +238,18 @@ def exit_code(result: dict) -> int:
     return 0
 
 
+def json_decimal(value) -> str:
+    if isinstance(value, Decimal) and value.is_finite():
+        return str(value)
+    raise TypeError("Unsupported JSON output value")
+
+
 def publish(output: Path, result: dict) -> int:
     # The caller has atomically reserved a new directory before any work.
     code = exit_code(result)
     result["exit_code"] = code
     with (output / "result.json").open("x", encoding="utf-8", newline="\n") as stream:
-        json.dump(result, stream, ensure_ascii=False, indent=2, allow_nan=False)
+        json.dump(result, stream, ensure_ascii=False, indent=2, allow_nan=False, default=json_decimal)
         stream.write("\n")
     lines = [result["operation"], "Status: " + result["status"]]
     for key in ("parsing", "evidence_linkage", "compatibility", "expectations"):

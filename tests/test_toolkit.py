@@ -218,6 +218,59 @@ class ToolkitTests(unittest.TestCase):
         b["artifact_identity"]["preset_sha256"] = None
         self.assertEqual(compare_reports(a, b, e)["compatibility"]["status"], "insufficient_evidence")
 
+    def test_decimal_json_numbers_cannot_satisfy_string_fields(self):
+        for key, value in (("minimum", 1.5), ("metric", 1.5)):
+            document = {"schema_version": 1, "metrics": [{"metric": "net_profit", "target": "candidate", "minimum": "0"}]}
+            document["metrics"][0][key] = value
+            path = self.root/("numeric-" + key + ".json")
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.subTest(field=key), self.assertRaises(InputError):
+                load_expectations(path)
+        original = json.loads((FIXTURES/"mixed-trades-result.json").read_text())
+        for key in ("symbol", "period", "currency", "from_date", "to_date"):
+            document = copy.deepcopy(original)
+            document["inputs"][key] = 1.5
+            path = self.root/("numeric-" + key + ".json")
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.subTest(field=key), self.assertRaises(InputError):
+                native_report(FIXTURES/"mixed-trades.htm", path)
+
+    def test_decimal_json_deposit_is_supported_and_published_exactly(self):
+        path = self.mutate_report("<b>100 000.00</b>", "<b>100 000.125</b>")
+        document = json.loads((FIXTURES/"mixed-trades-result.json").read_text())
+        document["inputs"]["deposit"] = 100000.125
+        document["artifacts"]["report"].update(sha256=digest(path.read_bytes()), byte_length=path.stat().st_size)
+        run_path = self.root/"decimal-deposit.json"
+        run_path.write_text(json.dumps(document), encoding="utf-8")
+        report = native_report(path, run_path)
+        self.assertEqual(report["conditions"]["deposit"], "100000.125")
+        self.assertFalse(report["issues"])
+        output = self.root/"decimal-deposit-output"
+        process = subprocess.run([sys.executable, "-B", str(SCRIPTS/"mql5_toolkit.py"), "report", "read",
+                                  "--input", str(path), "--tester-result", str(run_path), "--output", str(output)], capture_output=True)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        recorded = json.loads((output/"result.json").read_text(encoding="utf-8"))
+        self.assertEqual(recorded["recorded_run"]["requested_settings"]["deposit"], "100000.125")
+        self.assertEqual(recorded["recorded_run"]["source"]["sha256"], digest(run_path.read_bytes()))
+
+    def test_supplemental_numeric_conditions_ignore_equivalent_formatting(self):
+        baseline = self.report()
+        raw = baseline["metrics"]["history_quality"]["raw"]
+        value = baseline["metrics"]["history_quality"]["value"]
+        expectations = self.expectation(minimum="0")
+        expectations["required_conditions"] = ["history_quality"]
+        for suffix, expected in ((".00%", "comparable"), (".01%", "incompatible")):
+            path = self.mutate_report("<b>" + raw + "</b>", "<b>" + value + suffix + "</b>")
+            document = json.loads((FIXTURES/"mixed-trades-result.json").read_text())
+            document["artifacts"]["report"].update(sha256=digest(path.read_bytes()), byte_length=path.stat().st_size)
+            run_path = self.root/"quality-run.json"
+            run_path.write_text(json.dumps(document), encoding="utf-8")
+            candidate = native_report(path, run_path)
+            self.assertEqual(candidate["metrics"]["history_quality"]["raw"], value + suffix)
+            compared = compare_reports(baseline, candidate, expectations)
+            self.assertEqual(compared["compatibility"]["status"], expected)
+            self.assertEqual(compared["expectations"]["status"], "pass" if expected == "comparable" else "not_evaluable")
+
     def test_invalid_recorded_run_fields_fail_without_tracebacks(self):
         original = json.loads((FIXTURES/"mixed-trades-result.json").read_text())
         changes = [

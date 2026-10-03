@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -67,7 +68,7 @@ def recorded_settings(run: dict) -> tuple[dict, dict, dict, dict]:
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise InputError("Tester-result " + key + " must be a nonempty string")
     deposit = settings.get("deposit")
-    if deposit is not None and (type(deposit) not in {int, str} or number(str(deposit), "currency")["state"] != "finite"):
+    if deposit is not None and (type(deposit) not in {int, Decimal, str} or number(str(deposit), "currency")["state"] != "finite"):
         raise InputError("Tester-result deposit must be a finite currency amount")
     return settings, report, hashes, {"report_hash": report_hash, "image_hash": image_hash}
 
@@ -276,7 +277,7 @@ def compare_reports(a: dict, b: dict, expectations: dict | None = None) -> dict:
     for report in (a, b):
         values = dict(report["conditions"])
         values.update(terminal_image_sha256=report["terminal"].get("image_sha256"), terminal_build=report["terminal"].get("build"))
-        values.update({k: v["value"] if v["state"] == "finite" else None for k, v in report["data_quality"].items()})
+        values.update({k: canonical_decimal(v["value"]) if v["state"] == "finite" else None for k, v in report["data_quality"].items()})
         conditions.append(values)
     compatible = compatibility(*conditions, required)
     linkage_ok = all(x["evidence_linkage"]["status"] != "mismatch" for x in (a, b))
