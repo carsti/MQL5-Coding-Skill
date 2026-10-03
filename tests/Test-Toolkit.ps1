@@ -19,6 +19,7 @@ function ReadResult([string]$Output) {return Read-Mql5ReleaseJson (Join-Path $Ou
 $oldTrace=$env:MQL5_SCENARIO_TEST_TRACE;$oldReport=$env:MQL5_SCENARIO_TEST_REPORT
 try {
     $python=if ($PythonPath) {Get-ToolkitPython $PythonPath} elseif (Get-Command python -ErrorAction SilentlyContinue) {(Get-Command python).Source} else {Get-ToolkitPython ''}
+    Check ((Get-ToolkitValue @{exit_code=3} 'exit_code') -eq 3 -and (Get-ToolkitValue ([ordered]@{exit_code=4}) 'exit_code') -eq 4) 'Dictionary exit codes are retained'
     $journalPath=Join-Path $testRoot 'journal.log'
     $prefix="prefix`r`n"
     $segment="AA`t0`t10:00:01.000`tFixture`tpassword=hidden repeated`r`nBB`t0`t10:00:02.000`tFixture`tpassword=other repeated`r`nCC`t0`t10:00:03.000`tFixture`tMQL5_CODING_PASS:$('a'*32):test`r`n"
@@ -42,6 +43,16 @@ try {
     $filtered=Join-Path $testRoot 'journal-filtered'
     $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$runPath,'-OutputDirectory',$filtered,'-LiteralMessage','repeated')
     Check ($process.exit_code -eq 0 -and (ReadResult $filtered).matched_lines -eq 2) 'Literal filter selects matching messages'
+    $run.evidence.tester_journal=$journal;Save $runPath $run
+    $crossOverlap=Join-Path $testRoot 'journal-cross-overlap'
+    $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$runPath,'-OutputDirectory',$crossOverlap)
+    Check ($process.exit_code -eq 4 -and (ReadResult $crossOverlap).inspected_lines -eq 3) 'Same segment recorded under both journal kinds is counted once'
+    $run.evidence.tester_journal=[pscustomobject]@{appended_byte_length=0;limit_exceeded=$false;segments=@();excerpts=@()}
+    $excerptPath=Join-Path $testRoot 'excerpts-only.json'
+    Save $excerptPath @{schema_version=2;status='engine_smoke_passed';evidence=@{terminal_journal=@{appended_byte_length=4096;segments=@();excerpts=@(('x'*2048))};tester_journal=$run.evidence.tester_journal}}
+    $largeExcerpt=Join-Path $testRoot 'journal-large-excerpt'
+    $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$excerptPath,'-OutputDirectory',$largeExcerpt,'-MaxBytes','1024')
+    Check ($process.exit_code -eq 4 -and (ReadResult $largeExcerpt).truncated -and (ReadResult $largeExcerpt).inspected_lines -eq 0) 'Fallback excerpts obey the byte limit'
     $record.sha256='0'*64;$journal.excerpts=@('AA'+"`t0`t10:00:00.000`tFixture`tpassword=fallback")
     Save $runPath $run
     $bad=Join-Path $testRoot 'journal-mismatch'
@@ -123,7 +134,35 @@ exit $LASTEXITCODE
     Check (($states -join ',') -eq 'completed,failed,failed,timed_out,blocked,failed,completed') 'Scenario statuses preserved'
     Check ($batch.scenarios[6].analysis[0].exit_code -eq 2) 'Completed tester with failed analysis retained separately'
     Check ($batch.scenarios[3].tester.exit_code -eq 3 -and $batch.scenarios[4].tester.exit_code -eq 4) 'Original exit codes retained'
+    $table=Import-Csv -LiteralPath (Join-Path $full 'results.tsv') -Delimiter "`t"
+    Check ($table[1].compile_exit -eq '1' -and $table[3].tester_exit -eq '3' -and $table[4].recorded_tester_status -eq 'blocked') 'Combined table retains compiler and tester evidence'
     Check (@($batch.scenarios | Where-Object {$_.cleanup_verified -eq $false}).Count -eq 0) 'Mixed batch owned cleanup verified'
+    foreach ($boundary in @('tester','analysis','missing-analysis')) {
+        $limitedScripts=Join-Path $testRoot ($boundary+'-limited-scripts');Copy-Item -LiteralPath $fixtureScripts -Destination $limitedScripts -Recurse
+        $supportPath=Join-Path $limitedScripts 'ToolkitSupport.ps1'
+        # Preserve real owned execution/cleanup and simulate the completed-child
+        # race where output bounds are exceeded despite a zero process exit.
+        $replacement=if ($boundary -eq 'tester') {
+            'if ($Arguments -contains "-EncodedCommand" -and [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($Arguments[-1])).Contains("TesterSmoke")) {$answer.status="output_limit"}; return [pscustomobject]$answer'
+        } elseif ($boundary -eq 'analysis') {
+            'if ($Executable.EndsWith("python.exe",[StringComparison]::OrdinalIgnoreCase)) {$answer.status="output_limit"}; return [pscustomobject]$answer'
+        } else {
+            'if ($Executable.EndsWith("python.exe",[StringComparison]::OrdinalIgnoreCase) -and $Arguments -contains "--output") {[IO.File]::Delete((Join-Path $Arguments[[Array]::IndexOf($Arguments,"--output")+1] "result.json"))}; return [pscustomobject]$answer'
+        }
+        $support=[IO.File]::ReadAllText($supportPath).Replace('return [pscustomobject]$answer',$replacement)
+        [IO.File]::WriteAllText($supportPath,$support,(New-Object Text.UTF8Encoding($false)))
+        Save $manifestPath @{schema_version=1;scenarios=@(@{id='limited';profile=$profiles.success})}
+        $limited=Join-Path $testRoot ('batch-'+$boundary+'-limited')
+        $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$limited,'-PythonPath',$python,'-Action','Execute') $limitedScripts
+        $batch=ReadResult $limited
+        if ($boundary -eq 'tester') {
+            Check ($process.exit_code -eq 1 -and $batch.scenarios[0].status -eq 'failed' -and $batch.scenarios[0].tester.exit_code -eq 0 -and $batch.scenarios[0].tester.runner_status -eq 'output_limit') 'Tester process failure cannot become success through its zero exit code'
+        } elseif ($boundary -eq 'analysis') {
+            Check ($process.exit_code -eq 1 -and $batch.scenarios[0].status -eq 'completed' -and $batch.scenarios[0].analysis[0].status -eq 'failed' -and $batch.scenarios[0].analysis[0].exit_code -eq 0) 'Analysis process failure is retained separately and fails the batch'
+        } else {
+            Check ($process.exit_code -eq 1 -and $batch.scenarios[0].analysis[0].reason -eq 'analysis_result_missing_or_invalid') 'Zero-exit analysis without its result JSON fails the batch'
+        }
+    }
     $unsafe=Join-Path $testRoot 'batch-unsafe'
     Save $manifestPath @{schema_version=1;scenarios=@(@{id='bad-cleanup';profile=$profiles['cleanup-failure']},@{id='later';profile=$profiles.success})}
     $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$unsafe,'-PythonPath',$python,'-Action','Execute') $fixtureScripts

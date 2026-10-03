@@ -71,7 +71,7 @@ def native_profile(path: Path, conditions_path: Path | None = None) -> dict:
             linkage = {"status": "hash_verified", "source": source(conditions_path)}
             conditions["workload"] = recorded.get("workload") or None
             build = recorded.get("build_conditions") or {}
-            conditions["build_conditions"] = build if BUILD_KEYS <= build.keys() and all(build[k] is not None for k in BUILD_KEYS) else None
+            conditions["build_conditions"] = {**build, "metaeditor_build": str(build["metaeditor_build"])} if BUILD_KEYS <= build.keys() and all(build[k] is not None for k in BUILD_KEYS) else None
             conditions["source_identity"] = recorded.get("source_identity")
             identity["source_sha256"] = recorded.get("source_sha256")
             identity["elapsed_duration_milliseconds"] = recorded.get("elapsed_duration_milliseconds")

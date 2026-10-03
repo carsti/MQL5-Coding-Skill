@@ -14,7 +14,7 @@ $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'TesterEvidence.ps1')
 $output=$null
 $result=[ordered]@{schema_version=1;operation='journal read';status='failed';source=$null;recorded_run_status=$null;evidence_status='unavailable';segments=@();groups=@();inspected_lines=0;matched_lines=0;grouped_lines=0;truncated=$false;filter_sha256=@();issues=@();limitations=@('Counts cover inspected evidence only. Patterns are observations, not proven causes.');exit_code=2}
-$groups=@{};$bytesUsed=0
+$groups=@{};$bytesUsed=0;$ranges=@{}
 function Add-JournalObservation([string]$Line,[string]$Kind,[string]$Path,[long]$Offset,[long]$LineNumber,[bool]$Verified) {
     if ($script:result.inspected_lines -ge $MaxLines) {$script:result.truncated=$true;return}
     $script:result.inspected_lines++
@@ -55,7 +55,7 @@ try {
     foreach ($kind in @('terminal_journal','tester_journal')) {
         $journal=Get-ToolkitValue $evidence $kind
         $segments=@(Get-ToolkitValue $journal 'segments' @())
-        $usable=0;$recordedBytes=0;$ranges=@{}
+        $usable=0;$recordedBytes=0
         if ($null -eq $journal) {$missingJournals++}
         if (Get-ToolkitValue $journal 'limit_exceeded' $false) {$result.truncated=$true}
         foreach ($segment in $segments) {
@@ -111,6 +111,10 @@ try {
             $excerptIndex=0
             foreach ($excerpt in @(Get-ToolkitValue $journal 'excerpts' @())) {
                 if ($excerpt -isnot [string]) {throw 'Journal excerpt must be a string.'}
+                if ($result.inspected_lines -ge $MaxLines) {$result.truncated=$true;break}
+                $excerptBytes=[Text.Encoding]::Unicode.GetByteCount($excerpt)
+                if ($excerptBytes -gt ($MaxBytes-$bytesUsed)) {$result.truncated=$true;break}
+                $bytesUsed+=$excerptBytes
                 $excerptIndex++
                 if ($excerpt.Length) {Add-JournalObservation $excerpt $kind $path -1 $excerptIndex $false}
             }

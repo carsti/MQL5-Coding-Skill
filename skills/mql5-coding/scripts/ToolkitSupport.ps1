@@ -2,6 +2,10 @@
 # Shared primitives; callers own output policy and evidence interpretation.
 . (Join-Path $PSScriptRoot 'SkillRelease.ps1')
 function Get-ToolkitValue($Object,[string]$Name,$Default=$null) {
+    if ($Object -is [Collections.IDictionary]) {
+        if ($Object.Contains($Name)) {return $Object[$Name]}
+        return $Default
+    }
     if ($null -ne $Object) {
         $property=$Object.PSObject.Properties[$Name]
         if ($null -ne $property) {return $property.Value}

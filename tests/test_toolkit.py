@@ -124,6 +124,38 @@ class ToolkitTests(unittest.TestCase):
         b["artifact_identity"]["preset_sha256"] = None
         self.assertEqual(compare_reports(a, b, e)["compatibility"]["status"], "insufficient_evidence")
 
+    def test_invalid_recorded_run_fields_fail_without_tracebacks(self):
+        original = json.loads((FIXTURES/"mixed-trades-result.json").read_text())
+        changes = [
+            ("artifacts", []), ("inputs", []), ("binding", []),
+            ("artifacts.report", []), ("artifacts.preset", []),
+            ("binding.terminal_image", []), ("inputs.compilation_receipt", []),
+            ("inputs.deposit", "bad"), ("inputs.deposit", "NaN"),
+            ("inputs.expected_expert_sha256", "not-a-hash"),
+            ("inputs.compilation_receipt.source_sha256", "not-a-hash"),
+            ("artifacts.preset.sha256", "not-a-hash"),
+            ("binding.terminal_image.sha256", "not-a-hash"),
+        ]
+        for index, (key, value) in enumerate(changes):
+            with self.subTest(field=key, value=value):
+                run = copy.deepcopy(original)
+                target = run
+                parts = key.split(".")
+                for part in parts[:-1]:
+                    target = target[part]
+                target[parts[-1]] = value
+                path = self.root/f"invalid-run-{index}.json"
+                path.write_text(json.dumps(run), encoding="utf-8")
+                with self.assertRaises(InputError):
+                    native_report(FIXTURES/"mixed-trades.htm", path)
+                out = self.root/f"invalid-run-output-{index}"
+                process = subprocess.run([sys.executable, "-B", str(SCRIPTS/"mql5_toolkit.py"),
+                                          "report", "read", "--input", str(FIXTURES/"mixed-trades.htm"),
+                                          "--tester-result", str(path), "--output", str(out)], capture_output=True)
+                self.assertEqual(process.returncode, 2)
+                self.assertNotIn(b"Traceback", process.stderr)
+                self.assertEqual(json.loads((out/"result.json").read_text())["status"], "failed")
+
     def project(self):
         root = self.root/"project"
         root.mkdir()
@@ -162,6 +194,25 @@ class ToolkitTests(unittest.TestCase):
         self.assertTrue(b["unselected_entrypoints"])
         self.assertEqual(b["coverage"], "uncertain")
         self.assertTrue(any(x["kind"] == "added" for x in diff["differences"]))
+
+    def test_invalid_include_snapshots_do_not_invent_consumers(self):
+        root, external = self.project()
+        valid = inventory(root, [], [external])
+        key = str(root/"A.mq5")
+        for value in ("EA.mq5", [42], [""]):
+            bad = copy.deepcopy(valid)
+            bad["possible_consumers"][key] = value
+            with self.assertRaises(InputError):
+                compare_snapshots(valid, bad)
+        for field, value in (("sha256", "invalid"), ("byte_length", True), ("path", None)):
+            bad = copy.deepcopy(valid)
+            bad["files"][0][field] = value
+            with self.assertRaises(InputError):
+                compare_snapshots(valid, bad)
+        bad = copy.deepcopy(valid)
+        bad.pop("coverage")
+        with self.assertRaises(InputError):
+            compare_snapshots(valid, bad)
 
     def test_nested_quoted_directory_and_reference_uncertainty(self):
         root, external = self.project()
@@ -202,6 +253,17 @@ class ToolkitTests(unittest.TestCase):
         (other/"Shared.mqh").write_text('// collision', encoding="utf-8")
         snap = inventory(root, [], [external, other])
         self.assertEqual({x["resolution"] for x in snap["unresolved"]}, {"unsupported", "ambiguous"})
+        for folder in (external, other):
+            self.assertEqual(snap["possible_consumers"][str(folder/"Shared.mqh")],
+                             [str(root/"A.mq5"), str(root/"B.mq5")])
+        before = snap
+        (other/"Shared.mqh").write_text('#include <Leaf.mqh>\n', encoding="utf-8")
+        (other/"Leaf.mqh").write_text("// nested candidate", encoding="utf-8")
+        after = inventory(root, [], [external, other])
+        diff = compare_snapshots(before, after)
+        self.assertEqual([d["kind"] for d in diff["differences"]], ["added", "changed"])
+        self.assertEqual(diff["possible_affected_entrypoints"], [str(root/"A.mq5"), str(root/"B.mq5")])
+        self.assertTrue(all(d["consumer_coverage_unknown"] for d in diff["differences"]))
 
     def test_cli_exit_codes_and_no_overwrite(self):
         cli = SCRIPTS/"mql5_toolkit.py"

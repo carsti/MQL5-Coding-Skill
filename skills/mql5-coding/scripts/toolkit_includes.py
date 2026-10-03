@@ -193,9 +193,8 @@ def inventory(root: Path, entrypoints: list[Path], include_roots: list[Path], pr
                                 visit(matches[0])
                             if len(matches) > 1:
                                 edge["possible_targets"] = [str(p) for p in matches]
-                                if form == "quoted":
-                                    for candidate in matches:
-                                        visit(candidate)
+                                for candidate in matches:
+                                    visit(candidate)
                     edges.append(edge)
                 elif directive == "unsupported":
                     issues.append({"code": "unsupported_construct", "path": identity, "line": line})
@@ -220,6 +219,14 @@ def compare_snapshots(a: dict, b: dict) -> dict:
         version(snapshot)
         if snapshot.get("operation") != "includes inventory" or snapshot.get("status") != "completed" or not isinstance(snapshot.get("files"), list) or not isinstance(snapshot.get("possible_consumers"), dict):
             raise InputError("Expected completed include snapshots")
+        if snapshot.get("coverage") not in {"selected_entrypoints_scanned", "uncertain"} or not isinstance(snapshot.get("project_root"), str) or not Path(snapshot["project_root"]).is_absolute():
+            raise InputError("Snapshot root and consumer coverage are required")
+        for record in snapshot["files"]:
+            if not isinstance(record, dict) or not isinstance(record.get("path"), str) or not Path(record["path"]).is_absolute() or not isinstance(record.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", record["sha256"]) or type(record.get("byte_length")) is not int or record["byte_length"] < 0:
+                raise InputError("Invalid snapshot file identity")
+        for path, entries in snapshot["possible_consumers"].items():
+            if not isinstance(path, str) or not Path(path).is_absolute() or not isinstance(entries, list) or any(not isinstance(p, str) or not Path(p).is_absolute() for p in entries):
+                raise InputError("Snapshot consumers must be arrays of absolute entrypoint paths")
     mappings = [{x["path"]: x for x in s["files"]} for s in (a, b)]
     if any(len(m) != len(s["files"]) for m, s in zip(mappings, (a, b))):
         raise InputError("Duplicate snapshot file identities")

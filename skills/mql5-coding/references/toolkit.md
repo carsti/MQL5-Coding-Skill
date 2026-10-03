@@ -29,6 +29,8 @@ Native labels, values, units, table/row/cell locations, input rows, reported dat
 
 An optional existing tester result uses schema 2. Its recorded report hash and length must match before settings or artifact hashes are associated. A copied report may have a different path; bytes establish linkage. Root source, EX5, and preset hashes are recorded identities, not proof that their files still exist. Parsing, recorded tester status, linkage, comparability, and expectations are separate. Report existence never proves tester completion. Requested dates remain separate from reported coverage.
 
+Malformed nested records, invalid hash strings, and nonfinite recorded deposits are invalid input. Missing optional records remain evidence gaps. SHA-256 hex case is normalized for matching while the recorded report evidence is preserved.
+
 Required comparison conditions are symbol, period, reported dates, model, deposit, currency, leverage, execution mode, and effective input rows. A known difference is `incompatible`; missing conditions are `insufficient_evidence`; matching conditions are `comparable`. Report/run conflicts are gaps. Artifact identity changes do not make code-revision comparisons incompatible. Terminal and data-quality information is retained separately and can be explicitly required.
 
 Copy [the expectation template](../assets/comparison-expectations.template.json) into the project and replace its example bounds with independently specified requirements. Schema 1 has a nonempty `metrics` array. Each item has `metric`, `target` (`candidate`, `difference`, or `percentage_difference`), and one or both decimal-string `minimum`/`maximum`. Unknown fields, nonfinite bounds, and duplicate JSON keys are invalid. Percent difference is `(candidate-baseline)/abs(baseline)*100`; zero baseline makes it undefined while signed/absolute differences remain available. Missing metrics produce `not_evaluable`. Results are `pass`, `fail`, `not_evaluable`, or `not_requested`; lower profit alone is only an observed difference.
@@ -41,6 +43,8 @@ Literal `"file"` includes use the directory of the file containing the directive
 
 The snapshot records project source hashes, reachable external sources, declared edges, conditional context, possible consumers, cycles, unresolved or unsupported forms, and unselected entrypoints. Conditional branches remain possible; macros are not expanded. Linked directories/sources are disclosed rather than traversed. Bounds are 50,000 project files, 10,000 source files, 8 MiB per source, and 128 include levels. Unknown coverage requires further review. Cycles alone are not compilation errors.
 
+All ambiguous literal candidates are inventoried, including candidates in multiple standard roots and their transitive includes. They retain uncertain resolution and possible consumers. Comparisons reject malformed file identities, consumer arrays, and missing coverage rather than inventing affected entrypoints.
+
 Comparison uses exact absolute file identities and both snapshots' consumers, including deleted headers. Moved roots are disclosed and appear as removed/added files. An orphan source change has unknown consumer coverage. A snapshot is not proof of compiler consumption, runtime dependencies, or compilation success. Use affected entrypoints to select the existing compiler workflow.
 
 ## Journals
@@ -48,6 +52,8 @@ Comparison uses exact absolute file identities and both snapshots' consumers, in
 Run `Read-Mql5Journal.ps1 -TesterResultPath <absolute-smoke-result.json> -OutputDirectory <new-absolute-directory>`. Optional `-LiteralMessage` strings select literal, case-sensitive message substrings; filters are fingerprinted rather than printed. `-MaxBytes`, `-MaxLines`, and `-MaxGroups` bound processing. The helper reads only recorded UTF-16LE segments, verifies byte ranges and SHA-256, reuses the existing redactor, and masks application-marker plaintext.
 
 Groups retain redacted message/component, inspected count, first/last recorded timestamp, and up to three evidence locations. Counts cover only inspected lines. Complete segments, partial verified segments, bounded excerpts, unavailable evidence, and truncation are separate; incomplete analysis returns `4`. Overlapping segments are not counted twice; ranges starting or ending inside a journal record disclose truncation even when their hashes match. Excerpts are fallback observations, not hash-verified full journals. Patterns do not prove root causes. Verify runtime error or trade-return interpretations through the MCP.
+
+Overlap detection applies across both journal kinds. The byte budget includes fallback excerpts measured as UTF-16LE bytes; an excerpt that cannot fit is skipped and truncation is reported.
 
 ## Scenario batches
 
@@ -59,6 +65,8 @@ The result fingerprints selected profile and optional evidence files, and execut
 
 Cleanup uncertainty stops subsequent compiler, tester, and analysis processes immediately. Retained report paths and an explicit analysis-skipped reason remain available for later inspection when this mandatory abort prevents report analysis.
 
+Runner failure remains a failure even if a child records a zero exit code. Each analysis records processing status and a validated result path separately from the original process status/exit code. Missing or inconsistent analysis JSON fails analysis, and the combined table preserves compiler/tester exit codes and recorded tester status.
+
 Each scenario has separate outputs, original compiler/tester statuses and exit codes, and `completed`, `failed`, `timed_out`, `blocked`, or `skipped` status. Report analysis is retained separately: a completed tester can have failed analysis. Every retained HTML report is analyzed. Failure may continue only after owned-process cleanup is verified; uncertainty aborts remaining scenarios. `progress.json` records in-progress evidence separately from the final result. Optional absolute `-CancellationFile` causes remaining scenarios to be skipped when the file exists; current owned work finishes cleanup first. Hard host termination can leave only progress evidence and must not be called batch completion. Batch exit `0` means validation/completed results with successful analysis, `1` retained scenario/analysis failure, `2` configuration/tooling failure or aborted execution. Batch duration is orchestration evidence, not EA execution cost.
 
 ## Profiling
@@ -68,5 +76,7 @@ Supported input is native MetaEditor function-view CSV captured from build 6235:
 CSV does not carry a source filename, full signature, workload, or build configuration. An optional conditions JSON (schema 1) binds `profile_sha256`; optional `source_identity` records the known compilation unit, `source_sha256` records artifact identity, `workload` records a nonempty workload object, and `build_conditions` records at least `metaeditor_build`, `profiling_optimizations`, `profiling_inlining`, `architecture`, and `environment_id`. Optional `elapsed_duration_milliseconds` remains a separate measurement; it is not inferred from samples. Use a documented stable environment identity and observations of actual profiling settings. Missing conditions produce insufficient comparison evidence.
 
 Comparisons match exact unique function names within the recorded compilation-unit context; duplicate names, unmatched functions, and uncertain mappings remain visible. There is no fuzzy matching or assertion of individual included-file identity. Workload, source context, and build conditions must match. Additional required evidence accepts `linked_conditions`, `source_hash`, or `elapsed_duration`. Metric names have the form `OnStart.self_cpu_samples` or `OnStart.self_cpu_percent`. Percentage changes alone establish no overall speed improvement; comparable workloads and repeated timing evidence are needed.
+
+Equivalent integer and digit-string MetaEditor build numbers compare as the same build. The original recorded build-condition representation remains available in `recorded_identity.recorded_build_conditions`.
 
 See native definitions at [MT5 testing reports](https://www.metatrader5.com/en/terminal/help/algotrading/testing_report) and [MetaEditor profiling](https://www.metatrader5.com/en/metaeditor/help/development/profiling). Tests retain genuine sanitized input provenance. UI actions used once to prepare those fixtures are not shipped as runtime automation.

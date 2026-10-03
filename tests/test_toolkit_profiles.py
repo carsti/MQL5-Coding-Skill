@@ -76,6 +76,16 @@ class ProfileTests(unittest.TestCase):
             with self.assertRaises(InputError):
                 native_profile(FIXTURES/"native-functions.csv", path)
 
+    def test_equivalent_integer_and_string_builds_are_comparable(self):
+        recorded = json.loads((FIXTURES/"native-functions-conditions.json").read_text())
+        recorded["build_conditions"]["metaeditor_build"] = str(recorded["build_conditions"]["metaeditor_build"])
+        path = self.root/"string-build.json"
+        path.write_text(json.dumps(recorded), encoding="utf-8")
+        candidate = native_profile(FIXTURES/"native-functions.csv", path)
+        self.assertEqual(compare_profiles(self.profile(), candidate)["compatibility"]["status"], "comparable")
+        self.assertIsInstance(candidate["recorded_identity"]["recorded_build_conditions"]["metaeditor_build"], str)
+        self.assertIsInstance(self.profile()["recorded_identity"]["recorded_build_conditions"]["metaeditor_build"], int)
+
     def test_hash_mismatch_and_explicit_evidence(self):
         conditions = json.loads((FIXTURES/"native-functions-conditions.json").read_text())
         conditions["profile_sha256"] = "0"*64

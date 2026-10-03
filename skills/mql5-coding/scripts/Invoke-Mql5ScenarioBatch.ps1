@@ -31,6 +31,20 @@ function Save-BatchCheckpoint {
     # Separate progress from the final create-new result; interruption cannot leave a false final completion.
     [IO.File]::WriteAllText((Join-Path $output 'progress.json'),($result | ConvertTo-Json -Depth 12),(New-Object Text.UTF8Encoding($false)))
 }
+function Get-BatchAnalysisRecord($Process,[string]$Operation,[string]$Root) {
+    $record=[ordered]@{operation=$Operation;exit_code=$Process.exit_code;runner_status=$Process.status;status='failed';recorded_status=$null;result_path=$null;output=$Root;reason='analysis_process_failed'}
+    if ($Process.status -ne 'completed' -or -not $Process.cleanup_verified) {return $record}
+    try {
+        $path=Join-Path $Root 'result.json'
+        $parsed=Read-Mql5ReleaseJson $path
+        Assert-ToolkitVersion $parsed
+        if ($parsed.operation -cne ('report '+$Operation) -or $parsed.status -cnotin @('completed','failed') -or
+            ($parsed.exit_code -isnot [int] -and $parsed.exit_code -isnot [long]) -or $parsed.exit_code -ne $Process.exit_code) {throw 'Invalid analysis result.'}
+        $record.recorded_status=$parsed.status;$record.result_path=$path
+        $record.status=$parsed.status;$record.reason=if ($parsed.status -eq 'completed') {$null} else {'analysis_failed'}
+    } catch {$record.reason='analysis_result_missing_or_invalid'}
+    return $record
+}
 try {
     $output=New-ToolkitOutput $OutputDirectory
     if ($ManifestPath -notmatch '^[A-Za-z]:[\\/]') {throw 'ManifestPath must be absolute.'}
@@ -72,13 +86,13 @@ try {
         if ($item.expectations) {
             $checkCode='import sys; sys.path.insert(0,sys.argv[1]); from toolkit_common import load_expectations; from toolkit_reports import CORE_CONDITIONS; e=load_expectations(__import__("pathlib").Path(sys.argv[2])); bad=(set(e.get("required_conditions",[]))-set(CORE_CONDITIONS)-{"terminal_image_sha256","terminal_build","history_quality","bars","ticks","symbols"}) | (set(e.get("required_evidence",[]))-{ "linked_run","source_hash","expert_hash","preset_hash"})'+"`n"+'if bad: raise ValueError("Unsupported report evidence requirement")'+"`n"+'print("EXPECTATIONS_VALID")'
             $check=Invoke-ToolkitProcess $python @('-B','-s','-c',$checkCode,$PSScriptRoot,$item.expectations) $output 30
-            if (-not $check.cleanup_verified -or $check.exit_code -ne 0 -or $check.stdout.Trim() -cne 'EXPECTATIONS_VALID') {throw 'Invalid comparison expectations or Python tooling.'}
+            if (-not $check.cleanup_verified -or $check.status -ne 'completed' -or $check.exit_code -ne 0 -or $check.stdout.Trim() -cne 'EXPECTATIONS_VALID') {throw 'Invalid comparison expectations or Python tooling.'}
         }
         if ($item.baseline_report) {
             $arguments=@('-B','-s',(Join-Path $PSScriptRoot 'mql5_toolkit.py'),'report','read','--input',$item.baseline_report,'--output',(Join-Path $output ('validate-baseline-'+$item.id)))
             if ($item.baseline_result) {$arguments+=@('--tester-result',$item.baseline_result)}
             $check=Invoke-ToolkitProcess $python $arguments $output 60
-            if (-not $check.cleanup_verified -or $check.exit_code -ne 0) {throw 'Baseline report or Python tooling failed validation.'}
+            if (-not $check.cleanup_verified -or $check.status -ne 'completed' -or $check.exit_code -ne 0) {throw 'Baseline report or Python tooling failed validation.'}
             $parsed=Read-Mql5ReleaseJson (Join-Path $output ('validate-baseline-'+$item.id+'\result.json'))
             if ($parsed.evidence_linkage.status -eq 'mismatch') {throw 'Baseline report linkage mismatch.'}
         }
@@ -134,8 +148,8 @@ try {
                 if ($created -eq $true -and (Get-ToolkitValue $proc 'job_empty_verified') -ne $true) {$current.cleanup_verified=$false}
                 if ($nativeStatus -eq 'cleanup_failed' -or @(Get-ToolkitValue (Get-ToolkitValue $run 'cleanup') 'errors' @()).Count) {$current.cleanup_verified=$false}
             }
-            $current.status=if ($tested.status -eq 'timed_out' -or $tested.exit_code -eq 3) {'timed_out'} elseif ($tested.exit_code -eq 4) {'blocked'} elseif ($tested.exit_code -eq 0 -and $nativeStatus -in @('engine_smoke_passed','application_marker_passed')) {'completed'} else {'failed'}
-            if (-not $run) {$current.reason='missing_tester_result'}
+            $current.status=if ($tested.status -eq 'timed_out' -or $tested.exit_code -eq 3) {'timed_out'} elseif ($tested.status -ne 'completed') {'failed'} elseif ($tested.exit_code -eq 4) {'blocked'} elseif ($tested.exit_code -eq 0 -and $nativeStatus -in @('engine_smoke_passed','application_marker_passed')) {'completed'} else {'failed'}
+            if (-not $run) {$current.reason='missing_tester_result'} elseif ($tested.status -ne 'completed') {$current.reason='tester_process_'+$tested.status}
             if (-not $current.cleanup_verified) {$abort=$true;$current.reason='cleanup_uncertain'}
             # Parse every retained report, including reports from failed/timed-out tester runs.
             $reportPaths=@(Get-ChildItem -LiteralPath $scenarioRoot -Recurse -File | Where-Object {$_.Extension -in @('.htm','.html')} | ForEach-Object {$_.FullName})
@@ -146,7 +160,7 @@ try {
                 $analysisArgs=@('-B','-s',(Join-Path $PSScriptRoot 'mql5_toolkit.py'),'report','read','--input',$reportPath,'--output',$analysisRoot)
                 if ($run) {$analysisArgs+=@('--tester-result',$runPath)}
                 $analyzed=Invoke-ToolkitProcess $python $analysisArgs $scenarioRoot 60
-                $current.analysis+=@(@{operation='read';exit_code=$analyzed.exit_code;runner_status=$analyzed.status;output=$analysisRoot})
+                $current.analysis+=@(Get-BatchAnalysisRecord $analyzed 'read' $analysisRoot)
                 if (-not $analyzed.cleanup_verified) {$abort=$true;$current.cleanup_verified=$false;$current.reason='analysis_cleanup_uncertain';$current.analysis_skipped_reason='owned_process_cleanup_uncertain';break}
                 if ($item.baseline_report) {
                     $compareRoot=Join-Path $scenarioRoot ('comparison-'+[guid]::NewGuid().ToString('N'))
@@ -155,7 +169,7 @@ try {
                     if ($item.baseline_result) {$compareArgs+=@('--baseline-result',$item.baseline_result)}
                     if ($item.expectations) {$compareArgs+=@('--expectations',$item.expectations)}
                     $compared=Invoke-ToolkitProcess $python $compareArgs $scenarioRoot 60
-                    $current.analysis+=@(@{operation='compare';exit_code=$compared.exit_code;runner_status=$compared.status;output=$compareRoot})
+                    $current.analysis+=@(Get-BatchAnalysisRecord $compared 'compare' $compareRoot)
                     if (-not $compared.cleanup_verified) {$abort=$true;$current.cleanup_verified=$false;$current.reason='analysis_cleanup_uncertain';$current.analysis_skipped_reason='owned_process_cleanup_uncertain';break}
                 }
             }
@@ -163,7 +177,9 @@ try {
         }
         $result.status=if ($abort) {'aborted'} elseif (@($result.scenarios | Where-Object {$_.status -ne 'completed'}).Count) {'completed_with_failures'} else {'completed'}
     }
-    $result.exit_code=if ($result.status -in @('validated','completed') -and -not @($result.scenarios | Where-Object {@($_.analysis | Where-Object {$_.exit_code -ne 0}).Count}).Count) {0} elseif ($abort) {2} else {1}
+    $analysisFailures=@($result.scenarios | Where-Object {@($_.analysis | Where-Object {$_.exit_code -ne 0 -or $_.status -ne 'completed'}).Count}).Count
+    if ($result.status -eq 'completed' -and $analysisFailures) {$result.status='completed_with_failures'}
+    $result.exit_code=if ($result.status -in @('validated','completed') -and -not $analysisFailures) {0} elseif ($abort) {2} else {1}
 } catch {
     if ($null -ne $current -and $current.status -eq 'running') {$current.status='failed';$current.reason='wrapper_failure'}
     $detail=Protect-JournalLine -Line $_.Exception.Message

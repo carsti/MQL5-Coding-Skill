@@ -25,6 +25,54 @@ PAIRS = {"Profit Trades (% of total)": "winning_trades", "Loss Trades (% of tota
          "Short Trades (won %)": "short_trades", "Long Trades (won %)": "long_trades"}
 
 
+def recorded_object(value, name: str) -> dict:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise InputError("Tester-result " + name + " must be an object or null")
+    return value
+
+
+def recorded_hash(value, name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", value):
+        raise InputError("Invalid tester-result " + name + " SHA-256")
+    return value.lower()
+
+
+def recorded_settings(run: dict) -> tuple[dict, dict, dict, dict]:
+    artifacts = recorded_object(run.get("artifacts"), "artifacts")
+    report = recorded_object(artifacts.get("report"), "artifacts.report")
+    preset = recorded_object(artifacts.get("preset"), "artifacts.preset")
+    settings = recorded_object(run.get("inputs"), "inputs")
+    receipt = recorded_object(settings.get("compilation_receipt"), "inputs.compilation_receipt")
+    binding = recorded_object(run.get("binding"), "binding")
+    image = recorded_object(binding.get("terminal_image"), "binding.terminal_image")
+    hashes = {
+        "expert_sha256": recorded_hash(settings.get("expected_expert_sha256"), "EX5"),
+        "source_sha256": recorded_hash(receipt.get("source_sha256"), "source"),
+        "preset_sha256": recorded_hash(preset.get("sha256"), "preset"),
+    }
+    report_hash = recorded_hash(report.get("sha256"), "report")
+    image_hash = recorded_hash(image.get("sha256"), "terminal")
+    length = report.get("byte_length")
+    if length is not None and (type(length) is not int or length < 0):
+        raise InputError("Tester-result report byte_length must be a nonnegative integer")
+    for key in ("model", "execution_mode", "leverage"):
+        value = settings.get(key)
+        if value is not None and (type(value) is not int or value < 0):
+            raise InputError("Tester-result " + key + " must be a nonnegative integer")
+    for key in ("symbol", "period", "currency", "from_date", "to_date"):
+        value = settings.get(key)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise InputError("Tester-result " + key + " must be a nonempty string")
+    deposit = settings.get("deposit")
+    if deposit is not None and (type(deposit) not in {int, str} or number(str(deposit))["state"] != "finite"):
+        raise InputError("Tester-result deposit must be finite")
+    return settings, report, hashes, {"report_hash": report_hash, "image_hash": image_hash}
+
+
 class Tables(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -181,15 +229,14 @@ def native_report(path: Path, result_path: Path | None = None) -> dict:
         run = read_json(result_path)
         if type(run.get("schema_version")) is not int or run["schema_version"] != 2 or not isinstance(run.get("status"), str):
             raise InputError("Unsupported tester-result schema")
+        settings, recorded_report, recorded_artifacts, verified_fields = recorded_settings(run)
         recorded_run = {"status": run["status"], "run_id": run.get("run_id"), "source": source(result_path),
                         "successful_status_recorded": run["status"] in SUCCESS, "verified_execution": False}
-        recorded_report = run.get("artifacts", {}).get("report") or {}
-        if recorded_report.get("sha256") != digest(data) or recorded_report.get("byte_length") != len(data):
+        if verified_fields["report_hash"] != digest(data) or recorded_report.get("byte_length") != len(data):
             linkage = {"status": "mismatch", "recorded_report": recorded_report}
             issues.append({"code": "report_hash_or_length_mismatch", "message": "Run settings are not associated with this report"})
         else:
             linkage = {"status": "hash_verified", "recorded_report": recorded_report}
-            settings = run.get("inputs") or {}
             conditions["model"] = str(settings["model"]) if type(settings.get("model")) is int else None
             conditions["execution_mode"] = str(settings["execution_mode"]) if type(settings.get("execution_mode")) is int else None
             # Requested dates are retained independently; never replace reported coverage.
@@ -198,13 +245,11 @@ def native_report(path: Path, result_path: Path | None = None) -> dict:
                 requested = settings.get(key)
                 if requested is None or conditions[key] is None:
                     continue
-                requested = str(Decimal(str(requested)).normalize()) if key == "deposit" else str(requested)
+                requested = str(Decimal(number(str(requested))["value"]).normalize()) if key == "deposit" else str(requested)
                 if requested != conditions[key]:
                     issues.append({"code": "requested_reported_condition_difference", "condition": key, "requested": requested, "reported": conditions[key]})
-            artifacts = {"expert_sha256": settings.get("expected_expert_sha256"),
-                         "source_sha256": (settings.get("compilation_receipt") or {}).get("source_sha256"),
-                         "preset_sha256": (run.get("artifacts", {}).get("preset") or {}).get("sha256")}
-            terminal["image_sha256"] = (run.get("binding", {}).get("terminal_image") or {}).get("sha256")
+            artifacts = recorded_artifacts
+            terminal["image_sha256"] = verified_fields["image_hash"]
     return {"schema_version": 1, "operation": "report read", "status": "completed", "sources": [source(path, data)],
             "parsing": {"status": "success", "format": "mt5-english-settings-results-v1", "encoding": encoding},
             "evidence_linkage": linkage, "recorded_run": recorded_run, "conditions": conditions, "configuration_evidence": records,
