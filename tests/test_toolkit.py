@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import errno
 import json
 import os
 import subprocess
@@ -124,6 +125,52 @@ class ToolkitTests(unittest.TestCase):
         for old, new in [("Settings</b>", "Einstellungen</b>"), ("</table>", ""), ("Gross Loss:", "Gross Profit:")]:
             with self.assertRaises(InputError):
                 native_report(self.mutate_report(old, new))
+
+    def test_report_rejects_crossed_and_unmatched_table_elements(self):
+        original = (FIXTURES/"mixed-trades.htm").read_text(encoding="utf-16")
+        table_end = original.index("</table>")
+        for element in ("</td>", "</tr>"):
+            start = original.rfind(element, 0, table_end)
+            crossed = original[:start] + "</table>" + original[start:table_end] + original[table_end+8:]
+            path = self.root/("crossed-" + element[2:-1] + ".htm")
+            path.write_text(crossed, encoding="utf-8")
+            with self.subTest(element=element), self.assertRaisesRegex(InputError, "Malformed table"):
+                native_report(path)
+        for old, new in (("</td>", "</th>"), ("</td>", "</td></td>"), ("</tr>", "</tr></tr>")):
+            path = self.root/"unmatched-table.htm"
+            path.write_text(original.replace(old, new, 1), encoding="utf-8")
+            with self.subTest(replacement=new), self.assertRaisesRegex(InputError, "Malformed table"):
+                native_report(path)
+
+    def test_deposit_conditions_preserve_exact_decimal_identity(self):
+        original = (FIXTURES/"mixed-trades.htm").read_text(encoding="utf-16")
+        template = json.loads((FIXTURES/"mixed-trades-result.json").read_text())
+        amounts = ["100000.00000000000000000000000001", "100000.00000000000000000000000002"]
+        reports = []
+        for index, amount in enumerate(amounts):
+            path = self.root/("deposit-" + str(index) + ".htm")
+            text = original.replace("<b>100 000.00</b>", "<b>" + amount + "</b>")
+            self.assertNotEqual(text, original)
+            path.write_text(text, encoding="utf-8")
+            linked = copy.deepcopy(template)
+            linked["inputs"]["deposit"] = amount
+            linked["artifacts"]["report"].update(sha256=digest(path.read_bytes()), byte_length=path.stat().st_size)
+            run_path = self.root/("deposit-" + str(index) + ".json")
+            run_path.write_text(json.dumps(linked), encoding="utf-8")
+            report = native_report(path, run_path)
+            self.assertEqual(report["conditions"]["deposit"], amount)
+            self.assertFalse(report["issues"])
+            reports.append(report)
+        self.assertEqual(compare_reports(*reports)["compatibility"]["status"], "incompatible")
+        linked["inputs"]["deposit"] = amounts[0]
+        run_path.write_text(json.dumps(linked), encoding="utf-8")
+        conflicted = native_report(path, run_path)
+        self.assertTrue(any(i["code"] == "requested_reported_condition_difference" and i["condition"] == "deposit" for i in conflicted["issues"]))
+        equivalent = copy.deepcopy(template)
+        equivalent["inputs"]["deposit"] = "100000.0000"
+        run_path.write_text(json.dumps(equivalent), encoding="utf-8")
+        equivalent_report = native_report(FIXTURES/"mixed-trades.htm", run_path)
+        self.assertEqual(compare_reports(self.report(), equivalent_report)["compatibility"]["status"], "comparable")
 
     def test_linkage_does_not_invent_success(self):
         path = self.mutate_report("120.86", "119.86")
@@ -377,6 +424,29 @@ class ToolkitTests(unittest.TestCase):
         bad.pop("coverage")
         with self.assertRaises(InputError):
             compare_snapshots(valid, bad)
+
+    def test_unreadable_subtrees_leave_consumer_coverage_uncertain(self):
+        project = self.root/"scan-project"
+        project.mkdir()
+        entry = project/"Main.mq5"
+        entry.write_text('void OnTick() {}', encoding="utf-8")
+        hidden = project/"unreadable"
+        failure = PermissionError(errno.EACCES, "Controlled scan failure", str(hidden))
+
+        def interrupted_walk(root, *, followlinks=False, onerror=None):
+            if onerror is not None:
+                onerror(failure)
+            yield str(root), [], ["Main.mq5"]
+
+        with patch("toolkit_includes.os.walk", interrupted_walk):
+            snapshot = inventory(project, [], [])
+        self.assertEqual(snapshot["coverage"], "uncertain")
+        self.assertEqual(snapshot["issues"], [{"code": "directory_scan_failed", "path": str(hidden), "errno": errno.EACCES}])
+        self.assertEqual(snapshot["entrypoints"], [str(entry)])
+        entry.write_text('void OnTick() { Print("changed"); }', encoding="utf-8")
+        compared = compare_snapshots(snapshot, inventory(project, [], []))
+        self.assertEqual(compared["possible_affected_entrypoints"], [str(entry)])
+        self.assertTrue(compared["differences"][0]["consumer_coverage_unknown"])
 
     def test_nested_quoted_directory_and_reference_uncertainty(self):
         root, external = self.project()

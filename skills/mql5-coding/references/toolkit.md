@@ -29,7 +29,7 @@ The Python CLI writes UTF-8 to stdout and stderr, including redirected pipes. Un
 
 ## Reports and comparisons
 
-Supported input is the English native MT5 HTML Settings/Results table layout covered by repository trading and no-trade fixtures, encoded as UTF-16LE with BOM or UTF-8. Nested/malformed tables, ambiguous duplicate statistics, and other layouts/languages are rejected. Individual absent fields remain missing. Do not use a no-trade fixture alone to validate trading statistics. Source hashes identify exact analyzed bytes, including encoding.
+Supported input is the English native MT5 HTML Settings/Results table layout covered by repository trading and no-trade fixtures, encoded as UTF-16LE with BOM or UTF-8. Nested/malformed tables, ambiguous duplicate statistics, and other layouts/languages are rejected. Table, row, and cell elements must close in their nesting order; unmatched or mismatched closures are invalid input. Individual absent fields remain missing. Do not use a no-trade fixture alone to validate trading statistics. Source hashes identify exact analyzed bytes, including encoding.
 
 Native labels, values, units, table/row/cell locations, input rows, reported dates, and available terminal-build headers remain in the JSON. Balance and equity drawdowns, amounts and percentages, trades and deals are separate. Native statistics are extracted rather than recalculated; for example a profitable-only native report can record profit factor `0.00`. This value is preserved.
 
@@ -38,6 +38,8 @@ An optional existing tester result uses schema 2. Its recorded report hash and l
 Malformed nested records, invalid hash strings, and nonfinite recorded deposits are invalid input. Missing optional records remain evidence gaps. SHA-256 hex case is normalized for matching while the recorded report evidence is preserved.
 
 Required comparison conditions are symbol, period, reported dates, model, deposit, currency, leverage, execution mode, and effective input rows. A known difference is `incompatible`; missing conditions are `insufficient_evidence`; matching conditions are `comparable`. Report/run conflicts are gaps. Artifact identity changes do not make code-revision comparisons incompatible. Terminal and data-quality information is retained separately and can be explicitly required.
+
+Deposit conditions use an exact decimal identity: trailing fractional zeros and equivalent zero signs are removed without rounding input digits. Distinct accepted finite amounts cannot become equal through the arithmetic context. The original deposit text remains in the configuration evidence.
 
 Copy [the expectation template](../assets/comparison-expectations.template.json) into the project and replace its example bounds with independently specified requirements. Schema 1 has a nonempty `metrics` array. Each item has `metric`, `target` (`candidate`, `difference`, or `percentage_difference`), and one or both decimal-string `minimum`/`maximum`. Unknown fields, nonfinite bounds, and duplicate JSON keys are invalid. Percent difference is `(candidate-baseline)/abs(baseline)*100`; zero baseline makes it undefined while signed/absolute differences remain available. Missing metrics produce `not_evaluable`. Results are `pass`, `fail`, `not_evaluable`, or `not_requested`; lower profit alone is only an observed difference.
 
@@ -52,6 +54,8 @@ The snapshot records project source hashes, reachable external sources, declared
 Profile mode fingerprints the selected profile before calling the existing validator and checks it after validation and inventory. A changed profile stops the operation as invalid input. These boundary checks do not prove an atomic snapshot across concurrent changes.
 
 When a shared source is read for multiple entrypoints, its consumed hash must remain the same. A changed hash stops inventory as invalid input, preventing declarations from different source versions from sharing one recorded fingerprint. Retry after source edits finish. This check does not establish an atomic snapshot of the whole project.
+
+Directory enumeration failures retain their path and operating-system error number as `directory_scan_failed` issues. Scanned files remain available, but coverage is `uncertain`; include comparisons preserve unknown consumer coverage when either inventory encountered a scan failure.
 
 All ambiguous literal candidates are inventoried, including candidates in multiple standard roots and their transitive includes. They retain uncertain resolution and possible consumers. Comparisons reject malformed file identities, consumer arrays, and missing coverage rather than inventing affected entrypoints.
 

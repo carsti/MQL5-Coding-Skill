@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import re
-from decimal import Decimal
 from html.parser import HTMLParser
 from pathlib import Path
 
-from toolkit_common import InputError, compatibility, differences, digest, evaluate, number, read_json, source
+from toolkit_common import InputError, canonical_decimal, compatibility, differences, digest, evaluate, number, read_json, source
 
 CORE_CONDITIONS = ["symbol", "period", "reported_dates", "model", "deposit", "currency", "leverage", "execution_mode", "effective_inputs"]
 SUCCESS = {"engine_smoke_passed", "application_marker_passed"}
@@ -77,6 +76,7 @@ class Tables(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.rows, self.row, self.cell = [], None, None
+        self.cell_tag = None
         self.table = 0
         self.depth = 0
         self.row_index = 0
@@ -97,30 +97,38 @@ class Tables(HTMLParser):
                 self.bad = True
             self.table += 1
             self.row_index = 0
-        if tag == "tr" and self.depth:
+        if tag == "tr":
+            if not self.depth or self.row is not None:
+                self.bad = True
+            if self.depth:
+                self.row_index += 1
+                self.row = {"table": self.table, "row": self.row_index, "source_line": self.getpos()[0], "cells": []}
+        if tag in {"td", "th"}:
+            if self.row is None or self.cell is not None:
+                self.bad = True
             if self.row is not None:
-                self.bad = True
-            self.row_index += 1
-            self.row = {"table": self.table, "row": self.row_index, "source_line": self.getpos()[0], "cells": []}
-        if tag in {"td", "th"} and self.row is not None:
-            if self.cell is not None:
-                self.bad = True
-            self.cell = []
+                self.cell, self.cell_tag = [], tag
         if tag == "br" and self.cell is not None:
             self.cell.append("\n")
 
     def handle_endtag(self, tag):
         if tag == "title":
             self.in_title = False
-        if tag in {"td", "th"} and self.cell is not None:
-            self.row["cells"].append("".join(self.cell).strip())
-            self.cell = None
-        if tag == "tr" and self.row is not None:
-            if self.cell is not None:
+        if tag in {"td", "th"}:
+            if self.cell is None or self.row is None or tag != self.cell_tag:
                 self.bad = True
-            self.rows.append(self.row)
-            self.row = None
+            if self.cell is not None and self.row is not None:
+                self.row["cells"].append("".join(self.cell).strip())
+            self.cell, self.cell_tag = None, None
+        if tag == "tr":
+            if self.row is None or self.cell is not None:
+                self.bad = True
+            if self.row is not None:
+                self.rows.append(self.row)
+            self.row, self.cell, self.cell_tag = None, None, None
         if tag == "table":
+            if self.row is not None or self.cell is not None:
+                self.bad = True
             self.depth -= 1
             if self.depth < 0:
                 self.bad = True
@@ -214,7 +222,7 @@ def native_report(path: Path, result_path: Path | None = None) -> dict:
     leverage = re.fullmatch(r"1:(\d+)", raw("Leverage") or "")
     conditions = {"symbol": raw("Symbol") or None, "period": period.group(1) if period else None,
                   "reported_dates": [period.group(2), period.group(3)] if period else None,
-                  "model": None, "deposit": str(Decimal(deposit["value"]).normalize()) if deposit["state"] == "finite" else None,
+                  "model": None, "deposit": canonical_decimal(deposit["value"]) if deposit["state"] == "finite" else None,
                   "currency": currency, "leverage": leverage.group(1) if leverage else None,
                   "execution_mode": None, "effective_inputs": inputs if "Inputs" in records else None}
     linkage = {"status": "not_supplied"}
@@ -246,7 +254,7 @@ def native_report(path: Path, result_path: Path | None = None) -> dict:
                 requested = settings.get(key)
                 if requested is None or conditions[key] is None:
                     continue
-                requested = str(Decimal(number(str(requested), "currency")["value"]).normalize()) if key == "deposit" else str(requested)
+                requested = canonical_decimal(number(str(requested), "currency")["value"]) if key == "deposit" else str(requested)
                 if requested != conditions[key]:
                     issues.append({"code": "requested_reported_condition_difference", "condition": key, "requested": requested, "reported": conditions[key]})
             artifacts = recorded_artifacts

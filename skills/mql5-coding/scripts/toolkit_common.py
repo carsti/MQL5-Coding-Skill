@@ -80,6 +80,16 @@ def decimal_text(value: Decimal) -> str:
     return format(value, "f")
 
 
+def canonical_decimal(value: str) -> str:
+    # Formatting and trimming preserve every input digit; Decimal.normalize()
+    # would first round to the caller's active arithmetic context.
+    decimal = Decimal(value)
+    if not decimal:
+        return "0"
+    text = decimal_text(decimal)
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
 def number(raw: str | None, unit: str | None = None) -> dict:
     if raw is None:
         return {"state": "missing", "value": None, "unit": unit, "raw": None}

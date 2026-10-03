@@ -106,7 +106,11 @@ def source_text(data: bytes) -> str:
 def inventory(root: Path, entrypoints: list[Path], include_roots: list[Path], profile: Path | None = None, *, profile_data: bytes | None = None) -> dict:
     known, all_sources, issues = [], [], []
     inspected = 0
-    for folder, dirs, files in os.walk(root, followlinks=False):
+
+    def scan_failed(error: OSError):
+        issues.append({"code": "directory_scan_failed", "path": str(error.filename or root), "errno": error.errno})
+
+    for folder, dirs, files in os.walk(root, followlinks=False, onerror=scan_failed):
         kept = []
         for name in dirs:
             selected = Path(folder) / name
