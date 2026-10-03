@@ -25,6 +25,22 @@ class McpContractTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 validate_mcp_contract(self.contract, metadata)
 
+    def test_optional_batch_contract_preserves_older_servers_and_rejects_invalid_bounds(self) -> None:
+        older = copy.deepcopy(self.contract)
+        del older["optional_tools"]
+        validate_mcp_contract(older, self.metadata)
+        for mutation in ["name", "empty-output", "boolean-bound", "inverted-bound"]:
+            contract = copy.deepcopy(self.contract)
+            batch = contract["optional_tools"]["mql5_chm_lookup_identifiers"]
+            if mutation == "name":
+                contract["optional_tools"] = {"unknown_tool": batch}
+            elif mutation == "empty-output":
+                batch["outputs"] = {}
+            else:
+                batch["array_bounds"]["identifiers"]["minimum"] = True if mutation == "boolean-bound" else 17
+            with self.assertRaises(AssertionError):
+                validate_mcp_contract(contract, self.metadata)
+
     def test_removed_tool_or_missing_commitments_is_rejected(self) -> None:
         for mutation in ["removed-tool", "empty-output", "unknown-version", "boolean-version"]:
             contract = copy.deepcopy(self.contract)

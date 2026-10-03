@@ -171,6 +171,8 @@ def main() -> int:
 def validate_mcp_contract(contract: dict, metadata: dict) -> None:
     if type(contract.get("schema_version")) is not int or contract["schema_version"] != 1:
         fail("Unsupported MCP consumer contract schema.")
+    if set(contract) - {"schema_version", "server_name", "tools", "optional_tools"}:
+        fail("Unknown MCP consumer contract fields.")
     declared = metadata["dependencies"]["tools"]
     if len(declared) != 1 or declared[0]["type"] != "mcp" or contract.get("server_name") != declared[0]["value"]:
         fail("MCP contract server_name does not match the skill dependency.")
@@ -179,9 +181,18 @@ def validate_mcp_contract(contract: dict, metadata: dict) -> None:
         "mql5_chm_status", "mql5_chm_search", "mql5_chm_read", "mql5_chm_read_image"
     }:
         fail("MCP contract must cover the four required documentation tools.")
-    for name, tool in tools.items():
+    optional = contract.get("optional_tools", {})
+    if not isinstance(optional, dict) or set(optional) - {"mql5_chm_lookup_identifiers"}:
+        fail("Unsupported optional documentation tools.")
+    for name, tool in {**tools, **optional}.items():
         if not isinstance(tool, dict) or not isinstance(tool.get("required_arguments"), list) or not tool.get("outputs"):
             fail(f"Invalid MCP tool contract: {name}")
+        arrays = tool.get("array_bounds", {})
+        if not isinstance(arrays, dict):
+            fail(f"Invalid MCP array bounds mapping: {name}")
+        for field, bound in arrays.items():
+            if not isinstance(bound, dict) or set(bound) != {"minimum", "maximum"} or any(type(bound[key]) is not int for key in bound) or not 0 <= bound["minimum"] <= bound["maximum"]:
+                fail(f"Invalid MCP array bounds: {name}.{field}")
 
 
 if __name__ == "__main__":

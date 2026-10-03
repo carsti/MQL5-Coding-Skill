@@ -30,6 +30,10 @@ Before asserting or implementing an MQL5 API, language, event, error, trade-retc
 
 Never hard-code a previously observed topic ID or revision as current truth.
 
+When several API or constant names need lookup and this chat exposes `mql5_chm_lookup_identifiers`, use it for up to 16 ASCII names per request, with `source: "mql5"` and a per-name `limit` from 1 to 3 (default 1). It preserves order and duplicates, disables expansion, and returns a separate `exact`, `non_exact`, or `none` search status and citations for each name. These statuses describe search matches; apply the same complete-token and authoritative-passage checks above before making each claim. Use `mql5_chm_read` for the selected result and section. Batch output contains metadata, not documentation passages.
+
+The batch tool is optional. If an older installed server or the current chat does not expose it, use separate `mql5_chm_search` calls. A batch reduces request count and repeated output; it does not make the underlying synchronous searches parallel or establish a universal latency improvement.
+
 The packaged [MCP consumer contract](references/mcp-contract.json) records the tools, supported input ranges, and response/citation fields this skill needs. The repositories test this contract against the actual MCP server. A compatibility pass verifies those interfaces and identifier checks; continue verifying each MQL5 claim in the installed CHM as above.
 
 If the installed CHM does not support a required claim, state exactly:

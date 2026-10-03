@@ -15,10 +15,22 @@
       }
     },
     "mql5_chm_search": {
-      "required_arguments": ["query"],
-      "bounds": {"limit": {"minimum": 1, "maximum": 8}},
+      "required_arguments": [
+        "query"
+      ],
+      "bounds": {
+        "limit": {
+          "minimum": 1,
+          "maximum": 8
+        }
+      },
       "enums": {
-        "source": ["all", "mql5", "mql5book", "neuronetworksbook"]
+        "source": [
+          "all",
+          "mql5",
+          "mql5book",
+          "neuronetworksbook"
+        ]
       },
       "outputs": {
         "count": "integer",
@@ -38,8 +50,15 @@
       }
     },
     "mql5_chm_read": {
-      "required_arguments": ["topic_id"],
-      "bounds": {"max_chars": {"minimum": 500, "maximum": 8000}},
+      "required_arguments": [
+        "topic_id"
+      ],
+      "bounds": {
+        "max_chars": {
+          "minimum": 500,
+          "maximum": 8000
+        }
+      },
       "outputs": {
         "topic_id": "topic_id",
         "section_id": "nullable_section_id",
@@ -58,7 +77,9 @@
       }
     },
     "mql5_chm_read_image": {
-      "required_arguments": ["asset_id"],
+      "required_arguments": [
+        "asset_id"
+      ],
       "outputs": {
         "asset_id": "asset_id",
         "sha256": "sha256",
@@ -67,6 +88,54 @@
         "corpus_revision": "sha256",
         "index_revision": "sha256",
         "primary_topic_citation.topic_id": "topic_id"
+      }
+    }
+  },
+  "optional_tools": {
+    "mql5_chm_lookup_identifiers": {
+      "required_arguments": [
+        "identifiers"
+      ],
+      "bounds": {
+        "limit": {
+          "minimum": 1,
+          "maximum": 3
+        }
+      },
+      "array_bounds": {
+        "identifiers": {
+          "minimum": 1,
+          "maximum": 16
+        }
+      },
+      "enums": {
+        "source": [
+          "all",
+          "mql5",
+          "mql5book",
+          "neuronetworksbook"
+        ]
+      },
+      "outputs": {
+        "count": "integer",
+        "result_count": "integer",
+        "corpus_revision": "sha256",
+        "index_sha256": "sha256",
+        "lookups[].identifier": "string",
+        "lookups[].match_status": "string",
+        "lookups[].count": "integer",
+        "lookups[].online_check.official_search_query": "nullable_string",
+        "lookups[].results[].topic_id": "topic_id",
+        "lookups[].results[].section_id": "nullable_section_id",
+        "lookups[].results[].title": "string",
+        "lookups[].results[].signature": "string",
+        "lookups[].results[].match_kind": "string",
+        "lookups[].results[].matched_terms": "array",
+        "lookups[].results[].citation.topic_id": "topic_id",
+        "lookups[].results[].citation.section_id": "nullable_section_id",
+        "lookups[].results[].citation.source_revision": "sha256",
+        "lookups[].results[].citation.corpus_revision": "sha256",
+        "lookups[].results[].citation.index_revision": "sha256"
       }
     }
   }
