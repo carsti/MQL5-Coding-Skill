@@ -51,8 +51,8 @@ def object_keys(pairs: list) -> dict:
     return result
 
 
-def read_json(path: Path, limit: int = 32 * 1024 * 1024) -> dict:
-    data = path.read_bytes()
+def read_json(path: Path, limit: int = 32 * 1024 * 1024, *, data: bytes | None = None) -> dict:
+    data = path.read_bytes() if data is None else data
     if len(data) > limit:
         raise InputError("JSON exceeds the supported size limit")
     try:
@@ -85,6 +85,9 @@ def number(raw: str | None, unit: str | None = None) -> dict:
         return {"state": "missing", "value": None, "unit": unit, "raw": None}
     text = raw.strip().replace("\u2212", "-").replace("\u00a0", " ").replace("\u202f", " ")
     if text.endswith("%"):
+        if unit is not None and unit != "percent":
+            return {"state": "unparseable", "value": None, "unit": unit, "raw": raw,
+                    "reported_unit": "percent", "reason": "unexpected_percentage_unit"}
         unit = "percent"
         text = text[:-1].strip()
     lowered = text.lower()
@@ -123,10 +126,10 @@ def differences(baseline: dict, candidate: dict) -> dict:
     return result
 
 
-def load_expectations(path: Path | None) -> dict | None:
+def load_expectations(path: Path | None, *, data: bytes | None = None) -> dict | None:
     if path is None:
         return None
-    value = read_json(path)
+    value = read_json(path, data=data)
     fields(value, {"schema_version", "metrics"}, {"required_conditions", "require_successful_runs", "required_evidence"})
     version(value)
     for key in ("required_conditions", "required_evidence"):

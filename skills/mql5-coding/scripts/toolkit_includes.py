@@ -101,7 +101,7 @@ def source_text(data: bytes) -> str:
     return data.decode("utf-8-sig")
 
 
-def inventory(root: Path, entrypoints: list[Path], include_roots: list[Path], profile: Path | None = None) -> dict:
+def inventory(root: Path, entrypoints: list[Path], include_roots: list[Path], profile: Path | None = None, *, profile_data: bytes | None = None) -> dict:
     known, all_sources, issues = [], [], []
     inspected = 0
     for folder, dirs, files in os.walk(root, followlinks=False):
@@ -242,7 +242,7 @@ def inventory(root: Path, entrypoints: list[Path], include_roots: list[Path], pr
     unresolved = [x for x in edges if x["resolution"] != "possible"]
     coverage = "uncertain" if issues or unresolved or unselected else "selected_entrypoints_scanned"
     return {"schema_version": 1, "operation": "includes inventory", "status": "completed", "project_root": str(root),
-            "profile": source(profile) if profile else None, "include_roots": [str(p) for p in include_roots],
+            "profile": source(profile, profile_data) if profile else None, "include_roots": [str(p) for p in include_roots],
             "entrypoints": [str(p) for p in entrypoints], "known_entrypoints": sorted(known), "unselected_entrypoints": unselected,
             "files": [files[k] for k in sorted(files)], "dependencies": edges, "unresolved": unresolved, "cycles": cycles,
             "possible_consumers": {k: sorted(v) for k, v in sorted(consumers.items())}, "coverage": coverage, "issues": issues,

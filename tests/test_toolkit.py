@@ -9,12 +9,14 @@ import tempfile
 import unittest
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "skills/mql5-coding/scripts"
 sys.path.insert(0, str(SCRIPTS))
-from toolkit_common import InputError, differences, load_expectations, number
+from toolkit_common import InputError, differences, digest, load_expectations, number
 from toolkit_reports import compare_reports, native_report
 from toolkit_includes import compare_snapshots, directives, inventory
+from mql5_toolkit import execute, parser as cli_parser
 
 FIXTURES = Path(__file__).parent / "fixtures/reports"
 
@@ -74,6 +76,50 @@ class ToolkitTests(unittest.TestCase):
             report = native_report(self.mutate_report(original, replacement))
             self.assertEqual(report["metrics"][metric]["state"], state)
 
+    def test_percentage_cannot_satisfy_money_ratio_or_count_expectations(self):
+        baseline = self.report()
+        for index, (cell, metric, unit) in enumerate([("120.86", "net_profit", "USD"),
+                                                     ("1.82", "profit_factor", "ratio"),
+                                                     ("110", "deals", "count")]):
+            with self.subTest(metric=metric):
+                path = self.mutate_report(f"<b>{cell}</b>", f"<b>{cell}%</b>")
+                run = json.loads((FIXTURES/"mixed-trades-result.json").read_text())
+                run["artifacts"]["report"].update(sha256=digest(path.read_bytes()), byte_length=path.stat().st_size)
+                run_path = self.root/"candidate-run.json"
+                run_path.write_text(json.dumps(run), encoding="utf-8")
+                candidate = native_report(path, run_path)
+                self.assertEqual(candidate["evidence_linkage"]["status"], "hash_verified")
+                value = candidate["metrics"][metric]
+                self.assertEqual(value["state"], "unparseable")
+                self.assertEqual(value["raw"], cell+"%")
+                self.assertEqual(value["unit"], unit)
+                self.assertEqual(value["reported_unit"], "percent")
+                self.assertIsNone(value["value"])
+                expectations = self.expectation(metric, minimum="0")
+                comparison = compare_reports(baseline, candidate, expectations)
+                self.assertEqual(comparison["compatibility"]["status"], "comparable")
+                self.assertEqual(comparison["expectations"]["status"], "not_evaluable")
+                output = self.root/f"unit-output-{index}"
+                process = subprocess.run([sys.executable, "-B", str(SCRIPTS/"mql5_toolkit.py"), "report", "compare",
+                                          "--baseline", str(FIXTURES/"mixed-trades.htm"), "--candidate", str(path),
+                                          "--baseline-result", str(FIXTURES/"mixed-trades-result.json"),
+                                          "--candidate-result", str(run_path), "--expectations", str(self.root/"expectations.json"),
+                                          "--output", str(output)], capture_output=True)
+                self.assertEqual(process.returncode, 4)
+                self.assertEqual(json.loads((output/"result.json").read_text())["expectations"]["status"], "not_evaluable")
+                self.assertNotIn(b"Traceback", process.stderr)
+
+    def test_percentage_deposit_does_not_establish_test_conditions(self):
+        path = self.mutate_report("<b>100 000.00</b>", "<b>100 000.00%</b>")
+        run = json.loads((FIXTURES/"mixed-trades-result.json").read_text())
+        run["artifacts"]["report"].update(sha256=digest(path.read_bytes()), byte_length=path.stat().st_size)
+        run_path = self.root/"candidate-run.json"
+        run_path.write_text(json.dumps(run), encoding="utf-8")
+        report = native_report(path, run_path)
+        self.assertIsNone(report["conditions"]["deposit"])
+        self.assertEqual(report["configuration_evidence"]["Initial Deposit"]["raw"], "100 000.00%")
+        self.assertEqual(compare_reports(self.report(), report)["compatibility"]["status"], "insufficient_evidence")
+
     def test_unsupported_malformed_duplicate_layouts(self):
         for old, new in [("Settings</b>", "Einstellungen</b>"), ("</table>", ""), ("Gross Loss:", "Gross Profit:")]:
             with self.assertRaises(InputError):
@@ -131,7 +177,7 @@ class ToolkitTests(unittest.TestCase):
             ("artifacts", []), ("inputs", []), ("binding", []),
             ("artifacts.report", []), ("artifacts.preset", []),
             ("binding.terminal_image", []), ("inputs.compilation_receipt", []),
-            ("inputs.deposit", "bad"), ("inputs.deposit", "NaN"),
+            ("inputs.deposit", "bad"), ("inputs.deposit", "NaN"), ("inputs.deposit", "100000%"),
             ("inputs.expected_expert_sha256", "not-a-hash"),
             ("inputs.compilation_receipt.source_sha256", "not-a-hash"),
             ("artifacts.preset.sha256", "not-a-hash"),
@@ -169,6 +215,87 @@ class ToolkitTests(unittest.TestCase):
         (root/"RootHeader.mqh").write_text('// root\n', encoding="utf-8")
         (external/"Shared.mqh").write_text('// external\n', encoding="utf-8")
         return root, external
+
+    def test_json_sources_fingerprint_consumed_bytes(self):
+        for operation in ("report", "expectations", "snapshot"):
+            with self.subTest(operation=operation):
+                changing = self.root/(operation+".json")
+                if operation == "report":
+                    document = json.loads((FIXTURES/"mixed-trades-result.json").read_text())
+                    replacement = copy.deepcopy(document)
+                    replacement["inputs"]["deposit"] = 200000
+                    invoke = lambda: native_report(FIXTURES/"mixed-trades.htm", changing)
+                    selected_source = lambda result: result["recorded_run"]["source"]
+                elif operation == "expectations":
+                    document = {"schema_version": 1, "metrics": [{"metric": "net_profit", "target": "candidate", "minimum": "0"}]}
+                    replacement = copy.deepcopy(document)
+                    replacement["metrics"][0]["minimum"] = "9999"
+                    args = cli_parser().parse_args(["report", "compare", "--baseline", str(FIXTURES/"mixed-trades.htm"),
+                                                   "--candidate", str(FIXTURES/"mixed-trades.htm"),
+                                                   "--baseline-result", str(FIXTURES/"mixed-trades-result.json"),
+                                                   "--candidate-result", str(FIXTURES/"mixed-trades-result.json"),
+                                                   "--expectations", str(changing), "--output", str(self.root/"unused")])
+                    invoke = lambda: execute(args)
+                    selected_source = lambda result: result["expectation_source"]
+                else:
+                    root, external = self.project()
+                    document = inventory(root, [], [external])
+                    replacement = copy.deepcopy(document)
+                    replacement["coverage"] = "uncertain"
+                    candidate = self.root/"candidate-snapshot.json"
+                    candidate.write_text(json.dumps(document), encoding="utf-8")
+                    args = cli_parser().parse_args(["includes", "compare", "--baseline", str(changing),
+                                                   "--candidate", str(candidate), "--output", str(self.root/"unused")])
+                    invoke = lambda: execute(args)
+                    selected_source = lambda result: result["sources"][0]
+                original_bytes = json.dumps(document).encode("utf-8")
+                changing.write_bytes(original_bytes)
+                original_read = Path.read_bytes
+                replaced = []
+
+                def read_then_replace(path):
+                    data = original_read(path)
+                    if path == changing and not replaced:
+                        path.write_text(json.dumps(replacement), encoding="utf-8")
+                        replaced.append(True)
+                    return data
+
+                with patch.object(Path, "read_bytes", read_then_replace):
+                    result = invoke()
+                self.assertTrue(replaced)
+                if operation == "report":
+                    self.assertEqual(result["recorded_run"]["requested_settings"]["deposit"], 100000)
+                elif operation == "expectations":
+                    self.assertEqual(result["expectations"]["status"], "pass")
+                else:
+                    self.assertEqual(result["coverage"]["baseline"], document["coverage"])
+                self.assertEqual(selected_source(result)["sha256"], digest(original_bytes))
+                self.assertEqual(selected_source(result)["byte_length"], len(original_bytes))
+
+    def test_include_profile_changes_stop_inventory(self):
+        root, external = self.project()
+        profile = self.root/"profile.json"
+        validated = {"project_root": str(root), "entrypoints": [str(root/"A.mq5")], "include_path": str(external)}
+        args = cli_parser().parse_args(["includes", "inventory", "--project-profile", str(profile),
+                                       "--output", str(self.root/"unused")])
+        for stage in ("validation", "inventory"):
+            with self.subTest(stage=stage):
+                profile.write_text("{}", encoding="utf-8")
+
+                def validate_then_change(*unused):
+                    if stage == "validation":
+                        profile.write_text('{"changed":true}', encoding="utf-8")
+                    return validated
+
+                def inventory_then_change(*args, **kwargs):
+                    result = inventory(*args, **kwargs)
+                    if stage == "inventory":
+                        profile.write_text('{"changed":true}', encoding="utf-8")
+                    return result
+
+                with patch("mql5_toolkit.validated_profile", validate_then_change), patch("mql5_toolkit.inventory", inventory_then_change):
+                    with self.assertRaisesRegex(InputError, "Project profile changed"):
+                        execute(args)
 
     def test_include_main_root_rules_comments_strings_conditions(self):
         root, external = self.project()

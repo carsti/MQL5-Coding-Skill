@@ -68,8 +68,8 @@ def recorded_settings(run: dict) -> tuple[dict, dict, dict, dict]:
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise InputError("Tester-result " + key + " must be a nonempty string")
     deposit = settings.get("deposit")
-    if deposit is not None and (type(deposit) not in {int, str} or number(str(deposit))["state"] != "finite"):
-        raise InputError("Tester-result deposit must be finite")
+    if deposit is not None and (type(deposit) not in {int, str} or number(str(deposit), "currency")["state"] != "finite"):
+        raise InputError("Tester-result deposit must be a finite currency amount")
     return settings, report, hashes, {"report_hash": report_hash, "image_hash": image_hash}
 
 
@@ -210,7 +210,7 @@ def native_report(path: Path, result_path: Path | None = None) -> dict:
         metrics[key] = {**number(match.group(1) if match else raw(label), "count"), "evidence": records.get(label)}
         metrics[key + "_percent"] = {**number(match.group(2) if match else None, "percent"), "evidence": records.get(label)}
     period = re.fullmatch(r"(.+?)\s*\((\d{4}\.\d{2}\.\d{2})\s*-\s*(\d{4}\.\d{2}\.\d{2})\)", raw("Period") or "")
-    deposit = number(raw("Initial Deposit"))
+    deposit = number(raw("Initial Deposit"), currency or "currency")
     leverage = re.fullmatch(r"1:(\d+)", raw("Leverage") or "")
     conditions = {"symbol": raw("Symbol") or None, "period": period.group(1) if period else None,
                   "reported_dates": [period.group(2), period.group(3)] if period else None,
@@ -226,11 +226,12 @@ def native_report(path: Path, result_path: Path | None = None) -> dict:
                 "report_header": build_headers[0][1] if build_headers else None}
     recorded_run, artifacts = None, {}
     if result_path:
-        run = read_json(result_path)
+        run_data = result_path.read_bytes()
+        run = read_json(result_path, data=run_data)
         if type(run.get("schema_version")) is not int or run["schema_version"] != 2 or not isinstance(run.get("status"), str):
             raise InputError("Unsupported tester-result schema")
         settings, recorded_report, recorded_artifacts, verified_fields = recorded_settings(run)
-        recorded_run = {"status": run["status"], "run_id": run.get("run_id"), "source": source(result_path),
+        recorded_run = {"status": run["status"], "run_id": run.get("run_id"), "source": source(result_path, run_data),
                         "successful_status_recorded": run["status"] in SUCCESS, "verified_execution": False}
         if verified_fields["report_hash"] != digest(data) or recorded_report.get("byte_length") != len(data):
             linkage = {"status": "mismatch", "recorded_report": recorded_report}
@@ -245,7 +246,7 @@ def native_report(path: Path, result_path: Path | None = None) -> dict:
                 requested = settings.get(key)
                 if requested is None or conditions[key] is None:
                     continue
-                requested = str(Decimal(number(str(requested))["value"]).normalize()) if key == "deposit" else str(requested)
+                requested = str(Decimal(number(str(requested), "currency")["value"]).normalize()) if key == "deposit" else str(requested)
                 if requested != conditions[key]:
                     issues.append({"code": "requested_reported_condition_difference", "condition": key, "requested": requested, "reported": conditions[key]})
             artifacts = recorded_artifacts

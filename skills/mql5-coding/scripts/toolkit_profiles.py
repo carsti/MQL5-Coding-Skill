@@ -41,7 +41,8 @@ def native_profile(path: Path, conditions_path: Path | None = None) -> dict:
         raise InputError("Profiler export has no measurements")
     linkage, conditions, identity = {"status": "not_supplied"}, {"workload": None, "build_conditions": None, "source_identity": None}, {}
     if conditions_path:
-        recorded = read_json(conditions_path)
+        conditions_data = conditions_path.read_bytes()
+        recorded = read_json(conditions_path, data=conditions_data)
         fields(recorded, {"schema_version", "profile_sha256"}, {"workload", "build_conditions", "source_identity", "source_sha256", "elapsed_duration_milliseconds", "notes"})
         version(recorded)
         if not isinstance(recorded["profile_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", recorded["profile_sha256"]):
@@ -68,7 +69,7 @@ def native_profile(path: Path, conditions_path: Path | None = None) -> dict:
         if "source_identity" in recorded and (not isinstance(recorded["source_identity"], str) or not recorded["source_identity"].strip()):
             raise InputError("Compilation-unit identity must be a nonempty string")
         if recorded["profile_sha256"] == digest(data):
-            linkage = {"status": "hash_verified", "source": source(conditions_path)}
+            linkage = {"status": "hash_verified", "source": source(conditions_path, conditions_data)}
             conditions["workload"] = recorded.get("workload") or None
             build = recorded.get("build_conditions") or {}
             conditions["build_conditions"] = {**build, "metaeditor_build": str(build["metaeditor_build"])} if BUILD_KEYS <= build.keys() and all(build[k] is not None for k in BUILD_KEYS) else None
@@ -77,7 +78,7 @@ def native_profile(path: Path, conditions_path: Path | None = None) -> dict:
             identity["elapsed_duration_milliseconds"] = recorded.get("elapsed_duration_milliseconds")
             identity["recorded_build_conditions"] = build
         else:
-            linkage = {"status": "mismatch", "source": source(conditions_path)}
+            linkage = {"status": "mismatch", "source": source(conditions_path, conditions_data)}
             issues.append({"code": "profile_conditions_hash_mismatch"})
     identities = {}
     for entry in entries:

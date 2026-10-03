@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1]/"skills/mql5-coding/scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -76,6 +78,26 @@ class ProfileTests(unittest.TestCase):
             with self.assertRaises(InputError):
                 native_profile(FIXTURES/"native-functions.csv", path)
 
+    def test_elapsed_duration_requires_milliseconds(self):
+        recorded = json.loads((FIXTURES/"native-functions-conditions.json").read_text())
+        path = self.root/"conditions.json"
+        recorded["elapsed_duration_milliseconds"] = "10.25"
+        path.write_text(json.dumps(recorded), encoding="utf-8")
+        report = native_profile(FIXTURES/"native-functions.csv", path)
+        self.assertEqual(report["recorded_identity"]["elapsed_duration_milliseconds"]["unit"], "milliseconds")
+        self.assertEqual(report["recorded_identity"]["elapsed_duration_milliseconds"]["value"], "10.25")
+        recorded["elapsed_duration_milliseconds"] = "10.25%"
+        path.write_text(json.dumps(recorded), encoding="utf-8")
+        with self.assertRaises(InputError):
+            native_profile(FIXTURES/"native-functions.csv", path)
+        output = self.root/"invalid-elapsed-output"
+        process = subprocess.run([sys.executable, "-B", str(SCRIPTS/"mql5_toolkit.py"), "profile", "read",
+                                  "--input", str(FIXTURES/"native-functions.csv"), "--conditions", str(path),
+                                  "--output", str(output)], capture_output=True)
+        self.assertEqual(process.returncode, 2)
+        self.assertEqual(json.loads((output/"result.json").read_text())["status"], "failed")
+        self.assertNotIn(b"Traceback", process.stderr)
+
     def test_equivalent_integer_and_string_builds_are_comparable(self):
         recorded = json.loads((FIXTURES/"native-functions-conditions.json").read_text())
         recorded["build_conditions"]["metaeditor_build"] = str(recorded["build_conditions"]["metaeditor_build"])
@@ -97,6 +119,29 @@ class ProfileTests(unittest.TestCase):
         e = {"metrics": [{"metric": "OnStart.self_cpu_samples", "target": "candidate", "minimum": "0"}], "required_evidence": ["elapsed_duration"]}
         a = self.profile()
         self.assertEqual(compare_profiles(a, a, e)["expectations"]["status"], "not_evaluable")
+
+    def test_conditions_source_fingerprints_consumed_bytes(self):
+        original = (FIXTURES/"native-functions-conditions.json").read_bytes()
+        path = self.root/"conditions.json"
+        path.write_bytes(original)
+        replacement = json.loads(original)
+        replacement["workload"]["rounds"] = 9999
+        original_read = Path.read_bytes
+        replaced = []
+
+        def read_then_replace(selected):
+            data = original_read(selected)
+            if selected == path and not replaced:
+                selected.write_text(json.dumps(replacement), encoding="utf-8")
+                replaced.append(True)
+            return data
+
+        with patch.object(Path, "read_bytes", read_then_replace):
+            report = native_profile(FIXTURES/"native-functions.csv", path)
+        self.assertTrue(replaced)
+        self.assertEqual(report["conditions"]["workload"]["rounds"], 250)
+        self.assertEqual(report["evidence_linkage"]["source"]["sha256"], digest(original))
+        self.assertEqual(report["evidence_linkage"]["source"]["byte_length"], len(original))
 
     def test_unsupported_and_special_rows(self):
         cases = [b"function,count\nOnStart,20", "Function;Line;Total CPU;%;Self CPU;%\r\n".encode("utf-16"), "OnStart;16;1;105%;1;100%\r\n".encode("utf-16"), "OnStart;16;1.5;100%;1;100%\r\n".encode("utf-16")]
