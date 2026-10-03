@@ -1,0 +1,41 @@
+{
+  "sanitized_log_sha256": "dbb1d1dd1de9eea41f3cf21d54b33fe67318660e52bee4ee286b5f2267353242",
+  "files": [
+    {
+      "sha256": "864f4adece0cf06ebdb72108e562304d27a671f686562991032507b4ad1763fc",
+      "path": "IncludeRulesSelfTest.mq5"
+    },
+    {
+      "sha256": "062fb3807b41710454c65ef8cec4a732fbc2e3736f2274093fba5b4442dfbe07",
+      "path": "Mql5Assertions.mqh"
+    },
+    {
+      "sha256": "65574ca14086e61429fc6f08eff556d80f6aa014db6be0904b7eb5d32123d0b2",
+      "path": "Choice.mqh"
+    },
+    {
+      "sha256": "655ad2dac773f1668a72bee09e7ce5ad5d9909754313bdc4de96c02c5170ccfd",
+      "path": "Nested/Bridge.mqh"
+    },
+    {
+      "sha256": "59a13488e6c6a242cb4be8c77d8ffb8453e112bdf370d9c71013927f1f83f854",
+      "path": "Nested/Choice.mqh"
+    }
+  ],
+  "sanitization": [
+    "Compiler-log project directory replaced with <fixture-root>"
+  ],
+  "operation": "genuine_nested_include_fixture",
+  "artifact_sha256": null,
+  "original_tester_result_sha256": "bc88a43d182a3172a9f555f58c6ef80d51da7c1c84704686c7b736025fb80225",
+  "tester_status": "application_marker_passed",
+  "source_sha256": "864f4adece0cf06ebdb72108e562304d27a671f686562991032507b4ad1763fc",
+  "native_build": 6235,
+  "observed": "Compiler log selected Nested/Choice.mqh; nontrading OnInit checked 12 cases with 0 failures",
+  "original_log_sha256": "ad3d4fc67f6b8cadcea64577fa30c3907eda222165eea3903636921ed9ecd363",
+  "schema_version": 1,
+  "documentation": [
+    "mql5:3d2e853ca7e9b5fc6c2d1c7e",
+    "mql5book:aef4e438f31b5d6ac50e4100:s000"
+  ]
+}

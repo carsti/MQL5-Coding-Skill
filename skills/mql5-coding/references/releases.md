@@ -1,16 +1,16 @@
 # Verified releases, updates and rollback
 
-Stable releases use explicit tags, starting at `v1.0.0`; the current package is `v1.0.2`. The ZIP contains exactly the skill files and a release manifest with the tag, version, source commit, lengths and SHA-256 of every file. The repository-level packager verifies its own output. Release CI validates both shells and the MCP pair before retaining packages; publication must use the successful commit's assets.
+Stable releases use explicit tags, starting at `v1.0.0`; this source prepares package `v1.1.0`. Local preparation and verified offline installation do not publish a GitHub release. The ZIP contains exactly the skill files and a release manifest with the tag, version, reviewed source commit, lengths and SHA-256 of every file. The repository-level packager verifies its own output. Release CI validates both shells and the MCP pair before retaining packages; any later publication must use a successful commit's assets.
 
-Run the trusted installed `scripts/Update-Mql5Skill.ps1` from a directory outside the installed skill. For the first upgrade from an older installation, run the script from a reviewed checkout of this repository. Do not run an updater from an unverified download. The updater requires Windows PowerShell 5.1 or PowerShell 7 and authenticated `gh` access to the private repository. It needs neither Python nor MetaTrader.
+Run the trusted installed `scripts/Update-Mql5Skill.ps1` from a directory outside the installed skill. For the first upgrade from an older installation, run the script from a reviewed checkout of this repository. In particular, the 1.0.2 verifier rejects the new `assets/` package location; the reviewed 1.1.0 verifier accepts that bounded location and retains the same manifest, hash, backup, and rollback checks. Do not run an updater from an unverified download. The updater requires Windows PowerShell 5.1 or PowerShell 7; online actions also require authenticated `gh` access to the private repository. Offline updates need neither GitHub access, Python, nor MetaTrader.
 
 ```powershell
 $codexDirectory = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
     Join-Path $env:USERPROFILE '.codex'
 } else { $env:CODEX_HOME }
 $updater = Join-Path $codexDirectory 'skills/mql5-coding/scripts/Update-Mql5Skill.ps1'
-& $updater -Action Check -Version 1.0.2
-& $updater -Action Update -Version 1.0.2
+& $updater -Action Check -Version '<published-version>'
+& $updater -Action Update -Version '<published-version>'
 ```
 
 `Check` reads authenticated release metadata and installed version, without downloading or modifying files. Its `installed_bytes_verified=false` explicitly distinguishes version inspection from byte verification. `Update` downloads the named stable release, verifies its length and GitHub asset SHA-256, resolves the tag's source commit, and checks the complete manifest and every skill file before replacing anything. Drafts, prereleases, missing digests, unlisted files, duplicate paths, links, traversal entries, oversized archives, and mismatched identities are rejected. No downloaded code is executed by the verifier. An already installed identical version is verified and returned as `already_current`; changed bytes at that version fail.
@@ -34,7 +34,7 @@ If rollback is interrupted again, recovery follows the pending intents back to t
 For an offline update, supply all trust inputs explicitly:
 
 ```powershell
-& $updater -Action Update -Version 1.0.2 -ArchivePath '<absolute-zip-path>' `
+& $updater -Action Update -Version 1.1.0 -ArchivePath '<absolute-zip-path>' `
     -ExpectedArchiveSha256 '<trusted-64-hex-digest>' -ExpectedSourceCommit '<trusted-40-hex-commit>'
 ```
 

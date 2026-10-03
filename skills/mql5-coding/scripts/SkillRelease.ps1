@@ -7,7 +7,13 @@ function Get-Mql5SkillReleaseFiles {
         'scripts/Test-Mql5Environment.ps1','scripts/Compile-Mql5.ps1','scripts/CompilationReceipt.ps1',
         'scripts/CompilerProcessJob.cs','scripts/Invoke-Mt5TesterSmoke.ps1','scripts/TesterEvidence.ps1',
         'scripts/TesterPathIntegrity.ps1','scripts/TesterProcessJob.cs','scripts/SkillRelease.ps1',
-        'scripts/Update-Mql5Skill.ps1','version.json') | Sort-Object
+        'scripts/Update-Mql5Skill.ps1','version.json',
+        'scripts/mql5_toolkit.py','scripts/toolkit_common.py','scripts/toolkit_reports.py',
+        'scripts/toolkit_includes.py','scripts/toolkit_profiles.py','scripts/ToolkitSupport.ps1',
+        'scripts/Read-Mql5Journal.ps1','scripts/Invoke-Mql5ScenarioBatch.ps1',
+        'references/toolkit.md','references/focused-review.md','references/performance.md','references/refactoring.md',
+        'assets/scenarios.template.json','assets/comparison-expectations.template.json',
+        'assets/Mql5Assertions.mqh','assets/Mql5ToolkitSelfTest.mq5') | Sort-Object
 }
 function Get-Mql5ReleaseHash([string]$Path) {
     $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
@@ -140,7 +146,7 @@ function Assert-Mql5SkillManifest($Manifest,[string]$Version,[string]$Commit) {
     if ($Manifest.files -isnot [Array] -or $Manifest.files.Count -lt $expected.Count -or $Manifest.files.Count -gt 128) {throw 'Release file set is incomplete or too large.'}
     $null=Get-Mql5ReleaseFileMap $Manifest.files
     foreach ($file in $Manifest.files) {
-        if ($file.path -cnotin @('SKILL.md','version.json') -and $file.path -cnotmatch '\A(?:agents|references|scripts)/') {throw 'Unexpected skill package location.'}
+        if ($file.path -cnotin @('SKILL.md','version.json') -and $file.path -cnotmatch '\A(?:agents|references|scripts|assets)/') {throw 'Unexpected skill package location.'}
         if ($file.bytes -gt 4194304) {throw 'Released skill file is too large.'}
     }
     foreach ($path in $expected) {if (@($Manifest.files | Where-Object {$_.path -ceq $path}).Count -ne 1) {throw 'Release file set is unexpected.'}}

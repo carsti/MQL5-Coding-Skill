@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "native-functions-inlined",
+      "format": "MetaEditor function CSV; UTF-16LE BOM; semicolon; six cells; no header",
+      "changes": [
+        "No CSV content changed; export contains no personal paths"
+      ],
+      "byte_length": 78,
+      "metaeditor_build": 6235,
+      "native_sha256": "f446fbefb43c4aeebaa53429d609f4ad3b42b25486479686ea979add576b84ee",
+      "inlining": "enabled",
+      "sanitized_sha256": "f446fbefb43c4aeebaa53429d609f4ad3b42b25486479686ea979add576b84ee"
+    },
+    {
+      "id": "native-functions",
+      "format": "MetaEditor function CSV; UTF-16LE BOM; semicolon; six cells; no header",
+      "changes": [
+        "No CSV content changed; export contains no personal paths"
+      ],
+      "byte_length": 332,
+      "metaeditor_build": 6235,
+      "native_sha256": "63116d18b1b6f1244e220053e18f3f49b9976d093b97d9fcdfa3353272bd8239",
+      "inlining": "disabled",
+      "sanitized_sha256": "63116d18b1b6f1244e220053e18f3f49b9976d093b97d9fcdfa3353272bd8239"
+    },
+    {
+      "inlining": "disabled",
+      "byte_length": 332,
+      "changes": [
+        "No CSV content changed"
+      ],
+      "metaeditor_build": 6235,
+      "sanitized_sha256": "419f95c682b38b98afdfd3fbd18898c2f928fc4e48f9e031f9303fb049c50aeb",
+      "native_sha256": "419f95c682b38b98afdfd3fbd18898c2f928fc4e48f9e031f9303fb049c50aeb",
+      "id": "native-functions-repeat",
+      "format": "MetaEditor function CSV; UTF-16LE BOM; semicolon; six cells; no header"
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+# Reusable analysis and scenario toolkit
+
+Use these helpers for repeated processing. Ordinary reading, editing, searching, and diagnosis still use Codex directly. The documentation MCP remains the authority for MQL5 facts. The helpers are shell commands, not new MCP tools. No new Python environment or dependency is needed; use the shared environment described in SKILL.md. All Python modules use the standard library and Python 3.12 or newer.
+
+## Commands and evidence
+
+Invoke `scripts/mql5_toolkit.py` with the shared Python launcher. The six operations are:
+
+```
+report read --input <absolute-report.htm> [--tester-result <absolute-smoke-result.json>] --output <new-absolute-directory>
+report compare --baseline <absolute-report.htm> --candidate <absolute-report.htm> [--baseline-result <absolute-json>] [--candidate-result <absolute-json>] [--expectations <absolute-json>] --output <new-absolute-directory>
+includes inventory (--project-profile <absolute-profile.json> | --root <absolute-project-directory>) [--entrypoint <absolute-mq5>] [--include-root <absolute-standard-include-directory>] [--powershell <absolute-host.exe>] --output <new-absolute-directory>
+includes compare --baseline <absolute-snapshot-result.json> --candidate <absolute-snapshot-result.json> --output <new-absolute-directory>
+profile read --input <absolute-native.csv> [--conditions <absolute-json>] --output <new-absolute-directory>
+profile compare --baseline <absolute-native.csv> --candidate <absolute-native.csv> [--baseline-conditions <absolute-json>] [--candidate-conditions <absolute-json>] [--expectations <absolute-json>] --output <new-absolute-directory>
+```
+
+Repeat `--entrypoint` and `--include-root` only in explicit inventory mode. Profile mode reuses the existing PowerShell profile validator and saved selections. Without explicit entrypoints, inventory discovers known `.mq5` files under the selected root. Multiple standard roots are an inventory convenience: multiple matching files are ambiguous, not a compiler search-order claim.
+
+Every operation reserves a new output directory, whose parent must exist, and writes `result.json` and `summary.txt`. It leaves evidence inputs unchanged. CLI paths must be absolute. Paths inside manifests resolve relative to the manifest. Scripts find sibling resources from their own installation directory. Output schema 1 includes the operation and detailed statuses. Finite decimal values are strings; `missing`, `undefined`, `special`, and `unparseable` remain distinct. Calculations use decimal arithmetic with 50 significant digits.
+
+Exit codes: `0` processing completed, `1` explicit expectations failed, `2` invalid input/tooling, `3` incompatible comparison, `4` insufficient evidence or unevaluable expectations. Comparison compatibility takes precedence over expectations. Read success describes processing, including disclosed linkage issues; inspect `evidence_linkage` before using recorded run settings. Console summaries are bounded; inspect the JSON for complete measurements, provenance, and issues.
+
+## Reports and comparisons
+
+Supported input is the English native MT5 HTML Settings/Results table layout covered by repository trading and no-trade fixtures, encoded as UTF-16LE with BOM or UTF-8. Nested/malformed tables, ambiguous duplicate statistics, and other layouts/languages are rejected. Individual absent fields remain missing. Do not use a no-trade fixture alone to validate trading statistics. Source hashes identify exact analyzed bytes, including encoding.
+
+Native labels, values, units, table/row/cell locations, input rows, reported dates, and available terminal-build headers remain in the JSON. Balance and equity drawdowns, amounts and percentages, trades and deals are separate. Native statistics are extracted rather than recalculated; for example a profitable-only native report can record profit factor `0.00`. This value is preserved.
+
+An optional existing tester result uses schema 2. Its recorded report hash and length must match before settings or artifact hashes are associated. A copied report may have a different path; bytes establish linkage. Root source, EX5, and preset hashes are recorded identities, not proof that their files still exist. Parsing, recorded tester status, linkage, comparability, and expectations are separate. Report existence never proves tester completion. Requested dates remain separate from reported coverage.
+
+Required comparison conditions are symbol, period, reported dates, model, deposit, currency, leverage, execution mode, and effective input rows. A known difference is `incompatible`; missing conditions are `insufficient_evidence`; matching conditions are `comparable`. Report/run conflicts are gaps. Artifact identity changes do not make code-revision comparisons incompatible. Terminal and data-quality information is retained separately and can be explicitly required.
+
+Copy [the expectation template](../assets/comparison-expectations.template.json) into the project and replace its example bounds with independently specified requirements. Schema 1 has a nonempty `metrics` array. Each item has `metric`, `target` (`candidate`, `difference`, or `percentage_difference`), and one or both decimal-string `minimum`/`maximum`. Unknown fields, nonfinite bounds, and duplicate JSON keys are invalid. Percent difference is `(candidate-baseline)/abs(baseline)*100`; zero baseline makes it undefined while signed/absolute differences remain available. Missing metrics produce `not_evaluable`. Results are `pass`, `fail`, `not_evaluable`, or `not_requested`; lower profit alone is only an observed difference.
+
+Optional `required_conditions` can add `terminal_image_sha256`, `terminal_build`, `history_quality`, `bars`, `ticks`, or `symbols`. `required_evidence` accepts `linked_run`, `source_hash`, `expert_hash`, `preset_hash`; `require_successful_runs` requires linked recorded successful smoke statuses, without turning them into independent execution verification.
+
+## Include inventory
+
+Literal `"file"` includes use the directory of the file containing the directive, as described in AlgoBook 2.9.1 Including source files (#include), `mql5book:aef4e438f31b5d6ac50e4100:s000`, and observed in the native build 6235 nested-header fixture. The Reference topic Including Files (#include), `mql5:3d2e853ca7e9b5fc6c2d1c7e`, uses main-source wording. The inventory conservatively retains a different existing main-source candidate as uncertainty, scanning both possible consumers rather than claiming compiler selection. Both passages were verified under index `ec0dbca96e12f4d877dd33b7593158c61156cb7b490b42bf559bf97445f83339`. Literal `<file>` includes use explicitly selected standard Include roots. Comments and ordinary strings cannot declare include edges.
+
+The snapshot records project source hashes, reachable external sources, declared edges, conditional context, possible consumers, cycles, unresolved or unsupported forms, and unselected entrypoints. Conditional branches remain possible; macros are not expanded. Linked directories/sources are disclosed rather than traversed. Bounds are 50,000 project files, 10,000 source files, 8 MiB per source, and 128 include levels. Unknown coverage requires further review. Cycles alone are not compilation errors.
+
+Comparison uses exact absolute file identities and both snapshots' consumers, including deleted headers. Moved roots are disclosed and appear as removed/added files. An orphan source change has unknown consumer coverage. A snapshot is not proof of compiler consumption, runtime dependencies, or compilation success. Use affected entrypoints to select the existing compiler workflow.
+
+## Journals
+
+Run `Read-Mql5Journal.ps1 -TesterResultPath <absolute-smoke-result.json> -OutputDirectory <new-absolute-directory>`. Optional `-LiteralMessage` strings select literal, case-sensitive message substrings; filters are fingerprinted rather than printed. `-MaxBytes`, `-MaxLines`, and `-MaxGroups` bound processing. The helper reads only recorded UTF-16LE segments, verifies byte ranges and SHA-256, reuses the existing redactor, and masks application-marker plaintext.
+
+Groups retain redacted message/component, inspected count, first/last recorded timestamp, and up to three evidence locations. Counts cover only inspected lines. Complete segments, partial verified segments, bounded excerpts, unavailable evidence, and truncation are separate; incomplete analysis returns `4`. Overlapping segments are not counted twice; ranges starting or ending inside a journal record disclose truncation even when their hashes match. Excerpts are fallback observations, not hash-verified full journals. Patterns do not prove root causes. Verify runtime error or trade-return interpretations through the MCP.
+
+## Scenario batches
+
+Copy [the manifest template](../assets/scenarios.template.json). Schema 1 contains 1–100 scenarios, each with a unique filename-safe `id` and an existing project `profile` path. Optional paths: `expected_marker_file`, `baseline_report`, `baseline_result`, `expectations`. A baseline result requires its report; expectations require a baseline. No inline strategy overrides or second tester-settings schema are accepted. The complete manifest, profiles, markers, baselines, and expectations are validated before execution.
+
+`Invoke-Mql5ScenarioBatch.ps1 -ManifestPath <absolute-json> -OutputDirectory <new-absolute-directory>` defaults to `-Action Validate`, without compiling or launching MT5. `-Action Execute` compiles the selected tester entrypoint immediately before each sequential run and passes its freshly emitted receipt to the existing tester. Optional `-PythonPath` selects an already existing interpreter; otherwise the shared environment is required. Execution carries the existing tester's artifact, configuration, and process requirements, without another permission prompt.
+
+The result fingerprints selected profile and optional evidence files, and execution rechecks them before each scenario. Changed configuration is rejected rather than silently accepted. Unicode receipt paths are preserved across the supported PowerShell process boundaries.
+
+Each scenario has separate outputs, original compiler/tester statuses and exit codes, and `completed`, `failed`, `timed_out`, `blocked`, or `skipped` status. Report analysis is retained separately: a completed tester can have failed analysis. Every retained HTML report is analyzed. Failure may continue only after owned-process cleanup is verified; uncertainty aborts remaining scenarios. `progress.json` records in-progress evidence separately from the final result. Optional absolute `-CancellationFile` causes remaining scenarios to be skipped when the file exists; current owned work finishes cleanup first. Hard host termination can leave only progress evidence and must not be called batch completion. Batch exit `0` means validation/completed results with successful analysis, `1` retained scenario/analysis failure, `2` configuration/tooling failure or aborted execution. Batch duration is orchestration evidence, not EA execution cost.
+
+## Profiling
+
+Supported input is native MetaEditor function-view CSV captured from build 6235: UTF-16LE BOM, semicolon delimiter, no header, six cells: function name (including recorded indentation), reported source line, Total CPU samples, Total CPU percent, Self CPU samples, Self CPU percent. Indented occurrences can repeat a function at a different reported line; they remain duplicate/uncertain mappings, not additional calls or a separately summable CPU total. Unsupported views/formats/encodings fail clearly. Sampling counts are neither function calls nor elapsed milliseconds. Hotspots rank by native Self CPU samples.
+
+CSV does not carry a source filename, full signature, workload, or build configuration. An optional conditions JSON (schema 1) binds `profile_sha256`; optional `source_identity` records the known compilation unit, `source_sha256` records artifact identity, `workload` records a nonempty workload object, and `build_conditions` records at least `metaeditor_build`, `profiling_optimizations`, `profiling_inlining`, `architecture`, and `environment_id`. Optional `elapsed_duration_milliseconds` remains a separate measurement; it is not inferred from samples. Use a documented stable environment identity and observations of actual profiling settings. Missing conditions produce insufficient comparison evidence.
+
+Comparisons match exact unique function names within the recorded compilation-unit context; duplicate names, unmatched functions, and uncertain mappings remain visible. There is no fuzzy matching or assertion of individual included-file identity. Workload, source context, and build conditions must match. Additional required evidence accepts `linked_conditions`, `source_hash`, or `elapsed_duration`. Metric names have the form `OnStart.self_cpu_samples` or `OnStart.self_cpu_percent`. Percentage changes alone establish no overall speed improvement; comparable workloads and repeated timing evidence are needed.
+
+See native definitions at [MT5 testing reports](https://www.metatrader5.com/en/terminal/help/algotrading/testing_report) and [MetaEditor profiling](https://www.metatrader5.com/en/metaeditor/help/development/profiling). Tests retain genuine sanitized input provenance. UI actions used once to prepare those fixtures are not shipped as runtime automation.

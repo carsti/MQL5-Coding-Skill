@@ -119,6 +119,10 @@ When installation into MT5 matters, distinguish the project `.ex5` from the arti
 
 ## Analyze tester or trading data
 
+For repeated native report extraction/comparison, shared-include inventory/snapshots, bounded journal grouping, sequential scenarios, or native profiler exports, read [the reusable toolkit](references/toolkit.md) and use its existing entrypoints. Choose only resources relevant to the task; journal and scenario helpers reuse the current tester evidence, profile validation, compiler, and receipts. Analysis does not prove tester completion, comparable conditions, or strategy correctness. Keep explicit expectations separate from observations.
+
+Use [focused review considerations](references/focused-review.md) for non-obvious event, data, resource, and trading-state concerns; [performance measurement](references/performance.md) when measured hotspots justify an optimization; and [cleanup/refactoring](references/refactoring.md) when preserving shared behavior. The latter links small nontrading assertion/test templates. API-specific conclusions still require MCP verification. Do not consult every reference for every task.
+
 Python analysis is optional and requires the separately managed shared MQL5 Python environment. Resolve it under `CODEX_HOME`, place temporary analysis scripts and default outputs in its `work` directory, and invoke:
 
 ```powershell

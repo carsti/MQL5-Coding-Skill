@@ -1,0 +1,36 @@
+{
+  "schema_version": 2,
+  "run_id": "fixture-no-trades",
+  "status": "application_marker_passed",
+  "inputs": {
+    "symbol": "EURUSD",
+    "period": "M1",
+    "from_date": "2025.01.12",
+    "to_date": "2025.02.28",
+    "model": 0,
+    "deposit": 100000.0,
+    "currency": "USD",
+    "leverage": 100,
+    "execution_mode": 0,
+    "expected_expert_sha256": "3f666751b20663732604b8406cfe6bf7cabcb9f16fa7a8866e6c7516bfcfe3e9",
+    "compilation_receipt": {
+      "source_sha256": "145a7498761272e5e3f33762cd22e29380a22ce20344f9ac0b7f41a8c0a8f7da"
+    }
+  },
+  "artifacts": {
+    "report": {
+      "path": "no-trades.htm",
+      "byte_length": 23356,
+      "sha256": "30990af01a39a651b19089a18cfa56a260091ac9945db16da527422b62e2b31e"
+    },
+    "preset": {
+      "sha256": "2decfe4ba80e96dc45eba4e798e6b464e2d01571364e2ddaa82f689013e2ca04"
+    }
+  },
+  "binding": {
+    "terminal_image": {
+      "sha256": "1c78adc2dc8e8ab29e88beb9736d925ed0996d0d11834d635e5ffb582c85a031"
+    }
+  },
+  "fixture_derivation": "Sanitized report linkage; not a newly executed run"
+}

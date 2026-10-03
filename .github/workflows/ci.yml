@@ -51,6 +51,18 @@ jobs:
         shell: pwsh
         run: python -B .\tests\test_mcp_contract.py
 
+      - name: Test native toolkit fixtures and analysis
+        shell: pwsh
+        run: python -B -m unittest discover -s tests -p test_toolkit*.py -v
+
+      - name: Test toolkit controllers with PowerShell 7
+        shell: pwsh
+        run: .\tests\Test-Toolkit.ps1 -PythonPath (Get-Command python).Source
+
+      - name: Test toolkit controllers with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\Test-Toolkit.ps1 -PythonPath (Get-Command python).Source
+
       - name: Test with PowerShell 7
         shell: pwsh
         run: .\tests\Test-Skill.ps1

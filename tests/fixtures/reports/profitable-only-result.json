@@ -1,0 +1,36 @@
+{
+  "schema_version": 2,
+  "run_id": "fixture-profitable-only",
+  "status": "engine_smoke_passed",
+  "inputs": {
+    "symbol": "XAUUSD",
+    "period": "Daily",
+    "from_date": "2025.01.02",
+    "to_date": "2025.02.28",
+    "model": 1,
+    "deposit": 100000,
+    "currency": "USD",
+    "leverage": 100,
+    "execution_mode": 0,
+    "expected_expert_sha256": "25f8e1cd62a39e75643e355db3fc2de6e394ff1faec0e35d5d50fd721f36f7cf",
+    "compilation_receipt": {
+      "source_sha256": "4c5522b3d096e9b2fcf10c698705a7a9aac95792d37f4607f930be7a58b5d712"
+    }
+  },
+  "artifacts": {
+    "report": {
+      "path": "profitable-only.htm",
+      "byte_length": 55356,
+      "sha256": "6ca9663c704cf3c14d220422e7ae23cb44d5e5c911ef2f02c45f23b91b708def"
+    },
+    "preset": {
+      "sha256": "2f999f04a82968b4b30b18074561284f186149d70f8cc48f218640e6eaba3035"
+    }
+  },
+  "binding": {
+    "terminal_image": {
+      "sha256": "26b65918140e26d522d43853a2a7ba6fe139533e648f4fddda68f4570474f90b"
+    }
+  },
+  "fixture_derivation": "Sanitized report linkage; not a newly executed run"
+}

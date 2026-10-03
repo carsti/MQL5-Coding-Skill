@@ -144,7 +144,7 @@ $backup=$updated.data.backup_id
 $backupTree=Join-Path $fixtureHome ('tools/mql5-skill-updates/'+$backup+'/backup-tree')
 Assert-Mql5ReleaseInventory $backupTree (($old | ConvertTo-Json -Depth 4 -Compress) | ConvertFrom-Json)
 Check $true 'legacy custom files are backed up exactly'
-Check (@(Get-Mql5ReleaseInventory $target).Count -eq 21) 'installed release is complete'
+Check (@(Get-Mql5ReleaseInventory $target).Count -eq @(Get-Mql5SkillReleaseFiles).Count) 'installed release is complete'
 $again=RunUpdater $argsForUpdate
 Check ($again.code -eq 0 -and $again.data.action -ceq 'already_current') 'identical update is idempotent'
 [IO.File]::AppendAllText((Join-Path $target 'SKILL.md'),'changed')
@@ -385,9 +385,10 @@ Check (-not (Test-Path -LiteralPath (Join-Path $freshHome 'skills/mql5-coding'))
 $base=RunUpdater (Options $freshHome $archive $digest)
 if ($base.code) {throw $base.error_text}
 $nextSkill=Join-Path $work 'next-skill';Copy-Item -LiteralPath $skill -Destination $nextSkill -Recurse
-[IO.File]::WriteAllText((Join-Path $nextSkill 'version.json'),'{"schema_version":1,"version":"1.1.0"}')
+$nextVersion=([string]([version]$version).Major)+'.'+([string](([version]$version).Minor+1))+'.0'
+[IO.File]::WriteAllText((Join-Path $nextSkill 'version.json'),('{"schema_version":1,"version":"'+$nextVersion+'"}'))
 [IO.File]::WriteAllText((Join-Path $nextSkill 'references/new-reference.md'),'A future release can add a verified resource.')
-& (Join-Path $repo 'scripts/Package-Skill.ps1') -SkillRoot $nextSkill -OutputDirectory (Join-Path $work 'next-package') -SourceCommit $commit -Tag 'v1.1.0' | Out-Null
+& (Join-Path $repo 'scripts/Package-Skill.ps1') -SkillRoot $nextSkill -OutputDirectory (Join-Path $work 'next-package') -SourceCommit $commit -Tag ('v'+$nextVersion) | Out-Null
 $nextArchive=Join-Path $work 'next-package/mql5-coding-windows.zip'
 $installedVersion=Join-Path $freshHome 'skills/mql5-coding/version.json'
 $installedText=[IO.File]::ReadAllText($installedVersion)
@@ -400,12 +401,12 @@ foreach ($case in @(
     [IO.File]::WriteAllText($installedVersion,$case.text)
     $preserved=@(Get-Mql5ReleaseInventory (Split-Path -Parent $installedVersion))
     try {
-        $invalid=RunUpdater @('-Action','Update','-Version','1.1.0','-CodexDirectory',$freshHome,'-ArchivePath',$nextArchive,'-ExpectedArchiveSha256',(Get-Mql5ReleaseHash $nextArchive),'-ExpectedSourceCommit',$commit)
+        $invalid=RunUpdater @('-Action','Update','-Version',$nextVersion,'-CodexDirectory',$freshHome,'-ArchivePath',$nextArchive,'-ExpectedArchiveSha256',(Get-Mql5ReleaseHash $nextArchive),'-ExpectedSourceCommit',$commit)
         Check ($invalid.code -ne 0) ('installed '+$case.name+' version record rejected before upgrade')
         Assert-Mql5ReleaseInventory (Split-Path -Parent $installedVersion) $preserved
     } finally {[IO.File]::WriteAllText($installedVersion,$installedText)}
 }
-$upgrade=RunUpdater @('-Action','Update','-Version','1.1.0','-CodexDirectory',$freshHome,'-ArchivePath',$nextArchive,'-ExpectedArchiveSha256',(Get-Mql5ReleaseHash $nextArchive),'-ExpectedSourceCommit',$commit)
+$upgrade=RunUpdater @('-Action','Update','-Version',$nextVersion,'-CodexDirectory',$freshHome,'-ArchivePath',$nextArchive,'-ExpectedArchiveSha256',(Get-Mql5ReleaseHash $nextArchive),'-ExpectedSourceCommit',$commit)
 if ($upgrade.code) {throw $upgrade.error_text}
 Check ($upgrade.data.action -ceq 'updated' -and (Test-Path -LiteralPath (Join-Path $freshHome 'skills/mql5-coding/references/new-reference.md'))) 'versioned upgrade accepts verified additional resources'
 $invalid=RunUpdater (Options $freshHome $archive $digest)

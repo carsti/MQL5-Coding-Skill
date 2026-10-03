@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "require_successful_runs": true,
+  "required_evidence": ["linked_run", "source_hash", "expert_hash"],
+  "metrics": [
+    { "metric": "net_profit", "target": "difference", "minimum": "0" }
+  ]
+}

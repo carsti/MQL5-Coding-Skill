@@ -253,7 +253,8 @@ try {
     else {
         try {
             $skillFiles=Skill-Files $SkillRoot
-            foreach ($required in @('version.json','references/releases.md','scripts/SkillRelease.ps1','scripts/Update-Mql5Skill.ps1','agents/openai.yaml','references/strategy-tester.md','references/mcp-contract.json','references/environment-health.md','references/project-profiles.md','scripts/Mql5ProjectProfile.ps1','scripts/New-Mql5ProjectProfile.ps1','scripts/Invoke-Mql5Project.ps1','scripts/Test-Mql5Environment.ps1','scripts/Compile-Mql5.ps1','scripts/CompilationReceipt.ps1','scripts/CompilerProcessJob.cs','scripts/Invoke-Mt5TesterSmoke.ps1','scripts/TesterEvidence.ps1','scripts/TesterPathIntegrity.ps1','scripts/TesterProcessJob.cs')) {
+            . (Join-Path $PSScriptRoot 'SkillRelease.ps1')
+            foreach ($required in @(Get-Mql5SkillReleaseFiles)) {
                 if (-not $skillFiles.ContainsKey($required)) {throw 'An essential skill file is missing.'}
             }
             # Use this invoked checker's trusted companion, not code from the

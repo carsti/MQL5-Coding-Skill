@@ -33,6 +33,22 @@ EXPECTED_SKILL_FILES = {
     "scripts/TesterEvidence.ps1",
     "scripts/TesterPathIntegrity.ps1",
     "scripts/TesterProcessJob.cs",
+    "scripts/mql5_toolkit.py",
+    "scripts/toolkit_common.py",
+    "scripts/toolkit_reports.py",
+    "scripts/toolkit_includes.py",
+    "scripts/toolkit_profiles.py",
+    "scripts/ToolkitSupport.ps1",
+    "scripts/Read-Mql5Journal.ps1",
+    "scripts/Invoke-Mql5ScenarioBatch.ps1",
+    "references/toolkit.md",
+    "references/focused-review.md",
+    "references/performance.md",
+    "references/refactoring.md",
+    "assets/scenarios.template.json",
+    "assets/comparison-expectations.template.json",
+    "assets/Mql5Assertions.mqh",
+    "assets/Mql5ToolkitSelfTest.mq5",
 }
 
 
@@ -58,8 +74,9 @@ def validate_relative_markdown_links(path: Path, text: str) -> None:
         if not relative_target:
             continue
         resolved = (path.parent / relative_target).resolve()
+        allowed_root = REPOSITORY_ROOT if path == REPOSITORY_ROOT / "README.md" else SKILL_ROOT
         try:
-            resolved.relative_to(SKILL_ROOT.resolve())
+            resolved.relative_to(allowed_root.resolve())
         except ValueError:
             fail(f"{path}: relative link escapes the skill package: {target}")
         if not resolved.is_file():
@@ -144,7 +161,7 @@ def main() -> int:
     if not isinstance(version, dict) or set(version) != {"schema_version", "version"} or type(version["schema_version"]) is not int or version["schema_version"] != 1 or not isinstance(version["version"], str) or not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version["version"]):
         fail("Invalid skill release version.")
 
-    for markdown_path in [skill_path, reference_path, SKILL_ROOT / "references" / "environment-health.md", SKILL_ROOT / "references" / "project-profiles.md", SKILL_ROOT / "references" / "releases.md", REPOSITORY_ROOT / "README.md"]:
+    for markdown_path in [*sorted(SKILL_ROOT.rglob("*.md")), REPOSITORY_ROOT / "README.md"]:
         text = markdown_path.read_text(encoding="utf-8")
         validate_relative_markdown_links(markdown_path, text)
 

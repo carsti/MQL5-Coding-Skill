@@ -1,0 +1,41 @@
+{
+  "fixtures": [
+    {
+      "id": "no-trades",
+      "native_sha256": "f8a5048992205377a78dbdd14b21de83fee7a492392ebc914ebe240ae06e1bbe",
+      "native_byte_length": 23368,
+      "sanitized_sha256": "30990af01a39a651b19089a18cfa56a260091ac9945db16da527422b62e2b31e",
+      "format": "Native English MT5 HTML, UTF-16LE BOM",
+      "changes": [
+        "EA name, server name, and smoke nonce sanitized",
+        "UTF-8 sibling is a transcoded copy",
+        "Fixture result rebinds hash to sanitized report; original evidence is unchanged"
+      ]
+    },
+    {
+      "id": "profitable-only",
+      "native_sha256": "121268395ba832e0ec36ad7b6e4005174ac3c1993ece8f60ad131d7df3631c30",
+      "native_byte_length": 55358,
+      "sanitized_sha256": "6ca9663c704cf3c14d220422e7ae23cb44d5e5c911ef2f02c45f23b91b708def",
+      "format": "Native English MT5 HTML, UTF-16LE BOM",
+      "changes": [
+        "EA name, server name, and smoke nonce sanitized",
+        "UTF-8 sibling is a transcoded copy",
+        "Fixture result rebinds hash to sanitized report; original evidence is unchanged"
+      ]
+    },
+    {
+      "id": "mixed-trades",
+      "native_sha256": "511f58a1e0e6ff43ea455f9e805121767c22143d3e542d733441c456252eeef6",
+      "native_byte_length": 243288,
+      "sanitized_sha256": "ba420baa60c4a441664610e03995dac4334bd8d721b4d77de66eeab779d7b25c",
+      "format": "Native English MT5 HTML, UTF-16LE BOM",
+      "changes": [
+        "EA name, server name, and smoke nonce sanitized",
+        "UTF-8 sibling is a transcoded copy",
+        "Fixture result rebinds hash to sanitized report; original evidence is unchanged"
+      ]
+    }
+  ],
+  "schema_version": 1
+}

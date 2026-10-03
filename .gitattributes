@@ -5,3 +5,8 @@
 *.py text eol=lf
 *.cs text eol=lf
 *.ps1 text eol=crlf
+*.json text eol=lf
+*.mq5 text eol=lf
+*.mqh text eol=lf
+# Native fixture hashes bind bytes, including their captured line endings.
+tests/fixtures/** -text -whitespace

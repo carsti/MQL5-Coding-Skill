@@ -17,14 +17,20 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 function Invoke-Mql5ProfileTool([string]$Tool, [hashtable]$Parameters) {
     $hostExecutable=if ($PSVersionTable.PSEdition -eq 'Core') {Join-Path $PSHOME 'pwsh.exe'} else {Join-Path $PSHOME 'powershell.exe'}
-    $arguments=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot $Tool))
+    # Redirected output has one explicit encoding across both supported hosts.
+    # Encode the command itself so Unicode arguments survive Windows argv too.
+    $command='[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false); $OutputEncoding=[Console]::OutputEncoding; & '+"'"+(Join-Path $PSScriptRoot $Tool).Replace("'","''")+"'"
     foreach ($key in @($Parameters.Keys | Sort-Object)) {
         $value=$Parameters[$key]
-        if ($value -is [bool]) {if ($value) {$arguments+=@('-'+$key)}; continue}
-        $arguments+=@(('-'+$key),([string]$value))
+        if ($key -cnotmatch '^[A-Za-z][A-Za-z0-9]*$') {throw 'Invalid delegated parameter name.'}
+        if ($value -is [bool]) {if ($value) {$command+=' -'+$key}; continue}
+        $command+=' -'+$key+" '"+([string]$value).Replace("'","''")+"'"
     }
-    # Use Windows argv quoting consistently in PS 5.1 and PS 7, including
-    # marker strings containing quotes. No shell evaluates these arguments.
+    $command+='; exit $LASTEXITCODE'
+    $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $arguments=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded)
+    # Command values are single-quoted literals; Windows argv carries only the
+    # encoded command and fixed host flags, never user-authored expressions.
     $quoted=@($arguments | ForEach-Object {
         if ($_ -notmatch '[\s"]') {$_}
         else {'"'+($_ -replace '(\\*)"','$1$1\"' -replace '(\\+)$','$1$1')+'"'}
@@ -36,6 +42,8 @@ function Invoke-Mql5ProfileTool([string]$Tool, [hashtable]$Parameters) {
     $start.CreateNoWindow=$true
     $start.RedirectStandardOutput=$true
     $start.RedirectStandardError=$true
+    $start.StandardOutputEncoding=New-Object Text.UTF8Encoding($false)
+    $start.StandardErrorEncoding=New-Object Text.UTF8Encoding($false)
     $process=New-Object Diagnostics.Process
     $process.StartInfo=$start
     try {

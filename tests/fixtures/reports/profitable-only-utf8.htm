@@ -1,0 +1,565 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+  <head>
+    <title>Strategy Tester Report</title>
+    <meta name="generator" content="strategy tester">
+    <style type="text/css">
+    <!--
+    @media screen {
+      td { font: 8pt  Tahoma,Arial; }
+      th { font: 10pt Tahoma,Arial; }
+    }
+    @media print {
+      td { font: 7pt Tahoma,Arial; }
+      th { font: 9pt Tahoma,Arial; }
+    }
+    .msdate { mso-number-format:"General Date"; }
+    .mspt   { mso-number-format:\#\,\#\#0\.00;  }
+    body {margin:1px;}
+    //-->
+    </style>
+  </head>
+<body>
+<div align="center">
+<table cellspacing="1" cellpadding="3" border="0">
+   <tr align="center">
+      <td colspan="13"><div style="font: 14pt Tahoma"><b>Strategy Tester Report</b><br></div></td>
+   </tr>
+   <tr align="center">
+      <td colspan="13"><div style="font: 10pt Tahoma"><b>Fixture-Server (Build 6231)</b><br></div></td>
+   </tr>
+   <tr>
+      <td nowrap style="height: 10px"></td>
+    </tr>
+   <tr>
+      <td colspan="13" align="center"><div style="font: 10pt Tahoma"><b>Settings</b></div></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Expert:</td>
+      <td nowrap colspan="10" align="left"><b>The Gold Reaper</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Symbol:</td>
+      <td nowrap colspan="10" align="left"><b>XAUUSD</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Period:</td>
+      <td nowrap colspan="10" align="left"><b>Daily (2025.01.02 - 2025.02.28)</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Inputs:</td>
+      <td nowrap colspan="10" align="left"><b>UseVariableValues=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>AdjustLotsizeToVariableValues=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>ShowInfoPanel=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>InfoPanelSizeAdjust=1</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>UpdateInfoTesting=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>spreadfilter=------------------------------ Settings ------------------------------</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>AllowBuyTrades=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>AllowSellTrades=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>TradeFrequency=6</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>MaxSpread=500</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>UseHL_TrailingSL=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>FridayStopHour=-1</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>setSL_TP_After_Entry=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Virtual_expiration=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Randomization=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>FakeOutFilter=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>ST1_MagicNumber=8000</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>ST1_Comment=The Gold Reaper</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>RemoveCommentSuffix=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>NFP_FILTER=----------------------- NFP Filter -----------------------</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>EnableNFP_Filter=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>AutoGMT=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Broker_GMT_OFFSET_Winter=2</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Broker_GMT_OFFSET_Summer=3</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>NFP_CloseOpenTrades=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>NFP_ClosePendingOrders=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>NFP_MinutesBefore=100</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>NFP_MinutesAfter=60</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>propfirmsettings=----------------------- Propfirm unique trades settings -----------------------</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>AdjustEntry=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>AdjustSL=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>AdjustTP=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>AdjustTrailSL=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>AdjustTrailTP=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>AdjustBreakEven=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>LotSizeSettings=----------------------- LotSize Settings -----------------------</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>ForceBalanceToUse=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Risk=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>StartLots=0.01</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>MaxAllowedDD=30</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>UseWeightedLots=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>MaxRiskPerStrategy_=1</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>PropFirmMaxDailyDD=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>UseEquity=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>OnlyUp=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>CheckMargin=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>ManualStratSelect=------------------------- Manual Strategy Selection -------------------------</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>ManStratWarn=!! DO NOT RUN MANUAL STRATEGIES WHILE USING 'MAX ALLOWED TOTAL DD' OPTION !! </b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>RunStrat1=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>RunStrat2=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>RunStrat3=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>RunStrat4=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>RunStrat5=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>RunStrat6=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>RunStrat7=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>RunStrat8=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>RunStrat9=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3" >Company:</td>
+      <td nowrap colspan="10" align="left"><b>MetaQuotes Ltd.</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3" >Currency:</td>
+      <td nowrap colspan="10" align="left"><b>USD</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3" >Initial Deposit:</td>
+      <td nowrap colspan="10" align="left"><b>100 000.00</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3" >Leverage:</td>
+      <td nowrap colspan="10" align="left"><b>1:100</b></td>
+   </tr>
+   <tr>
+      <td nowrap style="height: 10px"></td>
+    </tr>
+   <tr>
+      <td colspan="13" align="center"><div style="font: 10pt Tahoma"><b>Results</b></div></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">History Quality:</td>
+      <td nowrap><b>100%</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Bars:</td>
+      <td nowrap><b>41</b></td>
+      <td nowrap colspan="3">Ticks:</td>
+      <td nowrap><b>223903</b></td>
+      <td nowrap colspan="3">Symbols:</td>
+      <td nowrap colspan="2"><b>1</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Total Net Profit:</td>
+      <td nowrap><b>10.67</b></td>
+      <td nowrap colspan="3">Balance Drawdown Absolute:</td>
+      <td nowrap><b>0.00</b></td>
+      <td nowrap colspan="3">Equity Drawdown Absolute:</td>
+      <td nowrap colspan="2"><b>6.55</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Gross Profit:</td>
+      <td nowrap><b>10.67</b></td>
+      <td nowrap colspan="3">Balance Drawdown Maximal:</td>
+      <td nowrap><b>0.00 (0.00%)</b></td>
+      <td nowrap colspan="3">Equity Drawdown Maximal:</td>
+      <td nowrap colspan="2"><b>14.71 (0.01%)</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Gross Loss:</td>
+      <td nowrap><b>0.00</b></td>
+      <td nowrap colspan="3">Balance Drawdown Relative:</td>
+      <td nowrap><b>0.00% (0.00)</b></td>
+      <td nowrap colspan="3">Equity Drawdown Relative:</td>
+      <td nowrap colspan="2"><b>0.01% (14.71)</b></td>
+   </tr>
+   <tr>
+      <td nowrap style="height: 10px"></td>
+    </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Profit Factor:</td>
+      <td nowrap><b>0.00</b></td>
+      <td nowrap colspan="3">Expected Payoff:</td>
+      <td nowrap><b>1.78</b></td>
+      <td nowrap colspan="3">Margin Level:</td>
+      <td nowrap colspan="2"><b>185413.41%</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Recovery Factor:</td>
+      <td nowrap><b>0.73</b></td>
+      <td nowrap colspan="3">Sharpe Ratio:</td>
+      <td nowrap><b>0.04</b></td>
+      <td nowrap colspan="3">Z-Score:</td>
+      <td nowrap colspan="2"><b>0.00 (0.00%)</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">AHPR:</td>
+      <td nowrap><b>1.0000 (0.00%)</b></td>
+      <td nowrap colspan="3">LR Correlation:</td>
+      <td nowrap><b>0.87</b></td>
+      <td nowrap colspan="3">OnTester result:</td>
+      <td nowrap colspan="2"><b>0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">GHPR:</td>
+      <td nowrap><b>1.0000 (0.00%)</b></td>
+      <td nowrap colspan="3">LR Standard Error:</td>
+      <td nowrap><b>2.75</b></td>
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="2"><b></b></td>
+   </tr>
+   <tr>
+      <td nowrap style="height: 10px"></td>
+    </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Total Trades:</td>
+      <td nowrap><b>6</b></td>
+      <td nowrap colspan="3">Short Trades (won %):</td>
+      <td nowrap><b>0 (0.00%)</b></td>
+      <td nowrap colspan="3">Long Trades (won %):</td>
+      <td nowrap colspan="2"><b>6 (100.00%)</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Total Deals:</td>
+      <td nowrap><b>12</b></td>
+      <td nowrap colspan="3">Profit Trades (% of total):</td>
+      <td nowrap><b>6 (100.00%)</b></td>
+      <td nowrap colspan="3">Loss Trades (% of total):</td>
+      <td nowrap colspan="2"><b>0 (0.00%)</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="4"></td>
+      <td nowrap colspan="3">Largest profit trade:</td>
+      <td nowrap><b>8.57</b></td>
+      <td nowrap colspan="3">Largest loss trade:</td>
+      <td nowrap colspan="2"><b>0.00</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="4"></td>
+      <td nowrap colspan="3">Average profit trade:</td>
+      <td nowrap><b>1.78</b></td>
+      <td nowrap colspan="3">Average loss trade:</td>
+      <td nowrap colspan="2"><b>0.00</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="4"></td>
+      <td nowrap colspan="3">Maximum consecutive wins ($):</td>
+      <td nowrap><b>6 (10.67)</b></td>
+      <td nowrap colspan="3">Maximum consecutive losses ($):</td>
+      <td nowrap colspan="2"><b>0 (0.00)</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="4"></td>
+      <td nowrap colspan="3">Maximal consecutive profit (count):</td>
+      <td nowrap><b>10.67 (6)</b></td>
+      <td nowrap colspan="3">Maximal consecutive loss (count):</td>
+      <td nowrap colspan="2"><b>0.00 (0)</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="4"></td>
+      <td nowrap colspan="3">Average consecutive wins:</td>
+      <td nowrap><b>6</b></td>
+      <td nowrap colspan="3">Average consecutive losses:</td>
+      <td nowrap colspan="2"><b>0</b></td>
+   </tr>
+   <tr align="right">
+      <td colspan="13" style="height: 10px"></td>
+   </tr>
+   <tr align="center">
+      <th colspan="13"><img src="CodexSmokeReport-20261002T224447Z-fb8dbb37fd2f.png" title="Balance graph" width=820 height=200 border=0 alt="Graph"></th>
+   </tr>
+   <tr align="right">
+      <td colspan="13" style="height: 10px"></td>
+   </tr>
+   <tr align="center">
+      <th colspan="13"><img src="CodexSmokeReport-20261002T224447Z-fb8dbb37fd2f-hst.png" width=860 height=400 border=0 alt="Graph"></th>
+   </tr>
+   <tr align="right">
+      <td colspan="13" style="height: 10px"></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Correlation (Profits,MFE):</td>
+      <td nowrap><b>1.00</b></td>
+      <td nowrap colspan="3">Correlation (Profits,MAE):</td>
+      <td nowrap><b>-0.34</b></td>
+      <td nowrap colspan="3">Correlation (MFE,MAE):</td>
+      <td nowrap colspan="2"><b>-0.3455</b></td>
+   </tr>
+   <tr align="center">
+      <th colspan="13"><img src="CodexSmokeReport-20261002T224447Z-fb8dbb37fd2f-mfemae.png" width=860 height=400 border=0 alt="Graph"></th>
+   </tr>
+   <tr align="right">
+      <td colspan="13" style="height: 10px"></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Minimal position holding time:</td>
+      <td nowrap><b>1:36:00</b></td>
+      <td nowrap colspan="3">Maximal position holding time:</td>
+      <td nowrap><b>3:58:00</b></td>
+      <td nowrap colspan="3">Average position holding time:</td>
+      <td nowrap colspan="2"><b>2:47:30</b></td>
+   </tr>
+   <tr align="center">
+      <th colspan="13"><img src="CodexSmokeReport-20261002T224447Z-fb8dbb37fd2f-holding.png" width=860 height=200 border=0 alt="Graph"></th>
+   </tr>
+   <tr align="right">
+      <td colspan="13" style="height: 10px"></td>
+   </tr>
+</table>
+<table cellspacing="1" cellpadding="3" border="0">
+   <tr>
+      <td style="width: 90px;height: 10px"></td>
+      <td style="width: 40px;"></td>
+      <td style="width: 60px;"></td>
+      <td style="width: 60px;"></td>
+      <td style="width: 60px;"></td>
+      <td style="width: 60px;"></td>
+      <td style="width: 60px;"></td>
+      <td style="width: 70px;"></td>
+      <td style="width: 70px;"></td>
+      <td style="width: 60px;"></td>
+      <td style="width: 60px;"></td>
+      <td style="width: 60px;"></td>
+      <td style="width: 100px;"></td>
+   </tr>
+   <tr align="center">
+      <th colspan="13" style="height: 25px"><div style="font: 10pt Tahoma"><b>Orders</b></div></th>
+   </tr>
+   <tr align="center" bgcolor="#E5F0FC">
+      <td nowrap style="height: 30px"><b>Open Time</b></td>
+      <td nowrap><b>Order</b></td>
+      <td nowrap><b>Symbol</b></td>
+      <td nowrap><b>Type</b></td>
+      <td nowrap colspan="2"><b>Volume</b></td>
+      <td nowrap><b>Price</b></td>
+      <td nowrap><b>S / L</b></td>
+      <td nowrap><b>T / P</b></td>
+      <td nowrap colspan="2"><b>Time</b></td>
+      <td nowrap><b>State</b></td>
+      <td nowrap><b>Comment</b></td>
+   </tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.02 01:00:00</td><td>2</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>2724.85</td><td>2717.85</td><td>2757.85</td><td colspan="2">2025.01.08 01:00:20</td><td>canceled</td><td>The Gold Reaper_XAUUSD_3</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.08 01:00:00</td><td>4</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>2663.85</td><td>2656.85</td><td>2696.85</td><td colspan="2">2025.01.08 16:03:40</td><td>filled</td><td>The Gold Reaper_XAUUSD_3</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.08 19:28:40</td><td>6</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.01.08 19:28:40</td><td>filled</td><td>sl 2664.80</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.08 17:00:00</td><td>5</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>2724.85</td><td>2717.85</td><td>2757.85</td><td colspan="2">2025.01.15 01:00:20</td><td>canceled</td><td>The Gold Reaper_XAUUSD_3</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.15 01:00:00</td><td>7</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>2696.71</td><td>2689.71</td><td>2729.71</td><td colspan="2">2025.01.16 01:04:40</td><td>filled</td><td>The Gold Reaper_XAUUSD_3</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.16 02:00:00</td><td>8</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>2696.71</td><td>2689.71</td><td>2729.71</td><td colspan="2">2025.01.16 02:17:40</td><td>filled</td><td>The Gold Reaper_XAUUSD_3</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.16 03:53:40</td><td>9</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.01.16 03:53:40</td><td>filled</td><td>sl 2696.71</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.16 03:53:40</td><td>10</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.01.16 03:53:40</td><td>filled</td><td>sl 2696.71</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.02 01:00:00</td><td>3</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2584.12</td><td>2591.12</td><td>2551.12</td><td colspan="2">2025.01.20 01:00:00</td><td>canceled</td><td>The Gold Reaper_XAUUSD_3</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.21 01:00:00</td><td>12</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>2723.46</td><td>2716.46</td><td>2756.46</td><td colspan="2">2025.01.21 04:37:40</td><td>filled</td><td>The Gold Reaper_XAUUSD_3</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.21 08:35:40</td><td>13</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.01.21 08:35:40</td><td>filled</td><td>sl 2724.12</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.29 01:00:00</td><td>14</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>2784.64</td><td>2777.64</td><td>2817.64</td><td colspan="2">2025.01.30 15:42:40</td><td>filled</td><td>The Gold Reaper_XAUUSD_3</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.30 18:16:40</td><td>15</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.01.30 18:16:40</td><td>filled</td><td>sl 2793.21</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.20 01:00:00</td><td>11</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2584.12</td><td>2591.12</td><td>2551.12</td><td colspan="2">2025.02.07 01:00:00</td><td>canceled</td><td>The Gold Reaper_XAUUSD_3</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.02.14 01:00:00</td><td>16</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>2941.28</td><td>2934.28</td><td>2974.28</td><td colspan="2">2025.02.19 11:15:40</td><td>filled</td><td>The Gold Reaper_XAUUSD_3</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.02.19 13:38:40</td><td>17</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.02.19 13:38:40</td><td>filled</td><td>sl 2941.77</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.02.27 01:00:00</td><td>18</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>2954.88</td><td>2947.88</td><td>2987.88</td><td colspan="2">2025.02.27 23:58:59</td><td>canceled</td><td>The Gold Reaper_XAUUSD_3</td></tr>
+   <tr>
+      <td nowrap style="height: 10px"></td>
+   </tr>
+   <tr align="center">
+      <th colspan="13" style="height: 25px"><div style="font: 10pt Tahoma"><b>Deals</b></div></th>
+   </tr>
+   <tr align="center" bgcolor="#E5F0FC">
+      <td nowrap style="height: 30px"><b>Time</b></td>
+      <td nowrap><b>Deal</b></td>
+      <td nowrap><b>Symbol</b></td>
+      <td nowrap><b>Type</b></td>
+      <td nowrap><b>Direction</b></td>
+      <td nowrap><b>Volume</b></td>
+      <td nowrap><b>Price</b></td>
+      <td nowrap><b>Order</b></td>
+      <td nowrap><b>Commission</b></td>
+      <td nowrap><b>Swap</b></td>
+      <td nowrap><b>Profit</b></td>
+      <td nowrap><b>Balance</b></td>
+      <td nowrap><b>Comment</b></td>
+   </tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.02 00:00:00</td><td>1</td><td></td><td>balance</td><td></td><td></td><td></td><td></td><td>0.00</td><td>0.00</td><td>100 000.00</td><td>100 000.00</td><td></td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.08 16:03:40</td><td>2</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>2663.85</td><td>4</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 000.00</td><td>The Gold Reaper_XAUUSD_3</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.08 19:28:40</td><td>3</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>2664.80</td><td>6</td><td>0.00</td><td>0.00</td><td>0.95</td><td>100 000.95</td><td>sl 2664.80</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.16 01:04:40</td><td>4</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>2696.71</td><td>7</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 000.95</td><td>The Gold Reaper_XAUUSD_3</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.16 02:17:40</td><td>5</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>2696.71</td><td>8</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 000.95</td><td>The Gold Reaper_XAUUSD_3</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.16 03:53:40</td><td>6</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>2696.71</td><td>9</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 000.95</td><td>sl 2696.71</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.16 03:53:40</td><td>7</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>2696.71</td><td>10</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 000.95</td><td>sl 2696.71</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.21 04:37:40</td><td>8</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>2723.46</td><td>12</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 000.95</td><td>The Gold Reaper_XAUUSD_3</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.21 08:35:40</td><td>9</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>2724.12</td><td>13</td><td>0.00</td><td>0.00</td><td>0.66</td><td>100 001.61</td><td>sl 2724.12</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.30 15:42:40</td><td>10</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>2784.64</td><td>14</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 001.61</td><td>The Gold Reaper_XAUUSD_3</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.30 18:16:40</td><td>11</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>2793.21</td><td>15</td><td>0.00</td><td>0.00</td><td>8.57</td><td>100 010.18</td><td>sl 2793.21</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.02.19 11:15:40</td><td>12</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>2941.28</td><td>16</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 010.18</td><td>The Gold Reaper_XAUUSD_3</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.02.19 13:38:40</td><td>13</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>2941.77</td><td>17</td><td>0.00</td><td>0.00</td><td>0.49</td><td>100 010.67</td><td>sl 2941.77</td></tr>
+   <tr align="right">
+      <td nowrap colspan="8" style="height: 30px"></td>
+      <td nowrap><b>0.00</b></td>
+      <td nowrap><b>0.00</b></td>
+      <td nowrap><b>10.67</b></td>
+      <td nowrap><b>100 010.67</b></td>
+      <td nowrap></td>
+   </tr>
+   <tr>
+      <td nowrap style="height: 10px"></td>
+   </tr>
+</table>
+</div>
+</body>
+</html>

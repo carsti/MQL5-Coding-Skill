@@ -4,7 +4,7 @@ For multi-identifier reviews, MCP 1.3.0 adds `mql5_chm_lookup_identifiers`: 1 to
 
 A Windows Codex skill for building, reviewing, compiling, testing, explaining, and debugging MetaTrader 5 MQL5 programs. It uses the installed [MQL5 CHM MCP](https://github.com/shamwi2846/MQL5-CHM-MCP) as the first authority for MQL5 API and language facts.
 
-The current versioned package is **v1.0.2**. Use an explicit [published release](https://github.com/shamwi2846/MQL5-Coding-Skill/releases) for repeatable installation and updates. The trusted `scripts/Update-Mql5Skill.ps1` verifies the authenticated GitHub asset digest, source commit, manifest and every file before publishing the new skill contents. It retains a complete backup and supports verified rollback, including the first upgrade from an unversioned installation. Version 1.0.1 preserves the skill root so a running Codex directory watcher does not block updates. See [commands, recovery and trust limits](skills/mql5-coding/references/releases.md).
+This checkout prepares **v1.1.0**, including the reusable analysis toolkit. Local delivery uses a reviewed source commit, a reproducible package, and the verified offline updater; this work does not publish a GitHub release. For online installation, select an explicit [published release](https://github.com/shamwi2846/MQL5-Coding-Skill/releases). The trusted `scripts/Update-Mql5Skill.ps1` verifies source identity, the manifest, every file, and the archive digest before replacing skill contents. It retains a complete backup and supports verified rollback. See [commands, recovery and trust limits](skills/mql5-coding/references/releases.md).
 
 The skill covers Expert Advisors, indicators, scripts, services, libraries, `.mq5`, `.mqh`, and `.ex5` files. It intentionally excludes MQL4 and MetaTrader 4.
 
@@ -37,6 +37,10 @@ Use `-Json` for structured output and `-ReportPath '<new-report.json>'` to retai
 Compiler discovery requires editor file major version 5 and rejects directories containing a non-MT5 terminal, including mixed MT4/MT5 installations. Standalone editors also need an explicit MetaEditor 5 description.
 
 ## Documentation and compilation
+
+The [reusable toolkit](skills/mql5-coding/references/toolkit.md) adds one standard-library Python analysis CLI (`report read/compare`, `includes inventory/compare`, `profile read/compare`), a PowerShell journal processor, and a sequential scenario controller. It reuses current profiles, compiler receipts, tester execution, process cleanup, and redaction. Native statistics, execution status, evidence linkage, comparison conditions, and explicit expectations remain separate. Conditional helpers are selected only when useful.
+
+Focused review, performance, and refactoring references extend the existing guidance. Scenario/comparison templates live under `assets/`, alongside a small assertion include and nontrading self-test EA. Genuine sanitized MT5 trading/no-trade reports and native MetaEditor profiler exports live under `tests/fixtures/` with provenance. They are validation inputs, not extra MCP tools.
 
 Save each EA's entrypoints, include directory, MetaEditor, and optional terminal/preset/tester settings with `New-Mql5ProjectProfile.ps1`. Use `Invoke-Mql5Project.ps1` to validate resolved paths, compile all or one saved entrypoint, or delegate a selected tester action. Project-relative paths survive moving the EA folder and its profile together. Trusted receipts/hashes and output paths remain separate per-run inputs. Execution requires no separate acknowledgement; the old switch remains optional for command compatibility. See [commands and limitations](skills/mql5-coding/references/project-profiles.md).
 
@@ -168,6 +172,8 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Pro
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-SkillReleases.ps1
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-SkillReleases.ps1
 ```
+
+Run `python -B -m unittest discover -s tests -p 'test_toolkit*.py' -v` and `tests/Test-Toolkit.ps1 -PythonPath <existing-python.exe>` under both supported PowerShell versions. The latter exercises native owned-process orchestration with synthetic executables and reuses the real profile validator. `tests/evaluate_toolkit.py` records fixed-scope comparisons with and without helpers; it reports correctness, commands, retries, elapsed time, output bytes, processing code, and unavailable token measurements without claiming general savings. See [evaluation cases](tests/evaluation-cases.json).
 
 CI uses an isolated Python 3.12 x64 environment and installs `PyYAML==6.0.3` from `.github/requirements-ci.txt`, which locks the expected wheel hash. The local shared environment was also validated with Python 3.13. Do not modify a global Python environment solely to run repository validation. A real MetaEditor or MT5 fixture run is separate from these synthetic suites and follows the skill's compilation and tester workflow.
 

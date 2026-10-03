@@ -1,0 +1,1304 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+  <head>
+    <title>Strategy Tester Report</title>
+    <meta name="generator" content="strategy tester">
+    <style type="text/css">
+    <!--
+    @media screen {
+      td { font: 8pt  Tahoma,Arial; }
+      th { font: 10pt Tahoma,Arial; }
+    }
+    @media print {
+      td { font: 7pt Tahoma,Arial; }
+      th { font: 9pt Tahoma,Arial; }
+    }
+    .msdate { mso-number-format:"General Date"; }
+    .mspt   { mso-number-format:\#\,\#\#0\.00;  }
+    body {margin:1px;}
+    //-->
+    </style>
+  </head>
+<body>
+<div align="center">
+<table cellspacing="1" cellpadding="3" border="0">
+   <tr align="center">
+      <td colspan="13"><div style="font: 14pt Tahoma"><b>Strategy Tester Report</b><br></div></td>
+   </tr>
+   <tr align="center">
+      <td colspan="13"><div style="font: 10pt Tahoma"><b>Fixture-Server (Build 6235)</b><br></div></td>
+   </tr>
+   <tr>
+      <td nowrap style="height: 10px"></td>
+    </tr>
+   <tr>
+      <td colspan="13" align="center"><div style="font: 10pt Tahoma"><b>Settings</b></div></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Expert:</td>
+      <td nowrap colspan="10" align="left"><b>FixtureMixedTrades</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Symbol:</td>
+      <td nowrap colspan="10" align="left"><b>XAUUSD</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Period:</td>
+      <td nowrap colspan="10" align="left"><b>Daily (2025.01.12 - 2026.04.18)</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Inputs:</td>
+      <td nowrap colspan="10" align="left"><b>Info Panel=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>ForceChartSettings=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>PrintDebugLogs=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>ShowInfoPanel=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>UpdateInfoPanelDuringTesting=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Variable Values Settings=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Default_ATR_value=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>VV_ATR_Period=30</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>VV_ATR_Timeframe=16408</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>default_price_for_calculation=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Volatility Breakout Entry=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>VB_Timeframe_to_monitor=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>VB_number_of_Candles_to_Monitor=1</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>VB_Minimum_Candle_Size_pips=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>VB_ATR_Period=21</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>VB_ATR_Timeframe=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>VB_Deviation_factor=2.4</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>VB_Max_number_of_open_trades=1</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Slippage_Deviation_Points=10</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Spread Filter=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>SpreadFilter=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>MaxSpread=3.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>DistForSpreadFilter=2</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>News Filter=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Enable_News_Filter=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>News_Currencies=USD</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>News_Keywords=CPI,FOMC,Payrolls</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Auto_Detect_Symbol_Currency=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Include_High_Impact_News=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Block_Trading_Before_News=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Minutes_Before_News=100</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Block_Trading_After_News=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Minutes_After_News=60</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Open_Trades_During_News=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Other Exit Settings=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>CloseAtDistanceSL=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Set_SLTP_after_entry=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Use_Virtual_SL=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>hard_SL_distance_when_using_virtual_SL=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Move_hard_SL_to_virtual_SL_after_X_seconds=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Breakout Support/Resistance Entry=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>AllowBuyTrades=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>AllowSellTrades=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Run_Strategy=1</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>BSR_Timeframe_to_use=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>BSR_Entry_Timing=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>BSR_candles_LEFT_of_HL=2</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>BSR_candles_RIGHT_of_HL=2</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>BSR_max_candles_in_history=250</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>BSR_min_distance_from_HL=90.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>BSR_min_distance_pct=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>BSR_Extra_pips_above_High=20.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>BSR_Extra_pips_below_Low=40.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>BSR_Retest_Trigger_Distance=20.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>BSR_Max_Pending_Orders_Per_Side=1</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>BSR_max_open_trades=1</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>BSR_Min_distance_between_orders=1.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>BSR_expiration_hours=205</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Virtual_expiration=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>MagicNumber=1000</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Comment_for_trades=FixtureMixedTrades</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Trade Exit Settings=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Exit_Period_to_check=1</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Exit_check_every_tick=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>OHLC_Exit_Consistency_Mode=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Exit_initial_stoploss=1150.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Exit_initial_takeprofit=1300.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Trailing SL Management=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Trail_SL_distance=750.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Trail_SL_start_distance=250.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Trail_SL_stop_distance=100000.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Trail_SL_step_size=0.4</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Trailing TP Management=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Trail_TP_distance=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Trail_TP_start_distance=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Break-Even SL Management=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Breakeven_start_distance=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Breakeven_extra_distance=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>High/Low Trailing SL Settings=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Use_only_until_break_even=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Exit_HL_trailingSL_timeframe=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>number_of_candles_to_use=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>number_of_inferior_candles_to_the_LEFT_of_High_Low=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>number_of_inferior_candles_to_the_RIGHT_of_High_Low=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>minimum_distance_to_current_price=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>minimum_distance_to_last_SL=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>extra_pips_distance_from_HIGH_LOW=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>HL_Trail_Pivot_Padding_Pips=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Recovery Trailing SL Based on Time=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Trail_SL_start_after_X_minutes=90.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Recovery_Trail_SL_Distance=750.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Magic Trail SL Settings=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>MagicTrail_mode=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Magic_Trail_start_pips=0.1</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>number_of_ticks_before_modifications=1</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Magic_Trail_step_pips=0.1</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>extra_pips_for_breakeven_stop=1.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Magic_Trail_delay_minutes=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Magic_Trail_delayed_start_pips=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Slippage-Aware Trailing SL Settings=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Use_slippage_aware_trailing_SL=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Slippage_trailing_trigger=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Slippage_trailing_start_distance=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Slippage_trailing_SL_distance=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Slippage_trailing_max_distance_from_entry=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Prop Firm Settings=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Close_all_trades_stop_trading_at_min_equity=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Close_all_trades_stop_trading_at_max_equity=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Max_Daily_Drawdown=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>PropFirm_Daily_Reset_Hour=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Max_Randomization_pips_for_entry_and_exit=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Lot Size Settings=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Force_Fixed_Manual_Balance=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Adjust_lotsize_to_Variable_Values=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Risk=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>manual_lotsize=0.01</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Max_Risk_Per_Trade_pct=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Max_Risk_Per_Trade_currency=100.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>LotsizeStep=500.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>maximum_lotsize_per_trade=99.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Use_Equity_Instead_of_Balance=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>OnlyUp=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Custom Optimization Settings=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Optimization_reachability_filter=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Optimization_force_SL_gte_TP=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Optimization_force_trailing_SL_locks_profit=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Optimization_force_trailing_SL_before_TP=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Optimization_force_trailing_SL_step_lt_distance=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Optimization_force_BE_extra_lt_BE_start=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Optimization_force_BE_extra_lt_TP=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Optimization_force_trailing_TP_tightens_at_start=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Optimization_min_TP_SL_ratio=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Optimization_max_TP_SL_ratio=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>opt_expected_payoff=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>opt_recovery_factor=0.0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>opt_number_of_trades=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Fake Breakout Filter=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Fake_Breakout_PreEntry_Mode=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Fake_Breakout_PostFill_Mode=1</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Filter_A_Timeframe=1</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Enable_Filter_A=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Filter_B_Timeframe=5</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Enable_Filter_B=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Filter_C_Timeframe=15</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Enable_Filter_C=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Filter_D_Timeframe=30</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Enable_Filter_D=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Filter_E_Timeframe=16385</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Enable_Filter_E=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>MA Trend Confirmation=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Enable_MA_Trend_Confirmation=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Trend_MA_Period=50</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Trend_MA_Timeframe=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Trading Hours=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>UseTradingTimeZones=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>RangeStartHour=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>RangeStartMinute=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>RangeEndHour=23</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>RangeEndMinute=59</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>CloseAtCloseTime=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>ClosePositionsHour=20</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>ClosePositionsMinute=0</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>Friday Close Hour=</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>EnableFridayCloseHour=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>FridayStopHour=23</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>FridayStopMinute=59</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>FridayDeletePendingOrders=true</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="10" align="left"><b>FridayCloseOpenTrades=false</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3" >Company:</td>
+      <td nowrap colspan="10" align="left"><b>MetaQuotes Ltd.</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3" >Currency:</td>
+      <td nowrap colspan="10" align="left"><b>USD</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3" >Initial Deposit:</td>
+      <td nowrap colspan="10" align="left"><b>100 000.00</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3" >Leverage:</td>
+      <td nowrap colspan="10" align="left"><b>1:100</b></td>
+   </tr>
+   <tr>
+      <td nowrap style="height: 10px"></td>
+    </tr>
+   <tr>
+      <td colspan="13" align="center"><div style="font: 10pt Tahoma"><b>Results</b></div></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">History Quality:</td>
+      <td nowrap><b>99%</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Bars:</td>
+      <td nowrap><b>326</b></td>
+      <td nowrap colspan="3">Ticks:</td>
+      <td nowrap><b>1776587</b></td>
+      <td nowrap colspan="3">Symbols:</td>
+      <td nowrap colspan="2"><b>1</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Total Net Profit:</td>
+      <td nowrap><b>120.86</b></td>
+      <td nowrap colspan="3">Balance Drawdown Absolute:</td>
+      <td nowrap><b>4.43</b></td>
+      <td nowrap colspan="3">Equity Drawdown Absolute:</td>
+      <td nowrap colspan="2"><b>10.37</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Gross Profit:</td>
+      <td nowrap><b>267.84</b></td>
+      <td nowrap colspan="3">Balance Drawdown Maximal:</td>
+      <td nowrap><b>34.50 (0.03%)</b></td>
+      <td nowrap colspan="3">Equity Drawdown Maximal:</td>
+      <td nowrap colspan="2"><b>44.24 (0.04%)</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Gross Loss:</td>
+      <td nowrap><b>-146.98</b></td>
+      <td nowrap colspan="3">Balance Drawdown Relative:</td>
+      <td nowrap><b>0.03% (34.50)</b></td>
+      <td nowrap colspan="3">Equity Drawdown Relative:</td>
+      <td nowrap colspan="2"><b>0.04% (44.24)</b></td>
+   </tr>
+   <tr>
+      <td nowrap style="height: 10px"></td>
+    </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Profit Factor:</td>
+      <td nowrap><b>1.82</b></td>
+      <td nowrap colspan="3">Expected Payoff:</td>
+      <td nowrap><b>2.20</b></td>
+      <td nowrap colspan="3">Margin Level:</td>
+      <td nowrap colspan="2"><b>190625.37%</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Recovery Factor:</td>
+      <td nowrap><b>2.73</b></td>
+      <td nowrap colspan="3">Sharpe Ratio:</td>
+      <td nowrap><b>4.26</b></td>
+      <td nowrap colspan="3">Z-Score:</td>
+      <td nowrap colspan="2"><b>0.06 (4.78%)</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">AHPR:</td>
+      <td nowrap><b>1.0000 (0.00%)</b></td>
+      <td nowrap colspan="3">LR Correlation:</td>
+      <td nowrap><b>0.93</b></td>
+      <td nowrap colspan="3">OnTester result:</td>
+      <td nowrap colspan="2"><b>10.94320499753314</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">GHPR:</td>
+      <td nowrap><b>1.0000 (0.00%)</b></td>
+      <td nowrap colspan="3">LR Standard Error:</td>
+      <td nowrap><b>11.48</b></td>
+      <td nowrap colspan="3"></td>
+      <td nowrap colspan="2"><b></b></td>
+   </tr>
+   <tr>
+      <td nowrap style="height: 10px"></td>
+    </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Total Trades:</td>
+      <td nowrap><b>55</b></td>
+      <td nowrap colspan="3">Short Trades (won %):</td>
+      <td nowrap><b>17 (47.06%)</b></td>
+      <td nowrap colspan="3">Long Trades (won %):</td>
+      <td nowrap colspan="2"><b>38 (57.89%)</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Total Deals:</td>
+      <td nowrap><b>110</b></td>
+      <td nowrap colspan="3">Profit Trades (% of total):</td>
+      <td nowrap><b>30 (54.55%)</b></td>
+      <td nowrap colspan="3">Loss Trades (% of total):</td>
+      <td nowrap colspan="2"><b>25 (45.45%)</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="4"></td>
+      <td nowrap colspan="3">Largest profit trade:</td>
+      <td nowrap><b>13.00</b></td>
+      <td nowrap colspan="3">Largest loss trade:</td>
+      <td nowrap colspan="2"><b>-11.50</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="4"></td>
+      <td nowrap colspan="3">Average profit trade:</td>
+      <td nowrap><b>8.93</b></td>
+      <td nowrap colspan="3">Average loss trade:</td>
+      <td nowrap colspan="2"><b>-5.88</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="4"></td>
+      <td nowrap colspan="3">Maximum consecutive wins ($):</td>
+      <td nowrap><b>5 (54.01)</b></td>
+      <td nowrap colspan="3">Maximum consecutive losses ($):</td>
+      <td nowrap colspan="2"><b>3 (-34.50)</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="4"></td>
+      <td nowrap colspan="3">Maximal consecutive profit (count):</td>
+      <td nowrap><b>54.01 (5)</b></td>
+      <td nowrap colspan="3">Maximal consecutive loss (count):</td>
+      <td nowrap colspan="2"><b>-34.50 (3)</b></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="4"></td>
+      <td nowrap colspan="3">Average consecutive wins:</td>
+      <td nowrap><b>2</b></td>
+      <td nowrap colspan="3">Average consecutive losses:</td>
+      <td nowrap colspan="2"><b>2</b></td>
+   </tr>
+   <tr align="right">
+      <td colspan="13" style="height: 10px"></td>
+   </tr>
+   <tr align="center">
+      <th colspan="13"><img src="CodexSmokeReport-20261003T163124Z-8a4dc3a3db09.png" title="Balance graph" width=820 height=200 border=0 alt="Graph"></th>
+   </tr>
+   <tr align="right">
+      <td colspan="13" style="height: 10px"></td>
+   </tr>
+   <tr align="center">
+      <th colspan="13"><img src="CodexSmokeReport-20261003T163124Z-8a4dc3a3db09-hst.png" width=860 height=400 border=0 alt="Graph"></th>
+   </tr>
+   <tr align="right">
+      <td colspan="13" style="height: 10px"></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Correlation (Profits,MFE):</td>
+      <td nowrap><b>0.84</b></td>
+      <td nowrap colspan="3">Correlation (Profits,MAE):</td>
+      <td nowrap><b>0.67</b></td>
+      <td nowrap colspan="3">Correlation (MFE,MAE):</td>
+      <td nowrap colspan="2"><b>0.5375</b></td>
+   </tr>
+   <tr align="center">
+      <th colspan="13"><img src="CodexSmokeReport-20261003T163124Z-8a4dc3a3db09-mfemae.png" width=860 height=400 border=0 alt="Graph"></th>
+   </tr>
+   <tr align="right">
+      <td colspan="13" style="height: 10px"></td>
+   </tr>
+   <tr align="right">
+      <td nowrap colspan="3">Minimal position holding time:</td>
+      <td nowrap><b>0:00:20</b></td>
+      <td nowrap colspan="3">Maximal position holding time:</td>
+      <td nowrap><b>11:09:00</b></td>
+      <td nowrap colspan="3">Average position holding time:</td>
+      <td nowrap colspan="2"><b>1:09:24</b></td>
+   </tr>
+   <tr align="center">
+      <th colspan="13"><img src="CodexSmokeReport-20261003T163124Z-8a4dc3a3db09-holding.png" width=860 height=200 border=0 alt="Graph"></th>
+   </tr>
+   <tr align="right">
+      <td colspan="13" style="height: 10px"></td>
+   </tr>
+</table>
+<table cellspacing="1" cellpadding="3" border="0">
+   <tr>
+      <td style="width: 90px;height: 10px"></td>
+      <td style="width: 40px;"></td>
+      <td style="width: 60px;"></td>
+      <td style="width: 60px;"></td>
+      <td style="width: 60px;"></td>
+      <td style="width: 60px;"></td>
+      <td style="width: 60px;"></td>
+      <td style="width: 70px;"></td>
+      <td style="width: 70px;"></td>
+      <td style="width: 60px;"></td>
+      <td style="width: 60px;"></td>
+      <td style="width: 60px;"></td>
+      <td style="width: 100px;"></td>
+   </tr>
+   <tr align="center">
+      <th colspan="13" style="height: 25px"><div style="font: 10pt Tahoma"><b>Orders</b></div></th>
+   </tr>
+   <tr align="center" bgcolor="#E5F0FC">
+      <td nowrap style="height: 30px"><b>Open Time</b></td>
+      <td nowrap><b>Order</b></td>
+      <td nowrap><b>Symbol</b></td>
+      <td nowrap><b>Type</b></td>
+      <td nowrap colspan="2"><b>Volume</b></td>
+      <td nowrap><b>Price</b></td>
+      <td nowrap><b>S / L</b></td>
+      <td nowrap><b>T / P</b></td>
+      <td nowrap colspan="2"><b>Time</b></td>
+      <td nowrap><b>State</b></td>
+      <td nowrap><b>Comment</b></td>
+   </tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.13 01:00:00</td><td>2</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>2726.35</td><td>2714.85</td><td>2739.35</td><td colspan="2">2025.01.15 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.15 01:00:00</td><td>4</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>2698.21</td><td>2686.71</td><td>2711.21</td><td colspan="2">2025.01.16 02:23:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.16 07:31:20</td><td>5</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.01.16 07:31:20</td><td>filled</td><td>sl 2693.78</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.16 07:31:20</td><td>6</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>2726.35</td><td>2714.85</td><td>2739.35</td><td colspan="2">2025.01.21 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.21 01:00:00</td><td>7</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>2724.96</td><td>2713.46</td><td>2737.96</td><td colspan="2">2025.01.21 04:39:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.21 10:15:40</td><td>8</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.01.21 10:15:40</td><td>filled</td><td>sl 2725.01</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.13 01:00:00</td><td>3</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2614.05</td><td>2625.55</td><td>2601.05</td><td colspan="2">2025.01.21 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.21 14:00:00</td><td>10</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2614.05</td><td>2625.55</td><td>2601.05</td><td colspan="2">2025.01.23 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.21 10:15:40</td><td>9</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>2790.29</td><td>2778.79</td><td>2803.29</td><td colspan="2">2025.01.29 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.23 01:00:00</td><td>11</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2688.86</td><td>2700.36</td><td>2675.86</td><td colspan="2">2025.01.30 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.29 01:00:00</td><td>12</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>2786.14</td><td>2774.64</td><td>2799.14</td><td colspan="2">2025.01.30 15:58:20</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.30 18:28:40</td><td>14</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.01.30 18:28:40</td><td>filled</td><td>sl 2790.63</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.30 01:00:00</td><td>13</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2730.08</td><td>2741.58</td><td>2717.08</td><td colspan="2">2025.02.07 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.02.07 14:00:00</td><td>15</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2730.08</td><td>2741.58</td><td>2717.08</td><td colspan="2">2025.02.17 01:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.02.14 01:00:00</td><td>16</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>2942.78</td><td>2931.28</td><td>2955.78</td><td colspan="2">2025.02.19 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.02.19 01:00:00</td><td>18</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>2940.26</td><td>2928.76</td><td>2953.26</td><td colspan="2">2025.02.19 11:15:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.02.19 13:49:40</td><td>19</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.02.19 13:49:40</td><td>filled</td><td>sl 2939.29</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.02.17 01:00:00</td><td>17</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2730.08</td><td>2741.58</td><td>2717.08</td><td colspan="2">2025.02.25 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.02.25 14:00:00</td><td>20</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2730.08</td><td>2741.58</td><td>2717.08</td><td colspan="2">2025.03.05 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.02.27 01:00:00</td><td>21</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>2956.38</td><td>2944.88</td><td>2969.38</td><td colspan="2">2025.03.07 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.03.07 14:00:00</td><td>23</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>2956.38</td><td>2944.88</td><td>2969.38</td><td colspan="2">2025.03.12 00:05:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.03.12 00:05:00</td><td>24</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>2930.53</td><td>2919.03</td><td>2943.53</td><td colspan="2">2025.03.12 18:08:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.03.12 21:25:40</td><td>25</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.03.12 21:25:40</td><td>filled</td><td>sl 2933.13</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.03.05 01:00:00</td><td>22</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2832.17</td><td>2843.67</td><td>2819.17</td><td colspan="2">2025.03.13 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.03.12 21:25:40</td><td>26</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>2956.38</td><td>2944.88</td><td>2969.38</td><td colspan="2">2025.03.13 16:36:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.03.13 16:49:40</td><td>28</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.03.13 16:49:40</td><td>filled</td><td>tp 2969.38</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.03.13 14:00:00</td><td>27</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2832.17</td><td>2843.67</td><td>2819.17</td><td colspan="2">2025.03.14 00:05:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.03.14 00:05:00</td><td>29</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2879.86</td><td>2891.36</td><td>2866.86</td><td colspan="2">2025.03.24 00:05:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.03.24 00:05:00</td><td>30</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2879.86</td><td>2891.36</td><td>2866.86</td><td colspan="2">2025.03.26 00:05:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.03.25 00:05:00</td><td>31</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>3057.46</td><td>3045.96</td><td>3070.46</td><td colspan="2">2025.03.27 16:39:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.03.28 03:48:40</td><td>33</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.03.28 03:48:40</td><td>filled</td><td>tp 3070.46</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.03.26 00:05:00</td><td>32</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2999.15</td><td>3010.65</td><td>2986.15</td><td colspan="2">2025.04.03 13:05:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.04.03 13:05:00</td><td>34</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0.01</td><td>2999.15</td><td>3010.65</td><td>2986.15</td><td colspan="2">2025.04.07 01:06:20</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.04.07 01:06:40</td><td>35</td><td>XAUUSD</td><td>buy</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.04.07 01:06:40</td><td>filled</td><td>sl 3010.65</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.04.07 01:06:40</td><td>36</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2879.86</td><td>2891.36</td><td>2866.86</td><td colspan="2">2025.04.10 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.04.08 01:00:00</td><td>37</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>3167.93</td><td>3156.43</td><td>3180.93</td><td colspan="2">2025.04.10 18:26:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.04.10 18:34:20</td><td>39</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.04.10 18:34:20</td><td>filled</td><td>sl 3163.22</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.04.10 01:00:00</td><td>38</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2955.86</td><td>2967.36</td><td>2942.86</td><td colspan="2">2025.04.21 01:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.04.21 01:00:00</td><td>40</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2955.86</td><td>2967.36</td><td>2942.86</td><td colspan="2">2025.04.28 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.04.28 01:00:00</td><td>42</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0.01</td><td>3259.58</td><td>3271.08</td><td>3246.58</td><td colspan="2">2025.05.01 03:24:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.05.01 03:36:20</td><td>43</td><td>XAUUSD</td><td>buy</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.05.01 03:36:20</td><td>filled</td><td>tp 3246.58</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.04.25 01:00:00</td><td>41</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>3500.18</td><td>3488.68</td><td>3513.18</td><td colspan="2">2025.05.05 01:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.05.01 03:36:20</td><td>44</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2955.86</td><td>2967.36</td><td>2942.86</td><td colspan="2">2025.05.06 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.05.05 01:00:00</td><td>45</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>3500.18</td><td>3488.68</td><td>3513.18</td><td colspan="2">2025.05.12 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.05.06 01:00:00</td><td>46</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3201.51</td><td>3213.01</td><td>3188.51</td><td colspan="2">2025.05.14 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.05.14 14:00:00</td><td>48</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0.01</td><td>3201.51</td><td>3213.01</td><td>3188.51</td><td colspan="2">2025.05.14 15:38:20</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.05.14 15:48:40</td><td>49</td><td>XAUUSD</td><td>buy</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.05.14 15:48:40</td><td>filled</td><td>sl 3197.73</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.05.14 15:48:40</td><td>50</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>2955.86</td><td>2967.36</td><td>2942.86</td><td colspan="2">2025.05.20 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.05.12 01:00:00</td><td>47</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>3438.05</td><td>3426.55</td><td>3451.05</td><td colspan="2">2025.05.20 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.05.20 14:00:00</td><td>52</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>3438.05</td><td>3426.55</td><td>3451.05</td><td colspan="2">2025.05.28 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.05.20 01:00:00</td><td>51</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3120.38</td><td>3131.88</td><td>3107.38</td><td colspan="2">2025.05.28 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.05.28 01:00:00</td><td>53</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>3366.07</td><td>3354.57</td><td>3379.07</td><td colspan="2">2025.06.02 16:43:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.06.02 18:26:40</td><td>55</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.06.02 18:26:40</td><td>filled</td><td>sl 3370.86</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.05.28 14:00:00</td><td>54</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3120.38</td><td>3131.88</td><td>3107.38</td><td colspan="2">2025.06.03 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.06.02 18:26:40</td><td>56</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>3438.05</td><td>3426.55</td><td>3451.05</td><td colspan="2">2025.06.10 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.06.03 01:00:00</td><td>57</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3245.12</td><td>3256.62</td><td>3232.12</td><td colspan="2">2025.06.11 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.06.11 14:00:00</td><td>59</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3245.12</td><td>3256.62</td><td>3232.12</td><td colspan="2">2025.06.12 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.06.10 01:00:00</td><td>58</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>3403.53</td><td>3392.03</td><td>3416.53</td><td colspan="2">2025.06.13 03:07:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.06.13 03:14:40</td><td>61</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.06.13 03:14:40</td><td>filled</td><td>sl 3404.13</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.06.13 03:14:40</td><td>62</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>3438.05</td><td>3426.55</td><td>3451.05</td><td colspan="2">2025.06.13 05:33:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.06.13 06:08:40</td><td>63</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.06.13 06:08:40</td><td>filled</td><td>sl 3436.30</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.06.13 06:08:40</td><td>64</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>3500.18</td><td>3488.68</td><td>3513.18</td><td colspan="2">2025.06.19 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.06.12 01:00:00</td><td>60</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3293.21</td><td>3304.71</td><td>3280.21</td><td colspan="2">2025.06.20 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.06.19 01:00:00</td><td>65</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>3451.43</td><td>3439.93</td><td>3464.43</td><td colspan="2">2025.06.26 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.06.20 14:00:00</td><td>66</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3293.21</td><td>3304.71</td><td>3280.21</td><td colspan="2">2025.06.27 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.06.27 01:00:00</td><td>68</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0.01</td><td>3295.10</td><td>3306.60</td><td>3282.10</td><td colspan="2">2025.06.27 06:53:20</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.06.27 08:19:20</td><td>69</td><td>XAUUSD</td><td>buy</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.06.27 08:19:20</td><td>filled</td><td>sl 3297.31</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.06.27 08:19:20</td><td>70</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3245.12</td><td>3256.62</td><td>3232.12</td><td colspan="2">2025.07.03 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.06.26 01:00:00</td><td>67</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>3396.90</td><td>3385.40</td><td>3409.90</td><td colspan="2">2025.07.04 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.07.04 14:00:00</td><td>72</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>3396.90</td><td>3385.40</td><td>3409.90</td><td colspan="2">2025.07.08 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.07.08 01:00:00</td><td>73</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>3365.94</td><td>3354.44</td><td>3378.94</td><td colspan="2">2025.07.11 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.07.11 01:00:00</td><td>74</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>3345.96</td><td>3334.46</td><td>3358.96</td><td colspan="2">2025.07.11 13:27:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.07.03 01:00:00</td><td>71</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3248.08</td><td>3259.58</td><td>3235.08</td><td colspan="2">2025.07.11 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.07.11 16:25:20</td><td>76</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.07.11 16:25:20</td><td>filled</td><td>sl 3350.37</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.07.11 16:25:20</td><td>77</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>3365.94</td><td>3354.44</td><td>3378.94</td><td colspan="2">2025.07.11 18:19:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.07.11 19:18:40</td><td>78</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.07.11 19:18:40</td><td>filled</td><td>sl 3354.44</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.07.11 14:00:00</td><td>75</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3248.08</td><td>3259.58</td><td>3235.08</td><td colspan="2">2025.07.14 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.07.11 19:18:40</td><td>79</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>3396.90</td><td>3385.40</td><td>3409.90</td><td colspan="2">2025.07.21 01:05:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.07.21 01:05:00</td><td>81</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>3377.68</td><td>3366.18</td><td>3390.68</td><td colspan="2">2025.07.21 15:18:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.07.21 16:45:40</td><td>82</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.07.21 16:45:40</td><td>filled</td><td>tp 3390.68</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.07.21 16:45:40</td><td>83</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>3396.90</td><td>3385.40</td><td>3409.90</td><td colspan="2">2025.07.21 17:25:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.07.21 20:10:40</td><td>84</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.07.21 20:10:40</td><td>filled</td><td>sl 3393.28</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.07.14 01:00:00</td><td>80</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3282.37</td><td>3293.87</td><td>3269.37</td><td colspan="2">2025.07.22 01:05:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.07.21 20:10:40</td><td>85</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>3451.43</td><td>3439.93</td><td>3464.43</td><td colspan="2">2025.07.28 01:05:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.07.22 01:05:00</td><td>86</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0.01</td><td>3309.50</td><td>3321.00</td><td>3296.50</td><td colspan="2">2025.07.28 16:53:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.07.28 17:15:40</td><td>88</td><td>XAUUSD</td><td>buy</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.07.28 17:15:40</td><td>filled</td><td>sl 3309.90</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.07.28 17:15:40</td><td>89</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0.01</td><td>3282.37</td><td>3293.87</td><td>3269.37</td><td colspan="2">2025.07.30 21:52:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.07.30 22:37:40</td><td>90</td><td>XAUUSD</td><td>buy</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.07.30 22:37:40</td><td>filled</td><td>tp 3269.37</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.07.30 22:37:40</td><td>91</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3248.08</td><td>3259.58</td><td>3235.08</td><td colspan="2">2025.08.04 01:05:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.07.28 01:05:00</td><td>87</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>3438.97</td><td>3427.47</td><td>3451.97</td><td colspan="2">2025.08.05 14:05:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.08.04 01:05:00</td><td>92</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3267.77</td><td>3279.27</td><td>3254.77</td><td colspan="2">2025.08.12 14:05:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.08.05 14:05:00</td><td>93</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>3438.97</td><td>3427.47</td><td>3451.97</td><td colspan="2">2025.08.13 01:05:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.08.13 01:05:00</td><td>95</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>3409.04</td><td>3397.54</td><td>3422.04</td><td colspan="2">2025.08.19 01:05:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.08.12 14:05:00</td><td>94</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3267.77</td><td>3279.27</td><td>3254.77</td><td colspan="2">2025.08.21 03:05:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.08.19 01:05:00</td><td>96</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>3375.01</td><td>3363.51</td><td>3388.01</td><td colspan="2">2025.08.22 17:47:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.08.22 18:46:40</td><td>98</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.08.22 18:46:40</td><td>filled</td><td>sl 3370.95</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.08.21 03:05:00</td><td>97</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3267.77</td><td>3279.27</td><td>3254.77</td><td colspan="2">2025.08.25 01:05:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.08.22 18:46:40</td><td>99</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>3409.04</td><td>3397.54</td><td>3422.04</td><td colspan="2">2025.08.28 16:51:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.08.28 18:21:40</td><td>101</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.08.28 18:21:40</td><td>filled</td><td>sl 3405.73</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.08.28 18:21:40</td><td>102</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>3438.97</td><td>3427.47</td><td>3451.97</td><td colspan="2">2025.08.29 17:32:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.08.29 20:49:40</td><td>103</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.08.29 20:49:40</td><td>filled</td><td>sl 3442.16</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.08.29 20:49:40</td><td>104</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>3451.43</td><td>3439.93</td><td>3464.43</td><td colspan="2">2025.08.29 22:50:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.09.01 02:43:20</td><td>105</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.09.01 02:43:20</td><td>filled</td><td>sl 3444.72</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.09.01 02:43:20</td><td>106</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>3500.18</td><td>3488.68</td><td>3513.18</td><td colspan="2">2025.09.02 04:43:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.09.02 04:49:40</td><td>107</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.09.02 04:49:40</td><td>filled</td><td>sl 3497.68</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.08.25 01:05:00</td><td>100</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3311.15</td><td>3322.65</td><td>3298.15</td><td colspan="2">2025.09.02 14:05:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.09.02 14:05:00</td><td>108</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3311.15</td><td>3322.65</td><td>3298.15</td><td colspan="2">2025.09.11 03:05:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.09.12 01:00:00</td><td>110</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>3674.32</td><td>3662.82</td><td>3687.32</td><td colspan="2">2025.09.15 18:50:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.09.15 19:39:40</td><td>111</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.09.15 19:39:40</td><td>filled</td><td>sl 3677.70</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.09.11 03:05:00</td><td>109</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3311.15</td><td>3322.65</td><td>3298.15</td><td colspan="2">2025.09.16 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.09.22 01:00:00</td><td>113</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>3707.62</td><td>3696.12</td><td>3720.62</td><td colspan="2">2025.09.22 09:34:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.09.22 10:06:40</td><td>114</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.09.22 10:06:40</td><td>filled</td><td>sl 3712.19</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.09.16 01:00:00</td><td>112</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3613.11</td><td>3624.61</td><td>3600.11</td><td colspan="2">2025.09.23 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.09.26 01:00:00</td><td>116</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>3791.38</td><td>3779.88</td><td>3804.38</td><td colspan="2">2025.09.29 05:20:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.09.29 05:47:40</td><td>117</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.09.29 05:47:40</td><td>filled</td><td>sl 3789.17</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.09.23 01:00:00</td><td>115</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3627.38</td><td>3638.88</td><td>3614.38</td><td colspan="2">2025.10.01 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.10.01 14:00:00</td><td>118</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3627.38</td><td>3638.88</td><td>3614.38</td><td colspan="2">2025.10.10 03:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.10.13 01:00:00</td><td>120</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>4059.45</td><td>4047.95</td><td>4072.45</td><td colspan="2">2025.10.13 02:09:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.10.13 02:14:40</td><td>121</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.10.13 02:14:40</td><td>filled</td><td>sl 4047.95</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.10.10 03:00:00</td><td>119</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3627.38</td><td>3638.88</td><td>3614.38</td><td colspan="2">2025.10.20 01:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.10.20 01:00:00</td><td>122</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3627.38</td><td>3638.88</td><td>3614.38</td><td colspan="2">2025.10.27 00:05:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.10.27 00:05:00</td><td>124</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0.01</td><td>4003.82</td><td>4015.32</td><td>3990.82</td><td colspan="2">2025.10.27 16:08:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.10.27 16:17:40</td><td>125</td><td>XAUUSD</td><td>buy</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.10.27 16:17:40</td><td>filled</td><td>tp 3990.82</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.10.27 16:17:40</td><td>126</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3627.38</td><td>3638.88</td><td>3614.38</td><td colspan="2">2025.10.31 00:05:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.10.23 01:00:00</td><td>123</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>4381.73</td><td>4370.23</td><td>4394.73</td><td colspan="2">2025.10.31 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.10.31 14:00:00</td><td>128</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>4381.73</td><td>4370.23</td><td>4394.73</td><td colspan="2">2025.11.05 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.10.31 00:05:00</td><td>127</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3886.22</td><td>3897.72</td><td>3873.22</td><td colspan="2">2025.11.07 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.11.05 01:00:00</td><td>129</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>4046.54</td><td>4035.04</td><td>4059.54</td><td colspan="2">2025.11.10 03:23:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.11.10 03:53:40</td><td>131</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.11.10 03:53:40</td><td>filled</td><td>sl 4045.08</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.11.07 01:00:00</td><td>130</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3928.50</td><td>3940.00</td><td>3915.50</td><td colspan="2">2025.11.17 01:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.11.10 03:53:40</td><td>132</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>4381.73</td><td>4370.23</td><td>4394.73</td><td colspan="2">2025.11.18 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.11.17 01:00:00</td><td>133</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3928.50</td><td>3940.00</td><td>3915.50</td><td colspan="2">2025.11.21 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.11.18 01:00:00</td><td>134</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>4245.59</td><td>4234.09</td><td>4258.59</td><td colspan="2">2025.11.24 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.11.24 01:00:00</td><td>136</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>4132.66</td><td>4121.16</td><td>4145.66</td><td colspan="2">2025.11.24 22:37:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.11.25 01:12:40</td><td>137</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.11.25 01:12:40</td><td>filled</td><td>sl 4130.91</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.11.21 01:00:00</td><td>135</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>3997.96</td><td>4009.46</td><td>3984.96</td><td colspan="2">2025.11.26 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.11.25 01:12:40</td><td>138</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>4245.59</td><td>4234.09</td><td>4258.59</td><td colspan="2">2025.12.01 03:54:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.12.01 04:10:40</td><td>140</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.12.01 04:10:40</td><td>filled</td><td>sl 4247.60</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.12.01 04:10:40</td><td>141</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>4381.73</td><td>4370.23</td><td>4394.73</td><td colspan="2">2025.12.04 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.11.26 01:00:00</td><td>139</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4022.21</td><td>4033.71</td><td>4009.21</td><td colspan="2">2025.12.04 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.12.04 01:00:00</td><td>142</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>4264.83</td><td>4253.33</td><td>4277.83</td><td colspan="2">2025.12.10 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.12.10 01:00:00</td><td>144</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>4259.30</td><td>4247.80</td><td>4272.30</td><td colspan="2">2025.12.11 17:51:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.12.11 18:48:40</td><td>145</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.12.11 18:48:40</td><td>filled</td><td>tp 4272.30</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.12.04 14:00:00</td><td>143</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4022.21</td><td>4033.71</td><td>4009.21</td><td colspan="2">2025.12.12 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.12.11 18:48:40</td><td>146</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>4381.73</td><td>4370.23</td><td>4394.73</td><td colspan="2">2025.12.17 01:04:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.12.17 01:03:30</td><td>148</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>4353.71</td><td>4342.21</td><td>4366.71</td><td colspan="2">2025.12.18 18:11:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.12.18 18:13:40</td><td>149</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.12.18 18:13:40</td><td>filled</td><td>tp 4366.71</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.12.12 01:00:00</td><td>147</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4169.87</td><td>4181.37</td><td>4156.87</td><td colspan="2">2025.12.22 01:04:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.12.18 18:13:40</td><td>150</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>4381.73</td><td>4370.23</td><td>4394.73</td><td colspan="2">2025.12.22 03:40:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.12.22 05:50:40</td><td>152</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2025.12.22 05:50:40</td><td>filled</td><td>tp 4394.73</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.12.22 01:04:00</td><td>151</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4169.87</td><td>4181.37</td><td>4156.87</td><td colspan="2">2025.12.30 14:04:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.12.30 14:04:00</td><td>153</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4169.87</td><td>4181.37</td><td>4156.87</td><td colspan="2">2026.01.06 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.12.31 01:00:00</td><td>154</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>4550.12</td><td>4538.62</td><td>4563.12</td><td colspan="2">2026.01.08 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.01.08 14:00:00</td><td>156</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>4550.12</td><td>4538.62</td><td>4563.12</td><td colspan="2">2026.01.12 02:07:20</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.01.12 02:18:40</td><td>157</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.01.12 02:18:40</td><td>filled</td><td>tp 4563.12</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.01.06 01:00:00</td><td>155</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4274.09</td><td>4285.59</td><td>4261.09</td><td colspan="2">2026.01.13 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.01.19 01:00:00</td><td>159</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>4643.11</td><td>4631.61</td><td>4656.11</td><td colspan="2">2026.01.19 01:02:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.01.19 01:03:00</td><td>160</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.01.19 01:03:00</td><td>filled</td><td>sl 4631.61</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.01.13 01:00:00</td><td>158</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4407.33</td><td>4418.83</td><td>4394.33</td><td colspan="2">2026.01.21 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.01.21 01:00:00</td><td>161</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4536.45</td><td>4547.95</td><td>4523.45</td><td colspan="2">2026.01.29 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.01.29 14:00:00</td><td>162</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0.01</td><td>4536.45</td><td>4547.95</td><td>4523.45</td><td colspan="2">2026.02.02 07:49:20</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.02.02 07:49:40</td><td>163</td><td>XAUUSD</td><td>buy</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.02.02 07:49:40</td><td>filled</td><td>sl 4547.95</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.02.02 07:49:40</td><td>164</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0.01</td><td>4407.33</td><td>4418.83</td><td>4394.33</td><td colspan="2">2026.02.02 08:38:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.02.02 08:39:40</td><td>165</td><td>XAUUSD</td><td>buy</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.02.02 08:39:40</td><td>filled</td><td>sl 4418.83</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.02.02 08:39:40</td><td>166</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4274.09</td><td>4285.59</td><td>4261.09</td><td colspan="2">2026.02.05 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.02.03 01:00:00</td><td>167</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>5598.23</td><td>5586.73</td><td>5611.23</td><td colspan="2">2026.02.09 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.02.05 01:00:00</td><td>168</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4401.74</td><td>4413.24</td><td>4388.74</td><td colspan="2">2026.02.11 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.02.09 01:00:00</td><td>169</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>5092.14</td><td>5080.64</td><td>5105.14</td><td colspan="2">2026.02.11 12:44:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.02.11 12:55:20</td><td>171</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.02.11 12:55:20</td><td>filled</td><td>sl 5092.24</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.02.11 12:55:20</td><td>172</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>5598.23</td><td>5586.73</td><td>5611.23</td><td colspan="2">2026.02.16 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.02.11 01:00:00</td><td>170</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4654.87</td><td>4666.37</td><td>4641.87</td><td colspan="2">2026.02.17 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.02.17 01:00:00</td><td>174</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0.01</td><td>4878.31</td><td>4889.81</td><td>4865.31</td><td colspan="2">2026.02.17 07:31:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.02.17 07:32:40</td><td>175</td><td>XAUUSD</td><td>buy</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.02.17 07:32:40</td><td>filled</td><td>tp 4865.31</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.02.17 07:32:40</td><td>176</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4654.87</td><td>4666.37</td><td>4641.87</td><td colspan="2">2026.02.20 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.02.16 01:00:00</td><td>173</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>5119.33</td><td>5107.83</td><td>5132.33</td><td colspan="2">2026.02.23 01:04:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.02.23 01:08:40</td><td>178</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.02.23 01:08:40</td><td>filled</td><td>tp 5132.33</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.02.23 01:08:40</td><td>179</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>5598.23</td><td>5586.73</td><td>5611.23</td><td colspan="2">2026.02.27 03:17:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.02.27 03:17:00</td><td>180</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>5249.96</td><td>5238.46</td><td>5262.96</td><td colspan="2">2026.02.27 18:11:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.02.27 18:20:40</td><td>181</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.02.27 18:20:40</td><td>filled</td><td>sl 5249.88</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.02.20 01:00:00</td><td>177</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4841.08</td><td>4852.58</td><td>4828.08</td><td colspan="2">2026.03.02 01:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.02.27 18:20:40</td><td>182</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>5598.23</td><td>5586.73</td><td>5611.23</td><td colspan="2">2026.03.05 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.02 01:00:00</td><td>183</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4841.08</td><td>4852.58</td><td>4828.08</td><td colspan="2">2026.03.06 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.06 01:00:00</td><td>185</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4995.57</td><td>5007.07</td><td>4982.57</td><td colspan="2">2026.03.12 00:05:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.05 01:00:00</td><td>184</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>5419.46</td><td>5407.96</td><td>5432.46</td><td colspan="2">2026.03.13 00:05:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.12 00:05:00</td><td>186</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0.01</td><td>5014.31</td><td>5025.81</td><td>5001.31</td><td colspan="2">2026.03.13 21:47:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.13 21:55:40</td><td>188</td><td>XAUUSD</td><td>buy</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.03.13 21:55:40</td><td>filled</td><td>sl 5017.36</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.13 21:55:40</td><td>189</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0.01</td><td>4995.57</td><td>5007.07</td><td>4982.57</td><td colspan="2">2026.03.16 01:20:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.16 01:22:40</td><td>190</td><td>XAUUSD</td><td>buy</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.03.16 01:22:40</td><td>filled</td><td>tp 4982.57</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.16 01:22:40</td><td>191</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0.01</td><td>4841.08</td><td>4852.58</td><td>4828.08</td><td colspan="2">2026.03.18 15:16:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.18 15:20:40</td><td>192</td><td>XAUUSD</td><td>buy</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.03.18 15:20:40</td><td>filled</td><td>sl 4852.58</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.18 15:20:40</td><td>193</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0.01</td><td>4654.87</td><td>4666.37</td><td>4641.87</td><td colspan="2">2026.03.19 13:50:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.19 14:01:40</td><td>194</td><td>XAUUSD</td><td>buy</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.03.19 14:01:40</td><td>filled</td><td>tp 4641.87</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.13 00:05:00</td><td>187</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>5238.75</td><td>5227.25</td><td>5251.75</td><td colspan="2">2026.03.23 00:05:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.19 14:01:40</td><td>195</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0.01</td><td>4401.74</td><td>4413.24</td><td>4388.74</td><td colspan="2">2026.03.23 02:34:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.23 02:35:40</td><td>197</td><td>XAUUSD</td><td>buy</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.03.23 02:35:40</td><td>filled</td><td>tp 4388.74</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.23 02:35:40</td><td>198</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0.01</td><td>4274.09</td><td>4285.59</td><td>4261.09</td><td colspan="2">2026.03.23 08:07:20</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.23 08:14:40</td><td>199</td><td>XAUUSD</td><td>buy</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.03.23 08:14:40</td><td>filled</td><td>sl 4285.59</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.23 08:14:40</td><td>200</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0.01</td><td>4169.87</td><td>4181.37</td><td>4156.87</td><td colspan="2">2026.03.23 08:47:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.23 08:48:40</td><td>201</td><td>XAUUSD</td><td>buy</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.03.23 08:48:40</td><td>filled</td><td>sl 4181.37</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.23 08:48:40</td><td>202</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4022.21</td><td>4033.71</td><td>4009.21</td><td colspan="2">2026.03.26 00:05:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.23 00:05:00</td><td>196</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>5238.75</td><td>5227.25</td><td>5251.75</td><td colspan="2">2026.03.30 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.30 01:00:00</td><td>204</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>4602.66</td><td>4591.16</td><td>4615.66</td><td colspan="2">2026.03.31 04:41:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.31 04:43:40</td><td>205</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.03.31 04:43:40</td><td>filled</td><td>tp 4615.66</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.26 00:05:00</td><td>203</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4098.13</td><td>4109.63</td><td>4085.13</td><td colspan="2">2026.04.06 01:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.31 04:43:40</td><td>206</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>5238.75</td><td>5227.25</td><td>5251.75</td><td colspan="2">2026.04.08 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.04.08 01:00:00</td><td>208</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>4800.65</td><td>4789.15</td><td>4813.65</td><td colspan="2">2026.04.08 01:54:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.04.08 01:56:40</td><td>209</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.04.08 01:56:40</td><td>filled</td><td>tp 4813.65</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.04.08 01:56:40</td><td>210</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>5238.75</td><td>5227.25</td><td>5251.75</td><td colspan="2">2026.04.13 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.04.06 01:00:00</td><td>207</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4098.13</td><td>4109.63</td><td>4085.13</td><td colspan="2">2026.04.14 14:00:00</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.04.13 01:00:00</td><td>211</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0.01</td><td>4857.91</td><td>4846.41</td><td>4870.91</td><td colspan="2">2026.04.15 04:16:40</td><td>filled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.04.15 04:17:40</td><td>213</td><td>XAUUSD</td><td>sell</td><td colspan="2">0.01 / 0.01</td><td>0.00</td><td></td><td></td><td colspan="2">2026.04.15 04:17:40</td><td>filled</td><td>tp 4870.91</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.04.14 14:00:00</td><td>212</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4098.13</td><td>4109.63</td><td>4085.13</td><td colspan="2">2026.04.16 01:00:20</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.04.16 01:00:00</td><td>215</td><td>XAUUSD</td><td>sell stop</td><td colspan="2">0.01 / 0</td><td>4584.92</td><td>4596.42</td><td>4571.92</td><td colspan="2">2026.04.17 22:59:59</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.04.15 04:17:40</td><td>214</td><td>XAUUSD</td><td>buy stop</td><td colspan="2">0.01 / 0</td><td>5238.75</td><td>5227.25</td><td>5251.75</td><td colspan="2">2026.04.17 22:59:59</td><td>canceled</td><td>FixtureMixedTrades</td></tr>
+   <tr>
+      <td nowrap style="height: 10px"></td>
+   </tr>
+   <tr align="center">
+      <th colspan="13" style="height: 25px"><div style="font: 10pt Tahoma"><b>Deals</b></div></th>
+   </tr>
+   <tr align="center" bgcolor="#E5F0FC">
+      <td nowrap style="height: 30px"><b>Time</b></td>
+      <td nowrap><b>Deal</b></td>
+      <td nowrap><b>Symbol</b></td>
+      <td nowrap><b>Type</b></td>
+      <td nowrap><b>Direction</b></td>
+      <td nowrap><b>Volume</b></td>
+      <td nowrap><b>Price</b></td>
+      <td nowrap><b>Order</b></td>
+      <td nowrap><b>Commission</b></td>
+      <td nowrap><b>Swap</b></td>
+      <td nowrap><b>Profit</b></td>
+      <td nowrap><b>Balance</b></td>
+      <td nowrap><b>Comment</b></td>
+   </tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.12 00:00:00</td><td>1</td><td></td><td>balance</td><td></td><td></td><td></td><td></td><td>0.00</td><td>0.00</td><td>100 000.00</td><td>100 000.00</td><td></td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.16 02:23:40</td><td>2</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>2698.21</td><td>4</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 000.00</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.16 07:31:20</td><td>3</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>2693.78</td><td>5</td><td>0.00</td><td>0.00</td><td>-4.43</td><td>99 995.57</td><td>sl 2693.78</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.21 04:39:40</td><td>4</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>2724.96</td><td>7</td><td>0.00</td><td>0.00</td><td>0.00</td><td>99 995.57</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.21 10:15:40</td><td>5</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>2725.01</td><td>8</td><td>0.00</td><td>0.00</td><td>0.05</td><td>99 995.62</td><td>sl 2725.01</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.01.30 15:58:20</td><td>6</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>2786.14</td><td>12</td><td>0.00</td><td>0.00</td><td>0.00</td><td>99 995.62</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.01.30 18:28:40</td><td>7</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>2790.63</td><td>14</td><td>0.00</td><td>0.00</td><td>4.49</td><td>100 000.11</td><td>sl 2790.63</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.02.19 11:15:40</td><td>8</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>2940.26</td><td>18</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 000.11</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.02.19 13:49:40</td><td>9</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>2939.29</td><td>19</td><td>0.00</td><td>0.00</td><td>-0.97</td><td>99 999.14</td><td>sl 2939.29</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.03.12 18:08:40</td><td>10</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>2930.53</td><td>24</td><td>0.00</td><td>0.00</td><td>0.00</td><td>99 999.14</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.03.12 21:25:40</td><td>11</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>2933.13</td><td>25</td><td>0.00</td><td>0.00</td><td>2.60</td><td>100 001.74</td><td>sl 2933.13</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.03.13 16:36:40</td><td>12</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>2956.38</td><td>26</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 001.74</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.03.13 16:49:40</td><td>13</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>2969.38</td><td>28</td><td>0.00</td><td>0.00</td><td>13.00</td><td>100 014.74</td><td>tp 2969.38</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.03.27 16:39:40</td><td>14</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>3057.46</td><td>31</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 014.74</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.03.28 03:48:40</td><td>15</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>3070.46</td><td>33</td><td>0.00</td><td>-0.13</td><td>13.00</td><td>100 027.61</td><td>tp 3070.46</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.04.07 01:06:20</td><td>16</td><td>XAUUSD</td><td>sell</td><td>in</td><td>0.01</td><td>2999.15</td><td>34</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 027.61</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.04.07 01:06:40</td><td>17</td><td>XAUUSD</td><td>buy</td><td>out</td><td>0.01</td><td>3010.65</td><td>35</td><td>0.00</td><td>0.00</td><td>-11.50</td><td>100 016.11</td><td>sl 3010.65</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.04.10 18:26:40</td><td>18</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>3167.93</td><td>37</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 016.11</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.04.10 18:34:20</td><td>19</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>3163.22</td><td>39</td><td>0.00</td><td>0.00</td><td>-4.71</td><td>100 011.40</td><td>sl 3163.22</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.05.01 03:24:40</td><td>20</td><td>XAUUSD</td><td>sell</td><td>in</td><td>0.01</td><td>3259.58</td><td>42</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 011.40</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.05.01 03:36:20</td><td>21</td><td>XAUUSD</td><td>buy</td><td>out</td><td>0.01</td><td>3246.58</td><td>43</td><td>0.00</td><td>0.00</td><td>13.00</td><td>100 024.40</td><td>tp 3246.58</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.05.14 15:38:20</td><td>22</td><td>XAUUSD</td><td>sell</td><td>in</td><td>0.01</td><td>3201.51</td><td>48</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 024.40</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.05.14 15:48:40</td><td>23</td><td>XAUUSD</td><td>buy</td><td>out</td><td>0.01</td><td>3197.73</td><td>49</td><td>0.00</td><td>0.00</td><td>3.78</td><td>100 028.18</td><td>sl 3197.73</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.06.02 16:43:40</td><td>24</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>3366.07</td><td>53</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 028.18</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.06.02 18:26:40</td><td>25</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>3370.86</td><td>55</td><td>0.00</td><td>0.00</td><td>4.79</td><td>100 032.97</td><td>sl 3370.86</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.06.13 03:07:40</td><td>26</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>3403.53</td><td>58</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 032.97</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.06.13 03:14:40</td><td>27</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>3404.13</td><td>61</td><td>0.00</td><td>0.00</td><td>0.60</td><td>100 033.57</td><td>sl 3404.13</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.06.13 05:33:40</td><td>28</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>3438.05</td><td>62</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 033.57</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.06.13 06:08:40</td><td>29</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>3436.30</td><td>63</td><td>0.00</td><td>0.00</td><td>-1.75</td><td>100 031.82</td><td>sl 3436.30</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.06.27 06:53:20</td><td>30</td><td>XAUUSD</td><td>sell</td><td>in</td><td>0.01</td><td>3295.10</td><td>68</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 031.82</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.06.27 08:19:20</td><td>31</td><td>XAUUSD</td><td>buy</td><td>out</td><td>0.01</td><td>3297.31</td><td>69</td><td>0.00</td><td>0.00</td><td>-2.21</td><td>100 029.61</td><td>sl 3297.31</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.07.11 13:27:40</td><td>32</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>3345.96</td><td>74</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 029.61</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.07.11 16:25:20</td><td>33</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>3350.37</td><td>76</td><td>0.00</td><td>0.00</td><td>4.41</td><td>100 034.02</td><td>sl 3350.37</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.07.11 18:19:40</td><td>34</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>3365.94</td><td>77</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 034.02</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.07.11 19:18:40</td><td>35</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>3354.44</td><td>78</td><td>0.00</td><td>0.00</td><td>-11.50</td><td>100 022.52</td><td>sl 3354.44</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.07.21 15:18:40</td><td>36</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>3377.68</td><td>81</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 022.52</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.07.21 16:45:40</td><td>37</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>3390.68</td><td>82</td><td>0.00</td><td>0.00</td><td>13.00</td><td>100 035.52</td><td>tp 3390.68</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.07.21 17:25:40</td><td>38</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>3396.90</td><td>83</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 035.52</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.07.21 20:10:40</td><td>39</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>3393.28</td><td>84</td><td>0.00</td><td>0.00</td><td>-3.62</td><td>100 031.90</td><td>sl 3393.28</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.07.28 16:53:40</td><td>40</td><td>XAUUSD</td><td>sell</td><td>in</td><td>0.01</td><td>3309.50</td><td>86</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 031.90</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.07.28 17:15:40</td><td>41</td><td>XAUUSD</td><td>buy</td><td>out</td><td>0.01</td><td>3309.90</td><td>88</td><td>0.00</td><td>0.00</td><td>-0.40</td><td>100 031.50</td><td>sl 3309.90</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.07.30 21:52:40</td><td>42</td><td>XAUUSD</td><td>sell</td><td>in</td><td>0.01</td><td>3282.37</td><td>89</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 031.50</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.07.30 22:37:40</td><td>43</td><td>XAUUSD</td><td>buy</td><td>out</td><td>0.01</td><td>3269.37</td><td>90</td><td>0.00</td><td>0.00</td><td>13.00</td><td>100 044.50</td><td>tp 3269.37</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.08.22 17:47:40</td><td>44</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>3375.01</td><td>96</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 044.50</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.08.22 18:46:40</td><td>45</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>3370.95</td><td>98</td><td>0.00</td><td>0.00</td><td>-4.06</td><td>100 040.44</td><td>sl 3370.95</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.08.28 16:51:40</td><td>46</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>3409.04</td><td>99</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 040.44</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.08.28 18:21:40</td><td>47</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>3405.73</td><td>101</td><td>0.00</td><td>0.00</td><td>-3.31</td><td>100 037.13</td><td>sl 3405.73</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.08.29 17:32:40</td><td>48</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>3438.97</td><td>102</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 037.13</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.08.29 20:49:40</td><td>49</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>3442.16</td><td>103</td><td>0.00</td><td>0.00</td><td>3.19</td><td>100 040.32</td><td>sl 3442.16</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.08.29 22:50:40</td><td>50</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>3451.43</td><td>104</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 040.32</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.09.01 02:43:20</td><td>51</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>3444.72</td><td>105</td><td>0.00</td><td>-0.13</td><td>-6.71</td><td>100 033.48</td><td>sl 3444.72</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.09.02 04:43:40</td><td>52</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>3500.18</td><td>106</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 033.48</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.09.02 04:49:40</td><td>53</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>3497.68</td><td>107</td><td>0.00</td><td>0.00</td><td>-2.50</td><td>100 030.98</td><td>sl 3497.68</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.09.15 18:50:40</td><td>54</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>3674.32</td><td>110</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 030.98</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.09.15 19:39:40</td><td>55</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>3677.70</td><td>111</td><td>0.00</td><td>0.00</td><td>3.38</td><td>100 034.36</td><td>sl 3677.70</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.09.22 09:34:40</td><td>56</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>3707.62</td><td>113</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 034.36</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.09.22 10:06:40</td><td>57</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>3712.19</td><td>114</td><td>0.00</td><td>0.00</td><td>4.57</td><td>100 038.93</td><td>sl 3712.19</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.09.29 05:20:40</td><td>58</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>3791.38</td><td>116</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 038.93</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.09.29 05:47:40</td><td>59</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>3789.17</td><td>117</td><td>0.00</td><td>0.00</td><td>-2.21</td><td>100 036.72</td><td>sl 3789.17</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.10.13 02:09:40</td><td>60</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>4059.45</td><td>120</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 036.72</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.10.13 02:14:40</td><td>61</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>4047.95</td><td>121</td><td>0.00</td><td>0.00</td><td>-11.50</td><td>100 025.22</td><td>sl 4047.95</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.10.27 16:08:40</td><td>62</td><td>XAUUSD</td><td>sell</td><td>in</td><td>0.01</td><td>4003.82</td><td>124</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 025.22</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.10.27 16:17:40</td><td>63</td><td>XAUUSD</td><td>buy</td><td>out</td><td>0.01</td><td>3990.82</td><td>125</td><td>0.00</td><td>0.00</td><td>13.00</td><td>100 038.22</td><td>tp 3990.82</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.11.10 03:23:40</td><td>64</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>4046.54</td><td>129</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 038.22</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.11.10 03:53:40</td><td>65</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>4045.08</td><td>131</td><td>0.00</td><td>0.00</td><td>-1.46</td><td>100 036.76</td><td>sl 4045.08</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.11.24 22:37:40</td><td>66</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>4132.66</td><td>136</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 036.76</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.11.25 01:12:40</td><td>67</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>4130.91</td><td>137</td><td>0.00</td><td>-0.13</td><td>-1.75</td><td>100 034.88</td><td>sl 4130.91</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.12.01 03:54:40</td><td>68</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>4245.59</td><td>138</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 034.88</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.12.01 04:10:40</td><td>69</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>4247.60</td><td>140</td><td>0.00</td><td>0.00</td><td>2.01</td><td>100 036.89</td><td>sl 4247.60</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.12.11 17:51:40</td><td>70</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>4259.30</td><td>144</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 036.89</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.12.11 18:48:40</td><td>71</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>4272.30</td><td>145</td><td>0.00</td><td>0.00</td><td>13.00</td><td>100 049.89</td><td>tp 4272.30</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.12.18 18:11:40</td><td>72</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>4353.71</td><td>148</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 049.89</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.12.18 18:13:40</td><td>73</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>4366.71</td><td>149</td><td>0.00</td><td>0.00</td><td>13.00</td><td>100 062.89</td><td>tp 4366.71</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2025.12.22 03:40:40</td><td>74</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>4381.73</td><td>150</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 062.89</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2025.12.22 05:50:40</td><td>75</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>4394.73</td><td>152</td><td>0.00</td><td>0.00</td><td>13.00</td><td>100 075.89</td><td>tp 4394.73</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.01.12 02:07:20</td><td>76</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>4550.12</td><td>156</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 075.89</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.01.12 02:18:40</td><td>77</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>4563.12</td><td>157</td><td>0.00</td><td>0.00</td><td>13.00</td><td>100 088.89</td><td>tp 4563.12</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.01.19 01:02:40</td><td>78</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>4643.11</td><td>159</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 088.89</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.01.19 01:03:00</td><td>79</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>4631.61</td><td>160</td><td>0.00</td><td>0.00</td><td>-11.50</td><td>100 077.39</td><td>sl 4631.61</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.02.02 07:49:20</td><td>80</td><td>XAUUSD</td><td>sell</td><td>in</td><td>0.01</td><td>4536.45</td><td>162</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 077.39</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.02.02 07:49:40</td><td>81</td><td>XAUUSD</td><td>buy</td><td>out</td><td>0.01</td><td>4547.95</td><td>163</td><td>0.00</td><td>0.00</td><td>-11.50</td><td>100 065.89</td><td>sl 4547.95</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.02.02 08:38:40</td><td>82</td><td>XAUUSD</td><td>sell</td><td>in</td><td>0.01</td><td>4407.33</td><td>164</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 065.89</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.02.02 08:39:40</td><td>83</td><td>XAUUSD</td><td>buy</td><td>out</td><td>0.01</td><td>4418.83</td><td>165</td><td>0.00</td><td>0.00</td><td>-11.50</td><td>100 054.39</td><td>sl 4418.83</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.02.11 12:44:40</td><td>84</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>5092.14</td><td>169</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 054.39</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.02.11 12:55:20</td><td>85</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>5092.24</td><td>171</td><td>0.00</td><td>0.00</td><td>0.10</td><td>100 054.49</td><td>sl 5092.24</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.02.23 01:04:40</td><td>88</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>5119.33</td><td>173</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 054.49</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.02.17 07:31:40</td><td>86</td><td>XAUUSD</td><td>sell</td><td>in</td><td>0.01</td><td>4878.31</td><td>174</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 054.49</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.02.17 07:32:40</td><td>87</td><td>XAUUSD</td><td>buy</td><td>out</td><td>0.01</td><td>4865.31</td><td>175</td><td>0.00</td><td>0.00</td><td>13.00</td><td>100 067.49</td><td>tp 4865.31</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.02.23 01:08:40</td><td>89</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>5132.33</td><td>178</td><td>0.00</td><td>0.00</td><td>13.00</td><td>100 080.49</td><td>tp 5132.33</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.02.27 18:11:40</td><td>90</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>5249.96</td><td>180</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 080.49</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.02.27 18:20:40</td><td>91</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>5249.88</td><td>181</td><td>0.00</td><td>0.00</td><td>-0.08</td><td>100 080.41</td><td>sl 5249.88</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.13 21:47:40</td><td>92</td><td>XAUUSD</td><td>sell</td><td>in</td><td>0.01</td><td>5014.31</td><td>186</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 080.41</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.13 21:55:40</td><td>93</td><td>XAUUSD</td><td>buy</td><td>out</td><td>0.01</td><td>5017.36</td><td>188</td><td>0.00</td><td>0.00</td><td>-3.05</td><td>100 077.36</td><td>sl 5017.36</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.16 01:20:40</td><td>94</td><td>XAUUSD</td><td>sell</td><td>in</td><td>0.01</td><td>4995.57</td><td>189</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 077.36</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.16 01:22:40</td><td>95</td><td>XAUUSD</td><td>buy</td><td>out</td><td>0.01</td><td>4982.57</td><td>190</td><td>0.00</td><td>0.00</td><td>13.00</td><td>100 090.36</td><td>tp 4982.57</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.18 15:16:40</td><td>96</td><td>XAUUSD</td><td>sell</td><td>in</td><td>0.01</td><td>4841.08</td><td>191</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 090.36</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.18 15:20:40</td><td>97</td><td>XAUUSD</td><td>buy</td><td>out</td><td>0.01</td><td>4852.58</td><td>192</td><td>0.00</td><td>0.00</td><td>-11.50</td><td>100 078.86</td><td>sl 4852.58</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.19 13:50:40</td><td>98</td><td>XAUUSD</td><td>sell</td><td>in</td><td>0.01</td><td>4654.87</td><td>193</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 078.86</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.19 14:01:40</td><td>99</td><td>XAUUSD</td><td>buy</td><td>out</td><td>0.01</td><td>4641.87</td><td>194</td><td>0.00</td><td>0.00</td><td>13.00</td><td>100 091.86</td><td>tp 4641.87</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.23 02:34:40</td><td>100</td><td>XAUUSD</td><td>sell</td><td>in</td><td>0.01</td><td>4401.74</td><td>195</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 091.86</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.23 02:35:40</td><td>101</td><td>XAUUSD</td><td>buy</td><td>out</td><td>0.01</td><td>4388.74</td><td>197</td><td>0.00</td><td>0.00</td><td>13.00</td><td>100 104.86</td><td>tp 4388.74</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.23 08:07:20</td><td>102</td><td>XAUUSD</td><td>sell</td><td>in</td><td>0.01</td><td>4274.09</td><td>198</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 104.86</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.23 08:14:40</td><td>103</td><td>XAUUSD</td><td>buy</td><td>out</td><td>0.01</td><td>4285.59</td><td>199</td><td>0.00</td><td>0.00</td><td>-11.50</td><td>100 093.36</td><td>sl 4285.59</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.23 08:47:40</td><td>104</td><td>XAUUSD</td><td>sell</td><td>in</td><td>0.01</td><td>4169.87</td><td>200</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 093.36</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.23 08:48:40</td><td>105</td><td>XAUUSD</td><td>buy</td><td>out</td><td>0.01</td><td>4181.37</td><td>201</td><td>0.00</td><td>0.00</td><td>-11.50</td><td>100 081.86</td><td>sl 4181.37</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.03.31 04:41:40</td><td>106</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>4602.66</td><td>204</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 081.86</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.03.31 04:43:40</td><td>107</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>4615.66</td><td>205</td><td>0.00</td><td>0.00</td><td>13.00</td><td>100 094.86</td><td>tp 4615.66</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.04.08 01:54:40</td><td>108</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>4800.65</td><td>208</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 094.86</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.04.08 01:56:40</td><td>109</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>4813.65</td><td>209</td><td>0.00</td><td>0.00</td><td>13.00</td><td>100 107.86</td><td>tp 4813.65</td></tr>
+   <tr bgcolor="#F7F7F7" align=right><td>2026.04.15 04:16:40</td><td>110</td><td>XAUUSD</td><td>buy</td><td>in</td><td>0.01</td><td>4857.91</td><td>211</td><td>0.00</td><td>0.00</td><td>0.00</td><td>100 107.86</td><td>FixtureMixedTrades</td></tr>
+   <tr bgcolor="#FFFFFF" align=right><td>2026.04.15 04:17:40</td><td>111</td><td>XAUUSD</td><td>sell</td><td>out</td><td>0.01</td><td>4870.91</td><td>213</td><td>0.00</td><td>0.00</td><td>13.00</td><td>100 120.86</td><td>tp 4870.91</td></tr>
+   <tr align="right">
+      <td nowrap colspan="8" style="height: 30px"></td>
+      <td nowrap><b>0.00</b></td>
+      <td nowrap><b>-0.39</b></td>
+      <td nowrap><b>121.25</b></td>
+      <td nowrap><b>100 120.86</b></td>
+      <td nowrap></td>
+   </tr>
+   <tr>
+      <td nowrap style="height: 10px"></td>
+   </tr>
+</table>
+</div>
+</body>
+</html>

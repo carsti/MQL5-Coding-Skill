@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "profile_sha256": "63116d18b1b6f1244e220053e18f3f49b9976d093b97d9fcdfa3353272bd8239",
+  "source_identity": "NativeProfilerFixture.mq5",
+  "source_sha256": "6ed6c56096ac11b14aa8e4787935278443687c1d1de001df496646ba4c0bcd0a",
+  "workload": {
+    "rounds": 250,
+    "id": "deterministic-series-v1",
+    "fold_iterations": 100,
+    "mode": "real_data",
+    "series_iterations": 10000
+  },
+  "build_conditions": {
+    "environment_id": "e648a0e5319418c295f4ec6ae17d66441bba0553dc18a1f0e6fe380b0f1294c3",
+    "architecture": "x64",
+    "profiling_inlining": "disabled",
+    "metaeditor_build": 6235,
+    "profiling_optimizations": "enabled"
+  },
+  "notes": "Native export from the copied nontrading script; build options observed in MetaEditor. No elapsed measurement is inferred."
+}

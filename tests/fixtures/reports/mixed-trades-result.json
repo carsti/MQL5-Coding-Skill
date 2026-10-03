@@ -1,0 +1,36 @@
+{
+  "schema_version": 2,
+  "run_id": "fixture-mixed-trades",
+  "status": "engine_smoke_passed",
+  "inputs": {
+    "symbol": "XAUUSD",
+    "period": "Daily",
+    "from_date": "2025.01.12",
+    "to_date": "2026.04.18",
+    "model": 1,
+    "deposit": 100000,
+    "currency": "USD",
+    "leverage": 100,
+    "execution_mode": 0,
+    "expected_expert_sha256": "6082ba7aebd9d722363c6c9cb66b17052ab676bf079ab69703d07d0dc459225e",
+    "compilation_receipt": {
+      "source_sha256": "b76a38ebbb9ec3cc561a7d82f536bb344cc31bb9730dd77ee765816d63ed027c"
+    }
+  },
+  "artifacts": {
+    "report": {
+      "path": "mixed-trades.htm",
+      "byte_length": 243718,
+      "sha256": "ba420baa60c4a441664610e03995dac4334bd8d721b4d77de66eeab779d7b25c"
+    },
+    "preset": {
+      "sha256": "55047421c8787ca75bae825cb674fc34533f075379a9a3db89bd45baa4e526e4"
+    }
+  },
+  "binding": {
+    "terminal_image": {
+      "sha256": "6f2da9b6cf665cecdf1a8f250b56393bdf5241a5750f37924d34931a343c1957"
+    }
+  },
+  "fixture_derivation": "Sanitized report linkage; not a newly executed run"
+}

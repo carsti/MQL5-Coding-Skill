@@ -19,11 +19,13 @@ function Save-Json($Data,[string]$Path) {
 }
 function Copy-Data($Data) {return ($Data | ConvertTo-Json -Depth 8 | ConvertFrom-Json)}
 function Run([string]$Script,[hashtable]$Parameters) {
-    $argv=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $scripts $Script))
+    $command='[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false); $OutputEncoding=[Console]::OutputEncoding; & '+"'"+(Join-Path $scripts $Script).Replace("'","''")+"'"
     foreach ($key in @($Parameters.Keys | Sort-Object)) {
-        if ($Parameters[$key] -is [bool]) {if ($Parameters[$key]) {$argv+=@('-'+$key)};continue}
-        $argv+=@(('-'+$key),([string]$Parameters[$key]))
+        if ($Parameters[$key] -is [bool]) {if ($Parameters[$key]) {$command+=' -'+$key};continue}
+        $command+=' -'+$key+" '"+([string]$Parameters[$key]).Replace("'","''")+"'"
     }
+    $command+='; exit $LASTEXITCODE'
+    $argv=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))))
     $quoted=@($argv | ForEach-Object {
         if ($_ -notmatch '[\s"]') {$_} else {'"'+($_ -replace '(\\*)"','$1$1\"' -replace '(\\+)$','$1$1')+'"'}
     })
@@ -34,6 +36,8 @@ function Run([string]$Script,[hashtable]$Parameters) {
     $start.CreateNoWindow=$true
     $start.RedirectStandardOutput=$true
     $start.RedirectStandardError=$true
+    $start.StandardOutputEncoding=New-Object Text.UTF8Encoding($false)
+    $start.StandardErrorEncoding=New-Object Text.UTF8Encoding($false)
     $start.WorkingDirectory=$testRoot
     $process=New-Object Diagnostics.Process
     $process.StartInfo=$start
@@ -69,7 +73,7 @@ $environmentNames=@('FAKE_METAEDITOR_MODE','FAKE_METAEDITOR_ARGS_PATH','FAKE_MT5
 $originalEnvironment=@{}
 foreach ($name in $environmentNames) {$originalEnvironment[$name]=[Environment]::GetEnvironmentVariable($name)}
 try {
-    $project=Join-Path $testRoot 'EA project with spaces'
+    $project=Join-Path $testRoot ('EA project with spaces '+[char]0xe9)
     $install=Join-Path $testRoot 'install'
     $data=Join-Path $testRoot 'data'
     foreach ($dir in @($project,$install,(Join-Path $project 'include root'),(Join-Path $data 'MQL5\Experts'),(Join-Path $data 'MQL5\Profiles\Tester'),(Join-Path $data 'Tester\logs'),(Join-Path $data 'logs'))) {[IO.Directory]::CreateDirectory($dir) | Out-Null}
