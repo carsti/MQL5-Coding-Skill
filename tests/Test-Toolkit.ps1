@@ -113,6 +113,45 @@ try {
     $failedRead=ReadResult $failedObservations
     Check ($process.exit_code -eq 4 -and $failedRead.evidence_status -eq 'partial_segments' -and $failedRead.segments[0].status -eq 'processing_failed' -and $failedRead.segments[0].hash_verified -eq $true) 'Verified bytes with failed observation processing cannot become complete journal evidence'
 
+    $casePath=New-JournalCase 'case-distinct' "AA`t0`t10:00:01.000`tFixture`tSignalA ready`r`nBB`t0`t10:00:02.000`tFixture`tsignala ready`r`nCC`t0`t10:00:03.000`tfixture`tSignalA ready`r`n"
+    $caseOut=Join-Path $testRoot 'journal-case-distinct'
+    $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$casePath,'-OutputDirectory',$caseOut)
+    $caseRead=ReadResult $caseOut
+    Check ($process.exit_code -eq 0 -and $caseRead.groups.Count -eq 3 -and @($caseRead.groups | Where-Object {$_.count -ne 1}).Count -eq 0) 'Case-distinct redacted messages and components remain distinct groups'
+
+    $largePath=New-JournalCase 'budget-corrupt' ('x'*500)
+    $largeRun=Read-Mql5ReleaseJson $largePath
+    $largeRecord=$largeRun.evidence.terminal_journal.segments[0];$largeRecord.sha256='0'*64
+    $laterPath=New-JournalCase 'budget-later' "AA`t0`t10:00:04.000`tFixture`tlater message`r`n"
+    $laterRecord=(Read-Mql5ReleaseJson $laterPath).evidence.terminal_journal.segments[0]
+    $largeRun.evidence.terminal_journal.segments=@($largeRecord,$laterRecord)
+    $largeRun.evidence.terminal_journal.appended_byte_length=$largeRecord.byte_length+$laterRecord.byte_length
+    Save $largePath $largeRun
+    $budgetOut=Join-Path $testRoot 'journal-invalid-segment-budget'
+    $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$largePath,'-OutputDirectory',$budgetOut,'-MaxBytes','1024')
+    $budgetRead=ReadResult $budgetOut
+    Check ($process.exit_code -eq 4 -and $budgetRead.truncated -and $budgetRead.inspected_lines -eq 0 -and -not $budgetRead.segments[1].hash_verified -and $budgetRead.budgeted_bytes -eq $largeRecord.byte_length) 'Invalid segment buffers consume the budget before later segment reads'
+    $largeRun.evidence.terminal_journal.segments=@($largeRecord)
+    $largeRun.evidence.terminal_journal.appended_byte_length=$largeRecord.byte_length
+    $largeRun.evidence.terminal_journal.excerpts=@('fallback message should not fit')
+    Save $largePath $largeRun
+    $fallbackBudgetOut=Join-Path $testRoot 'journal-invalid-segment-fallback-budget'
+    $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$largePath,'-OutputDirectory',$fallbackBudgetOut,'-MaxBytes','1024')
+    $fallbackBudgetRead=ReadResult $fallbackBudgetOut
+    Check ($process.exit_code -eq 4 -and $fallbackBudgetRead.truncated -and $fallbackBudgetRead.inspected_lines -eq 0 -and $fallbackBudgetRead.budgeted_bytes -eq $largeRecord.byte_length) 'Invalid segment buffers also consume the fallback excerpt budget'
+
+    $jsonDriftScripts=Join-Path $testRoot 'json-drift-scripts';Copy-Item -LiteralPath $scripts -Destination $jsonDriftScripts -Recurse
+    $releasePath=Join-Path $jsonDriftScripts 'SkillRelease.ps1'
+    $releaseCode=[IO.File]::ReadAllText($releasePath)
+    $replacement='$parsed=($text | ConvertFrom-Json); if ($parsed.PSObject.Properties["evidence"]) {$changed=($text | ConvertFrom-Json);$changed.status="blocked";[IO.File]::WriteAllText($Path,($changed | ConvertTo-Json -Depth 12 -Compress),(New-Object Text.UTF8Encoding($false)))}; return $parsed'
+    if (-not $releaseCode.Contains('return ($text | ConvertFrom-Json)')) {throw 'JSON drift fixture anchor unavailable.'}
+    [IO.File]::WriteAllText($releasePath,$releaseCode.Replace('return ($text | ConvertFrom-Json)',$replacement),(New-Object Text.UTF8Encoding($false)))
+    $sourceBeforeHash=Get-Mql5ReleaseHash $casePath;$sourceBeforeLength=(Get-Item -LiteralPath $casePath).Length
+    $jsonDriftOut=Join-Path $testRoot 'journal-json-source-drift'
+    $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$casePath,'-OutputDirectory',$jsonDriftOut) $jsonDriftScripts
+    $jsonDriftRead=ReadResult $jsonDriftOut
+    Check ($process.exit_code -eq 0 -and $jsonDriftRead.recorded_run_status -eq 'engine_smoke_passed' -and $jsonDriftRead.source.sha256 -ceq $sourceBeforeHash -and $jsonDriftRead.source.byte_length -eq $sourceBeforeLength -and (Get-Mql5ReleaseHash $casePath) -cne $sourceBeforeHash) 'Journal JSON provenance fingerprints the consumed bytes despite a subsequent replacement'
+
     $install=Join-Path $testRoot 'install';$project=Join-Path $testRoot ('project '+[char]0xe9);$data=Join-Path $testRoot 'data'
     foreach ($dir in @($install,$project,(Join-Path $data 'MQL5'),(Join-Path $project 'Include'))) {[IO.Directory]::CreateDirectory($dir) | Out-Null}
     $csc=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'

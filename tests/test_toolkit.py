@@ -308,6 +308,42 @@ class ToolkitTests(unittest.TestCase):
         self.assertNotIn("bad.mqh", str(snap["dependencies"]))
         self.assertEqual(directives('/*\n#include "bad"\n*/\n#include <x> // comment\n'), [(4, "include", "<x>")])
 
+    def test_shared_source_changes_cannot_mix_dependency_versions(self):
+        root, external = self.project()
+        shared = external/"Shared.mqh"
+        late = external/"Late.mqh"
+        late.write_text('// independently shared dependency\n', encoding="utf-8")
+        original_read = Path.read_bytes
+        replaced = []
+
+        def read_then_change(path):
+            data = original_read(path)
+            if path == shared and not replaced:
+                shared.write_text('#include <Late.mqh>\n', encoding="utf-8")
+                replaced.append(True)
+            return data
+
+        with patch.object(Path, "read_bytes", read_then_change):
+            with self.assertRaisesRegex(InputError, "Source changed during inventory"):
+                inventory(root, [], [external])
+        self.assertTrue(replaced)
+        # A fresh inventory has both consumers of the independently specified
+        # dependency rather than mixing the old and new Shared.mqh declarations.
+        stable = inventory(root, [], [external])
+        self.assertEqual(stable["possible_consumers"][str(late)], [str(root/"A.mq5"), str(root/"B.mq5")])
+
+    def test_source_limit_includes_the_last_external_header(self):
+        root, external = self.root/"bounded-project", self.root/"bounded-standard"
+        root.mkdir(); external.mkdir()
+        (root/"Main.mq5").write_text('#include <External.mqh>\n', encoding="utf-8")
+        (root/"Unused.mqh").write_text('// inventoried project source\n', encoding="utf-8")
+        (external/"External.mqh").write_text('// reachable external source\n', encoding="utf-8")
+        # The two project files already fill this controlled budget. The final
+        # external header must not add a third source beyond that same limit.
+        with patch("toolkit_includes.MAX_SOURCE_FILES", 2):
+            with self.assertRaisesRegex(InputError, "bounded depth or file count"):
+                inventory(root, [], [external])
+
     def test_cycles_deleted_header_and_unknown_coverage(self):
         root, external = self.project()
         (external/"Shared.mqh").write_text('#include <Shared.mqh>\n', encoding="utf-8")

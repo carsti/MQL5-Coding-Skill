@@ -65,9 +65,17 @@ function Assert-Mql5ReleaseIntent($Intent,[string]$Target) {
         if ($Intent.restore_backup_id -isnot [string] -or $Intent.restore_backup_id -cnotmatch '\A[0-9a-f]{32}\z') {throw 'Invalid pending rollback intent.'}
     }
 }
-function Read-Mql5ReleaseJson([string]$Path) {
-    if ((Get-Item -LiteralPath $Path).Length -gt 1048576) {throw 'Release metadata is too large.'}
-    $text=[IO.File]::ReadAllText($Path,(New-Object Text.UTF8Encoding($false,$true)))
+function Read-Mql5ReleaseJson([string]$Path,[byte[]]$Bytes) {
+    if ($PSBoundParameters.ContainsKey('Bytes')) {
+        if ($null -eq $Bytes -or $Bytes.Length -gt 1048576) {throw 'Release metadata buffer is unavailable or too large.'}
+        # Reuse the same validator on a captured byte buffer. StreamReader's
+        # BOM detection preserves the existing ReadAllText encoding behavior.
+        $reader=[IO.StreamReader]::new([IO.MemoryStream]::new($Bytes,$false),(New-Object Text.UTF8Encoding($false,$true)),$true)
+        try {$text=$reader.ReadToEnd()} finally {$reader.Dispose()}
+    } else {
+        if ((Get-Item -LiteralPath $Path).Length -gt 1048576) {throw 'Release metadata is too large.'}
+        $text=[IO.File]::ReadAllText($Path,(New-Object Text.UTF8Encoding($false,$true)))
+    }
     # Refuse array roots before ConvertFrom-Json can unwrap a single element.
     if (-not $text.TrimStart().StartsWith('{')) {throw 'Release metadata must have a JSON object at its root.'}
     # Refuse duplicate, case-aliased and escaped JSON keys before ConvertFrom-Json.

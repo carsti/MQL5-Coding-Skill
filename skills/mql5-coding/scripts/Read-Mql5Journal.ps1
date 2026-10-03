@@ -13,8 +13,8 @@ $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'ToolkitSupport.ps1')
 . (Join-Path $PSScriptRoot 'TesterEvidence.ps1')
 $output=$null
-$result=[ordered]@{schema_version=1;operation='journal read';status='failed';source=$null;recorded_run_status=$null;evidence_status='unavailable';segments=@();groups=@();inspected_lines=0;matched_lines=0;grouped_lines=0;truncated=$false;filter_sha256=@();issues=@();limitations=@('Counts cover inspected evidence only. Patterns are observations, not proven causes.');exit_code=2}
-$groups=@{};$bytesUsed=0;$ranges=@{}
+$result=[ordered]@{schema_version=1;operation='journal read';status='failed';source=$null;recorded_run_status=$null;evidence_status='unavailable';segments=@();groups=@();inspected_lines=0;matched_lines=0;grouped_lines=0;budgeted_bytes=0;truncated=$false;filter_sha256=@();issues=@();limitations=@('Counts cover inspected evidence only. Patterns are observations, not proven causes.');exit_code=2}
+$groups=[Collections.Hashtable]::new([StringComparer]::Ordinal);$bytesUsed=0;$ranges=@{}
 function Protect-JournalObservationText([AllowEmptyString()][string]$Text) {
     if ($Text.Length -eq 0) {return ''}
     # Mask markers before generic redaction can rewrite the nonce, and apply
@@ -48,9 +48,10 @@ try {
     $output=New-ToolkitOutput $OutputDirectory
     if ($TesterResultPath -notmatch '^[A-Za-z]:[\\/]') {throw 'TesterResultPath must be absolute.'}
     $path=Resolve-ToolkitPath $TesterResultPath $PSScriptRoot
-    $run=Read-Mql5ReleaseJson $path
+    $snapshot=Read-ToolkitJsonEvidence $path
+    $run=$snapshot.value
     if (($run.schema_version -isnot [int] -and $run.schema_version -isnot [long]) -or $run.schema_version -ne 2 -or $run.status -isnot [string]) {throw 'Unsupported tester result.'}
-    $result.source=@{path=$path;sha256=(Get-Mql5ReleaseHash $path);byte_length=(Get-Item -LiteralPath $path).Length}
+    $result.source=$snapshot.source
     $result.recorded_run_status=$run.status
     foreach ($literal in $LiteralMessage) {
         if ([string]::IsNullOrEmpty($literal)) {throw 'Literal filters cannot be empty.'}
@@ -90,6 +91,9 @@ try {
                     }
                     $stream.Position=$segment.source_offset
                     $buffer=New-Object byte[] ([int]$segment.byte_length)
+                    # Charge attempted buffers before hashing/decoding, including
+                    # evidence that later fails integrity or observation checks.
+                    $bytesUsed+=$buffer.Length;$result.budgeted_bytes=$bytesUsed
                     $read=0
                     while ($read -lt $buffer.Length) {$got=$stream.Read($buffer,$read,$buffer.Length-$read);if ($got -eq 0) {throw 'Incomplete segment read.'};$read+=$got}
                 } finally {$stream.Dispose()}
@@ -100,7 +104,7 @@ try {
                 $ranges[$fileKey]+=@(@{start=$segment.source_offset;end=$segment.source_offset+$segment.byte_length})
                 $encoding=New-Object Text.UnicodeEncoding($false,$false,$true)
                 $text=$encoding.GetString($buffer)
-                $bytesUsed+=$buffer.Length;$recordedBytes+=$buffer.Length;$usable++
+                $recordedBytes+=$buffer.Length;$usable++
                 $record.status='hash_verified'
                 $record.ends_at_line_boundary=$text.Length -eq 0 -or $text.EndsWith("`n") -or $text.EndsWith("`r")
                 if (-not $record.starts_at_line_boundary -or -not $record.ends_at_line_boundary) {$result.truncated=$true}
@@ -124,7 +128,7 @@ try {
                 if ($result.inspected_lines -ge $MaxLines) {$result.truncated=$true;break}
                 $excerptBytes=[Text.Encoding]::Unicode.GetByteCount($excerpt)
                 if ($excerptBytes -gt ($MaxBytes-$bytesUsed)) {$result.truncated=$true;break}
-                $bytesUsed+=$excerptBytes
+                $bytesUsed+=$excerptBytes;$result.budgeted_bytes=$bytesUsed
                 $excerptIndex++
                 if ($excerpt.Length) {Add-JournalObservation $excerpt $kind $path -1 $excerptIndex $false}
             }

@@ -9,6 +9,8 @@ from pathlib import Path
 
 from toolkit_common import InputError, absolute, digest, read_json, source, version
 
+MAX_SOURCE_FILES = 10000
+
 
 def selected_entrypoint(value: str | Path) -> Path:
     path = Path(value)
@@ -129,8 +131,8 @@ def inventory(root: Path, entrypoints: list[Path], include_roots: list[Path], pr
             raise InputError("Entrypoints must be existing MQ5 files")
         if not entry.is_relative_to(root):
             raise InputError("Entrypoint is outside the selected project root")
-    files, edges, cycles, consumers = {}, [], [], {}
-    if len(all_sources) > 10000:
+    files, edges, cycles, consumers, consumed_sources = {}, [], [], {}, {}
+    if len(all_sources) > MAX_SOURCE_FILES:
         raise InputError("Source inventory exceeds 10000 files")
     for path in all_sources:
         if path.is_symlink():
@@ -152,7 +154,7 @@ def inventory(root: Path, entrypoints: list[Path], include_roots: list[Path], pr
                 return
             seen.add(identity)
             stack.append(identity)
-            if len(stack) > 128 or len(files) > 10000:
+            if len(stack) > 128 or (identity not in files and len(files) >= MAX_SOURCE_FILES):
                 raise InputError("Include graph exceeds bounded depth or file count")
             link = linked_component(path)
             if link is not None:
@@ -162,7 +164,11 @@ def inventory(root: Path, entrypoints: list[Path], include_roots: list[Path], pr
             data = path.read_bytes()
             if len(data) > 8 * 1024 * 1024:
                 raise InputError("Source exceeds 8 MiB")
-            files[identity] = source(path, data)
+            record = source(path, data)
+            if identity in consumed_sources and consumed_sources[identity] != record["sha256"]:
+                raise InputError("Source changed during inventory; retry with stable source files")
+            consumed_sources[identity] = record["sha256"]
+            files[identity] = record
             try:
                 declared = directives(source_text(data))
             except UnicodeError:

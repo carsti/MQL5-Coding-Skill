@@ -51,6 +51,8 @@ The snapshot records project source hashes, reachable external sources, declared
 
 Profile mode fingerprints the selected profile before calling the existing validator and checks it after validation and inventory. A changed profile stops the operation as invalid input. These boundary checks do not prove an atomic snapshot across concurrent changes.
 
+When a shared source is read for multiple entrypoints, its consumed hash must remain the same. A changed hash stops inventory as invalid input, preventing declarations from different source versions from sharing one recorded fingerprint. Retry after source edits finish. This check does not establish an atomic snapshot of the whole project.
+
 All ambiguous literal candidates are inventoried, including candidates in multiple standard roots and their transitive includes. They retain uncertain resolution and possible consumers. Comparisons reject malformed file identities, consumer arrays, and missing coverage rather than inventing affected entrypoints.
 
 Comparison uses exact absolute file identities and both snapshots' consumers, including deleted headers. Moved roots are disclosed and appear as removed/added files. An orphan source change has unknown consumer coverage. A snapshot is not proof of compiler consumption, runtime dependencies, or compilation success. Use affected entrypoints to select the existing compiler workflow.
@@ -62,6 +64,8 @@ Run `Read-Mql5Journal.ps1 -TesterResultPath <absolute-smoke-result.json> -Output
 Groups retain redacted message/component, inspected count, first/last recorded timestamp, and up to three evidence locations. Counts cover only inspected lines. Complete segments, partial verified segments, bounded excerpts, unavailable evidence, and truncation are separate; incomplete analysis returns `4`. Overlapping segments are not counted twice; ranges starting or ending inside a journal record disclose truncation even when their hashes match. Excerpts are fallback observations, not hash-verified full journals. Patterns do not prove root causes. Verify runtime error or trade-return interpretations through the MCP.
 
 Overlap detection applies across both journal kinds. The byte budget includes fallback excerpts measured as UTF-16LE bytes; an excerpt that cannot fit is skipped and truncation is reported.
+
+Group identities use ordinal comparison of the redacted journal kind, component, and message. Differences in case remain distinct. The tester-result source hash and length describe the exact captured JSON buffer passed through the existing metadata validator. The journal's `budgeted_bytes` counts attempted segment buffers and accepted fallback excerpts; a failed hash check, read, or decode does not release its reserved byte budget for later evidence.
 
 Empty message or component fields are retained without stopping later observations. Application markers are masked in both fields before generic redaction can rewrite their nonces. Segment `hash_verified` records byte integrity separately from processing status: an observation-processing failure has status `processing_failed` and makes the evidence incomplete even when its bytes match the recorded hash.
 

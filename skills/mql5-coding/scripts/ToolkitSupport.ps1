@@ -12,6 +12,23 @@ function Get-ToolkitValue($Object,[string]$Name,$Default=$null) {
     }
     return $Default
 }
+function Read-ToolkitJsonEvidence([string]$Path) {
+    $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+    try {
+        if ($stream.Length -gt 1048576) {throw 'Toolkit JSON evidence exceeds the supported metadata limit.'}
+        $buffer=New-Object byte[] ([int]$stream.Length)
+        $read=0
+        while ($read -lt $buffer.Length) {
+            $got=$stream.Read($buffer,$read,$buffer.Length-$read)
+            if ($got -eq 0) {throw 'Incomplete toolkit JSON evidence read.'}
+            $read+=$got
+        }
+    } finally {$stream.Dispose()}
+    $value=Read-Mql5ReleaseJson -Path $Path -Bytes $buffer
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try {$hash=([BitConverter]::ToString($sha.ComputeHash($buffer))).Replace('-','').ToLowerInvariant()} finally {$sha.Dispose()}
+    return [pscustomobject]@{value=$value;source=@{path=$Path;sha256=$hash;byte_length=$buffer.Length}}
+}
 function Assert-ToolkitFields($Object,[string[]]$Required,[string[]]$Optional=@()) {
     if ($Object -isnot [pscustomobject]) {throw 'Configuration must be an object.'}
     foreach ($key in $Required) {if ($null -eq $Object.PSObject.Properties[$key]) {throw 'Required configuration field is missing.'}}

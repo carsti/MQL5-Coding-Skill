@@ -37,6 +37,20 @@ function RunUpdater([string[]]$Options) {
 function Options([string]$FixtureHome,[string]$Zip,[string]$Hash) {
     return @('-Action','Update','-Version',$version,'-CodexDirectory',$FixtureHome,'-ArchivePath',$Zip,'-ExpectedArchiveSha256',$Hash,'-ExpectedSourceCommit',$commit)
 }
+$bufferText='{"schema_version":1,"value":42,"label":"'+[char]0xe9+'"}'
+$bufferBytes=(New-Object Text.UTF8Encoding($false,$true)).GetBytes($bufferText)
+$unavailablePath=Join-Path $work 'buffer-only.json'
+$buffered=Read-Mql5ReleaseJson -Path $unavailablePath -Bytes $bufferBytes
+Check ($buffered.value -eq 42 -and $buffered.label -ceq ([char]0xe9).ToString()) 'Buffered JSON preserves independently specified values without rereading a path'
+$bomBytes=[byte[]]([Text.Encoding]::UTF8.GetPreamble()+$bufferBytes)
+Check ((Read-Mql5ReleaseJson -Path $unavailablePath -Bytes $bomBytes).label -ceq ([char]0xe9).ToString()) 'Buffered UTF-8 BOM JSON remains supported'
+$unicodeBytes=[byte[]]([Text.Encoding]::Unicode.GetPreamble()+[Text.Encoding]::Unicode.GetBytes($bufferText))
+Check ((Read-Mql5ReleaseJson -Path $unavailablePath -Bytes $unicodeBytes).label -ceq ([char]0xe9).ToString()) 'Buffered JSON retains existing UTF-16 BOM decoding'
+Reject {Read-Mql5ReleaseJson -Path $unavailablePath -Bytes ([Text.Encoding]::UTF8.GetBytes('[{"value":42}]'))} 'Buffered JSON rejects array roots'
+Reject {Read-Mql5ReleaseJson -Path $unavailablePath -Bytes ([Text.Encoding]::UTF8.GetBytes('{"key":1,"\u006bey":2}'))} 'Buffered JSON rejects escaped duplicate keys'
+Reject {Read-Mql5ReleaseJson -Path $unavailablePath -Bytes ([byte[]]@(123,34,107,34,58,34,255,34,125))} 'Buffered JSON rejects malformed UTF-8'
+Reject {Read-Mql5ReleaseJson -Path $unavailablePath -Bytes (New-Object byte[] 1048577)} 'Buffered JSON enforces the existing metadata byte limit'
+Reject {Read-Mql5ReleaseJson -Path $unavailablePath -Bytes ([byte[]]@())} 'Buffered JSON rejects an explicitly empty document'
 function ChangeZip([string]$Name,[string]$Entry,[string]$Content,[switch]$Add) {
     $path=Join-Path $work ($Name+'.zip');Copy-Item -LiteralPath $archive -Destination $path
     $zip=[IO.Compression.ZipFile]::Open($path,[IO.Compression.ZipArchiveMode]::Update)
