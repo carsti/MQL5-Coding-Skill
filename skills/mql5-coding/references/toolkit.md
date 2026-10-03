@@ -57,6 +57,8 @@ Copy [the manifest template](../assets/scenarios.template.json). Schema 1 contai
 
 The result fingerprints selected profile and optional evidence files, and execution rechecks them before each scenario. Changed configuration is rejected rather than silently accepted. Unicode receipt paths are preserved across the supported PowerShell process boundaries.
 
+Cleanup uncertainty stops subsequent compiler, tester, and analysis processes immediately. Retained report paths and an explicit analysis-skipped reason remain available for later inspection when this mandatory abort prevents report analysis.
+
 Each scenario has separate outputs, original compiler/tester statuses and exit codes, and `completed`, `failed`, `timed_out`, `blocked`, or `skipped` status. Report analysis is retained separately: a completed tester can have failed analysis. Every retained HTML report is analyzed. Failure may continue only after owned-process cleanup is verified; uncertainty aborts remaining scenarios. `progress.json` records in-progress evidence separately from the final result. Optional absolute `-CancellationFile` causes remaining scenarios to be skipped when the file exists; current owned work finishes cleanup first. Hard host termination can leave only progress evidence and must not be called batch completion. Batch exit `0` means validation/completed results with successful analysis, `1` retained scenario/analysis failure, `2` configuration/tooling failure or aborted execution. Batch duration is orchestration evidence, not EA execution cost.
 
 ## Profiling

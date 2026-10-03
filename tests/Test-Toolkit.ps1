@@ -129,6 +129,18 @@ exit $LASTEXITCODE
     $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$unsafe,'-PythonPath',$python,'-Action','Execute') $fixtureScripts
     $batch=ReadResult $unsafe
     Check ($process.exit_code -eq 2 -and $batch.scenarios[1].status -eq 'skipped' -and $batch.scenarios[0].cleanup_verified -eq $false) 'Cleanup uncertainty aborts remaining scenarios'
+    Check ($batch.scenarios[0].analysis.Count -eq 0 -and $batch.scenarios[0].analysis_skipped_reason -eq 'owned_process_cleanup_uncertain') 'Cleanup uncertainty does not launch subsequent analysis'
+    $uncertainScripts=Join-Path $testRoot 'uncertain-scripts';Copy-Item -LiteralPath $fixtureScripts -Destination $uncertainScripts -Recurse
+    $supportPath=Join-Path $uncertainScripts 'ToolkitSupport.ps1'
+    # Actual cleanup still runs; this private fixture reports uncertainty at the
+    # existing process boundary to exercise the controller's mandatory stop.
+    $support=[IO.File]::ReadAllText($supportPath).Replace('return [pscustomobject]$answer','$answer.cleanup_verified=$false; return [pscustomobject]$answer')
+    [IO.File]::WriteAllText($supportPath,$support,(New-Object Text.UTF8Encoding($false)))
+    Save $manifestPath @{schema_version=1;scenarios=@(@{id='uncertain-compile';profile=$profiles.success},@{id='later';profile=$profiles.success})}
+    $uncertain=Join-Path $testRoot 'batch-uncertain-compile';$priorTrace=[IO.File]::ReadAllText($env:MQL5_SCENARIO_TEST_TRACE)
+    $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$uncertain,'-PythonPath',$python,'-Action','Execute') $uncertainScripts
+    $batch=ReadResult $uncertain;$traceDelta=[IO.File]::ReadAllText($env:MQL5_SCENARIO_TEST_TRACE).Substring($priorTrace.Length)
+    Check ($process.exit_code -eq 2 -and $batch.scenarios[0].reason -eq 'compilation_cleanup_uncertain' -and $batch.scenarios[1].status -eq 'skipped' -and $traceDelta -eq "Compile:success`n") 'Successful compilation with uncertain cleanup cannot launch tester'
     $cancel=Join-Path $testRoot 'cancel.flag';[IO.File]::WriteAllText($cancel,'cancel')
     $cancelled=Join-Path $testRoot 'batch-cancel'
     $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$cancelled,'-PythonPath',$python,'-Action','Execute','-CancellationFile',$cancel) $fixtureScripts

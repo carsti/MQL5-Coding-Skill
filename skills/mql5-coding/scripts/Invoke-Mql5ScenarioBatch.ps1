@@ -86,7 +86,7 @@ try {
     }
     $result.manifest=@{path=$manifestPathResolved;sha256=(Get-Mql5ReleaseHash $manifestPathResolved)}
     foreach ($item in $selected) {
-        $result.scenarios+=@([ordered]@{id=$item.id;profile=@{path=$item.profile_path;sha256=(Get-Mql5ReleaseHash $item.profile_path)};evidence_inputs=$item.evidence_inputs;status='skipped';reason=if ($Action -eq 'Validate') {'validation_only'} else {'not_started'};compile=$null;tester=$null;analysis=@();cleanup_verified=$null;output_directory=$null})
+        $result.scenarios+=@([ordered]@{id=$item.id;profile=@{path=$item.profile_path;sha256=(Get-Mql5ReleaseHash $item.profile_path)};evidence_inputs=$item.evidence_inputs;status='skipped';reason=if ($Action -eq 'Validate') {'validation_only'} else {'not_started'};compile=$null;tester=$null;retained_reports=@();analysis=@();analysis_skipped_reason=$null;cleanup_verified=$null;output_directory=$null})
     }
     $result.status=if ($Action -eq 'Validate') {'validated'} else {'running'}
     Save-BatchCheckpoint
@@ -107,6 +107,9 @@ try {
             $compiled=Invoke-BatchProfile @('-ProfilePath',$item.profile_path,'-Action','Compile','-Entrypoint',$item.profile.tester.entrypoint) ($item.profile.compiler.timeout_seconds+30)
             $current.compile=@{exit_code=$compiled.exit_code;runner_status=$compiled.status;receipt_path=$null}
             $current.cleanup_verified=$compiled.cleanup_verified
+            if (-not $compiled.cleanup_verified) {
+                $current.status='failed';$current.reason='compilation_cleanup_uncertain';$abort=$true;Save-BatchCheckpoint;continue
+            }
             if ($compiled.exit_code -ne 0 -or $compiled.status -ne 'completed') {
                 $current.status=if ($compiled.exit_code -eq 3 -or $compiled.status -eq 'timed_out') {'timed_out'} else {'failed'}
                 $current.reason='compilation_failed';$abort=-not $compiled.cleanup_verified;Save-BatchCheckpoint;continue
@@ -136,13 +139,15 @@ try {
             if (-not $current.cleanup_verified) {$abort=$true;$current.reason='cleanup_uncertain'}
             # Parse every retained report, including reports from failed/timed-out tester runs.
             $reportPaths=@(Get-ChildItem -LiteralPath $scenarioRoot -Recurse -File | Where-Object {$_.Extension -in @('.htm','.html')} | ForEach-Object {$_.FullName})
+            $current.retained_reports=$reportPaths
+            if ($abort) {$current.analysis_skipped_reason='owned_process_cleanup_uncertain';Save-BatchCheckpoint;continue}
             foreach ($reportPath in $reportPaths) {
                 $analysisRoot=Join-Path $scenarioRoot ('analysis-'+[guid]::NewGuid().ToString('N'))
                 $analysisArgs=@('-B','-s',(Join-Path $PSScriptRoot 'mql5_toolkit.py'),'report','read','--input',$reportPath,'--output',$analysisRoot)
                 if ($run) {$analysisArgs+=@('--tester-result',$runPath)}
                 $analyzed=Invoke-ToolkitProcess $python $analysisArgs $scenarioRoot 60
                 $current.analysis+=@(@{operation='read';exit_code=$analyzed.exit_code;runner_status=$analyzed.status;output=$analysisRoot})
-                if (-not $analyzed.cleanup_verified) {$abort=$true;$current.cleanup_verified=$false;$current.reason='analysis_cleanup_uncertain'}
+                if (-not $analyzed.cleanup_verified) {$abort=$true;$current.cleanup_verified=$false;$current.reason='analysis_cleanup_uncertain';$current.analysis_skipped_reason='owned_process_cleanup_uncertain';break}
                 if ($item.baseline_report) {
                     $compareRoot=Join-Path $scenarioRoot ('comparison-'+[guid]::NewGuid().ToString('N'))
                     $compareArgs=@('-B','-s',(Join-Path $PSScriptRoot 'mql5_toolkit.py'),'report','compare','--baseline',$item.baseline_report,'--candidate',$reportPath,'--output',$compareRoot)
@@ -151,7 +156,7 @@ try {
                     if ($item.expectations) {$compareArgs+=@('--expectations',$item.expectations)}
                     $compared=Invoke-ToolkitProcess $python $compareArgs $scenarioRoot 60
                     $current.analysis+=@(@{operation='compare';exit_code=$compared.exit_code;runner_status=$compared.status;output=$compareRoot})
-                    if (-not $compared.cleanup_verified) {$abort=$true;$current.cleanup_verified=$false;$current.reason='analysis_cleanup_uncertain'}
+                    if (-not $compared.cleanup_verified) {$abort=$true;$current.cleanup_verified=$false;$current.reason='analysis_cleanup_uncertain';$current.analysis_skipped_reason='owned_process_cleanup_uncertain';break}
                 }
             }
             Save-BatchCheckpoint
