@@ -4,6 +4,7 @@ import copy
 import errno
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -557,6 +558,85 @@ class ToolkitTests(unittest.TestCase):
         self.assertEqual(len([x for x in snap["dependencies"] if x["conditional_context"]]), 1)
         self.assertNotIn("bad.mqh", str(snap["dependencies"]))
         self.assertEqual(directives('/*\n#include "bad"\n*/\n#include <x> // comment\n'), [(4, "include", "<x>")])
+
+    def test_angle_include_filename_keeps_following_directives(self):
+        for prefix in ("#include ", "# include ", "/* leading */ #include /* before filename */ "):
+            with self.subTest(prefix=prefix):
+                text = '\n'.join([
+                    'string text = "#include <decoy.mqh>";',
+                    "ushort letter='<';",
+                    'bool comparison=1<2;',
+                    '/* #include <comment.mqh> */',
+                    prefix + "<Owner's.mqh> // trailing comment",
+                    '#ifdef ENABLE',
+                    '#include "Local.mqh" /* trailing comment */',
+                    '#endif',
+                    '#include <Shared.mqh>',
+                ])
+                self.assertEqual(directives(text), [
+                    (5, 'include', "<Owner's.mqh>"), (6, 'ifdef', 'ENABLE'),
+                    (7, 'include', '"Local.mqh"'), (8, 'endif', ''),
+                    (9, 'include', '<Shared.mqh>'),
+                ])
+        # An incomplete header name stays unsupported without consuming the
+        # following directive as part of a fictitious character literal.
+        self.assertEqual(directives("#include <Owner's.mqh\n#include <Shared.mqh>\n"),
+                         [(1, 'include', "<Owner's.mqh"), (2, 'include', '<Shared.mqh>')])
+
+    def test_genuine_angle_include_filename_fixture(self):
+        fixture = (Path(__file__).parent/'fixtures/angle-include-filename').resolve()
+        provenance = json.loads((fixture/'provenance.json').read_text(encoding='utf-8'))
+        for file in provenance['files']:
+            self.assertEqual(digest((fixture/file['path']).read_bytes()), file['sha256'])
+        log = (fixture/'native-compile.log').read_bytes()
+        self.assertEqual(digest(log), provenance['sanitized_log_sha256'])
+        self.assertEqual((provenance['compilation_status'], provenance['errors'], provenance['warnings']),
+                         ('success', 0, 0))
+        self.assertIn(b"including <fixture-root>\\MQL5\\Include\\Owner's.mqh", log)
+        self.assertIn(b'including <fixture-root>\\MQL5\\Include\\Shared.mqh', log)
+        self.assertIn(b'Result: 0 errors, 0 warnings', log)
+        entry = fixture/'Project/Probe.mq5'
+        snapshot = inventory(entry.parent, [entry], [fixture/'MQL5/Include'])
+        self.assertEqual(snapshot['coverage'], 'selected_entrypoints_scanned')
+        self.assertEqual(snapshot['unresolved'], [])
+        self.assertEqual([item['declaration'] for item in snapshot['dependencies']],
+                         ["<Owner's.mqh>", '<Shared.mqh>'])
+        for name in ("Owner's.mqh", 'Shared.mqh'):
+            self.assertEqual(snapshot['possible_consumers'][str(fixture/'MQL5/Include'/name)], [str(entry)])
+
+    def test_angle_filename_retains_changed_and_deleted_shared_consumers(self):
+        fixture = Path(__file__).parent/'fixtures/angle-include-filename'
+        copied = self.root/'angle-includes'
+        shutil.copytree(fixture, copied)
+        root, standard = copied/'Project', copied/'MQL5/Include'
+        entry = root/'Probe.mq5'
+        second = root/'Second.mq5'
+        second.write_bytes(entry.read_bytes())
+        shared, leaf = standard/'Shared.mqh', standard/'Leaf.mqh'
+        shared.write_text('#include <Leaf.mqh>\nint SharedProbe(void) { return 2; }\n', encoding='utf-8')
+        leaf.write_text('// independently specified first leaf version\n', encoding='utf-8')
+        output = self.root/'angle-inventory-cli'
+        process = subprocess.run([sys.executable, '-B', str(SCRIPTS/'mql5_toolkit.py'), 'includes', 'inventory',
+                                  '--root', str(root), '--include-root', str(standard), '--output', str(output)],
+                                 capture_output=True)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        before = json.loads((output/'result.json').read_text(encoding='utf-8'))
+        consumers = sorted([str(entry), str(second)])
+        self.assertEqual(before['possible_consumers'].get(str(leaf)), consumers)
+        leaf.write_text('// independently specified changed leaf version\n', encoding='utf-8')
+        changed = inventory(root, [], [standard])
+        difference = compare_snapshots(before, changed)
+        self.assertEqual([(item['path'], item['kind']) for item in difference['differences']], [(str(leaf), 'changed')])
+        self.assertEqual(difference['possible_affected_entrypoints'], consumers)
+        self.assertFalse(difference['differences'][0]['consumer_coverage_unknown'])
+        leaf.unlink()
+        deleted = inventory(root, [], [standard])
+        difference = compare_snapshots(changed, deleted)
+        self.assertEqual([(item['path'], item['kind']) for item in difference['differences']], [(str(leaf), 'removed')])
+        self.assertEqual(difference['possible_affected_entrypoints'], consumers)
+        self.assertTrue(difference['differences'][0]['consumer_coverage_unknown'])
+        self.assertEqual(deleted['coverage'], 'uncertain')
+        self.assertTrue(all(item['declaration'] == '<Leaf.mqh>' for item in deleted['unresolved']))
 
     @unittest.skipUnless(os.name == "nt", "Windows case-insensitive filename selection")
     def test_entrypoint_case_aliases_do_not_invent_source_changes(self):

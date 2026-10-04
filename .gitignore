@@ -2,6 +2,7 @@
 __pycache__/
 *.log
 !tests/fixtures/includes/native-compile.log
+!tests/fixtures/angle-include-filename/native-compile.log
 *.ex4
 *.ex5
 test-results/

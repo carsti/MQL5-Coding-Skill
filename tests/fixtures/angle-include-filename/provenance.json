@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "operation": "genuine_angle_include_filename_fixture",
+  "native_build": 6235,
+  "compiler_sha256": "f94db507aa3267ee1e428af747a9827c95fe6d69d5a272e67160a35ad08d8315",
+  "compilation_status": "success",
+  "errors": 0,
+  "warnings": 0,
+  "artifact_sha256": "70bec1748bbe4f5fe2288156dad59144329ca67679dedc8134f33b0b062684e1",
+  "source_sha256": "2cbfc9da2d0450d667c46f1cb102d0e694f7996b27e0582deaa3dd183f4d0f6c",
+  "original_log_sha256": "7eaab099c7c79c763d1f63586843c79607b93305534cf65b9e72471d018af7fb",
+  "original_receipt_sha256": "fa735fc809a7fd23d4c9de418b9f6dea68e8792e10457194f3fcf09a33cdd11a",
+  "sanitized_log_sha256": "818a64042a8bb1baf51d31222551cc16fb820c4c727f45df2d562bb9b24195ed",
+  "files": [
+    {
+      "path": "Project/Probe.mq5",
+      "sha256": "2cbfc9da2d0450d667c46f1cb102d0e694f7996b27e0582deaa3dd183f4d0f6c"
+    },
+    {
+      "path": "MQL5/Include/Owner's.mqh",
+      "sha256": "bb404118247ca4005cfc19dc56d171b7e30956c0522a22b35fcd9a7f14bc5541"
+    },
+    {
+      "path": "MQL5/Include/Shared.mqh",
+      "sha256": "f4c854e55f5d67d3722ce90e1e377fc1ce5762580214cdcd35b9619108324723"
+    }
+  ],
+  "sanitization": [
+    "Compiler-log fixture directory replaced with <fixture-root>; UTF-16 converted to UTF-8"
+  ],
+  "observed": "MetaEditor included Owner's.mqh and the following Shared.mqh; both functions are referenced by a nontrading script. Compilation only; script was not executed.",
+  "documentation": [
+    "mql5:3d2e853ca7e9b5fc6c2d1c7e",
+    "mql5:df82d9b2752e4b1171139233"
+  ],
+  "index_revision": "ec0dbca96e12f4d877dd33b7593158c61156cb7b490b42bf559bf97445f83339"
+}

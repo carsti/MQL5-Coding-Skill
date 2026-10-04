@@ -57,9 +57,11 @@ def directives(text: str) -> list[tuple[int, str, str]]:
     # Replace comments with whitespace while retaining newlines and quoted text.
     # A parallel mask records only '#' outside both comments and strings.
     cleaned, markers = list(text), set()
-    state, escape, i = "code", False, 0
+    state, escape, i, line_start, directive_start = "code", False, 0, 0, None
     while i < len(text):
         c, nxt = text[i], text[i+1:i+2]
+        if c == "\n":
+            line_start, directive_start = i+1, None
         if state == "line":
             if c == "\n":
                 state = "code"
@@ -71,6 +73,12 @@ def directives(text: str) -> list[tuple[int, str, str]]:
             if c == "*" and nxt == "/":
                 cleaned[i+1] = " "
                 i += 1
+                state = "code"
+        elif state == "angle":
+            # A header name is not a character/string literal or a comment.
+            # Native MetaEditor accepts apostrophes here. An unclosed name
+            # stays unsupported on its own line without hiding later includes.
+            if c == ">" or c in "\r\n":
                 state = "code"
         elif state in {"double", "single"}:
             if escape:
@@ -85,8 +93,13 @@ def directives(text: str) -> list[tuple[int, str, str]]:
             i += 1
         elif c in {'"', "'"}:
             state = "double" if c == '"' else "single"
+        elif c == "<" and directive_start is not None:
+            if re.fullmatch(r"#\s*include\s*", "".join(cleaned[directive_start:i])):
+                state = "angle"
+            directive_start = None
         elif c == "#":
             markers.add(i)
+            directive_start = i if all(ch.isspace() for ch in cleaned[line_start:i]) else None
         i += 1
     result, offset = [], 0
     for line_number, line in enumerate("".join(cleaned).splitlines(keepends=True), 1):

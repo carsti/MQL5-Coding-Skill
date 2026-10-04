@@ -65,6 +65,8 @@ The snapshot records project source hashes, reachable external sources, declared
 
 Ordinary selected entrypoints use the filesystem's path spelling. Windows filename-case aliases share one recorded source identity with discovery, preventing duplicate source slots, false unselected entrypoints, and spurious snapshot changes. Linked paths retain their aliases for uncertainty checks.
 
+Angle-bracket header names retain filename characters until `>` or the line end. An apostrophe in a name such as `<Owner's.mqh>` cannot start a character literal and hide following includes or conditional directives. MetaEditor build 6235 compiled this spelling and the following shared include in the nontrading `tests/fixtures/angle-include-filename` fixture, whose source hashes and sanitized compiler log are retained with provenance. Incomplete names remain unsupported dependencies; later directives remain visible.
+
 Profile mode fingerprints the selected profile before calling the existing validator and checks it after validation and inventory. A changed profile stops the operation as invalid input. These boundary checks do not prove an atomic snapshot across concurrent changes.
 
 When a shared source is read for multiple entrypoints, its consumed hash must remain the same. A changed hash stops inventory as invalid input, preventing declarations from different source versions from sharing one recorded fingerprint. Retry after source edits finish. This check does not establish an atomic snapshot of the whole project.
