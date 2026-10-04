@@ -23,6 +23,11 @@ function New-JournalCase([string]$Name,[string]$Text) {
     Save $runPath @{schema_version=2;status='engine_smoke_passed';evidence=@{terminal_journal=@{appended_byte_length=$length;limit_exceeded=$false;segments=@(@{path=$path;source_offset=0;byte_length=$length;sha256=(Get-Mql5ReleaseHash $path)});excerpts=@()};tester_journal=@{appended_byte_length=0;limit_exceeded=$false;segments=@();excerpts=@()}}}
     return $runPath
 }
+function New-JournalSegment([string]$Path,[int]$Offset,[int]$Length) {
+    $data=[IO.File]::ReadAllBytes($Path);$sha=[Security.Cryptography.SHA256]::Create()
+    try {$hash=([BitConverter]::ToString($sha.ComputeHash($data,$Offset,$Length))).Replace('-','').ToLowerInvariant()} finally {$sha.Dispose()}
+    return [pscustomobject]@{path=$Path;source_offset=$Offset;byte_length=$Length;sha256=$hash}
+}
 $oldTrace=$env:MQL5_SCENARIO_TEST_TRACE;$oldReport=$env:MQL5_SCENARIO_TEST_REPORT
 try {
     $python=if ($PythonPath) {Get-ToolkitPython $PythonPath} elseif (Get-Command python -ErrorAction SilentlyContinue) {(Get-Command python).Source} else {Get-ToolkitPython ''}
@@ -79,6 +84,54 @@ try {
     $crossOverlap=Join-Path $testRoot 'journal-cross-overlap'
     $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$runPath,'-OutputDirectory',$crossOverlap)
     Check ($process.exit_code -eq 4 -and (ReadResult $crossOverlap).inspected_lines -eq 3) 'Same segment recorded under both journal kinds is counted once'
+    $journalAlias=Join-Path $testRoot 'journal-hardlink.log'
+    New-Item -ItemType HardLink -Path $journalAlias -Target $journalPath | Out-Null
+    $aliasRecord=New-JournalSegment $journalAlias $record.source_offset $record.byte_length
+    $run.evidence.tester_journal=[pscustomobject]@{appended_byte_length=$record.byte_length;limit_exceeded=$false;segments=@($aliasRecord);excerpts=@()}
+    Save $runPath $run
+    $aliasOverlap=Join-Path $testRoot 'journal-alias-overlap'
+    $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$runPath,'-OutputDirectory',$aliasOverlap)
+    $aliasRead=ReadResult $aliasOverlap
+    Check ($process.exit_code -eq 4 -and $aliasRead.inspected_lines -eq 3 -and $aliasRead.evidence_status -eq 'partial_segments' -and $aliasRead.segments[0].file_identity -ceq $aliasRead.segments[1].file_identity) 'Hard-link aliases cannot make duplicate physical journal ranges complete evidence'
+    $run.evidence.tester_journal.segments=@($record)
+    $run.evidence.tester_journal.excerpts=@("AA`t0`t10:00:01.000`tFixture`tpassword=duplicate excerpt")
+    Save $runPath $run
+    $overlapExcerpt=Join-Path $testRoot 'journal-overlap-excerpt'
+    $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$runPath,'-OutputDirectory',$overlapExcerpt)
+    $excerptRead=ReadResult $overlapExcerpt
+    Check ($process.exit_code -eq 4 -and $excerptRead.inspected_lines -eq 3 -and $excerptRead.budgeted_bytes -eq $buffer.Length -and @($excerptRead.issues | Where-Object {$_.code -eq 'overlap_excerpt_fallback_skipped'}).Count -eq 1) 'Known overlapping segments cannot be counted again through unverified fallback excerpts'
+    $run.evidence.tester_journal.segments=@($aliasRecord);Save $runPath $run
+    $aliasExcerpt=Join-Path $testRoot 'journal-alias-excerpt'
+    $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$runPath,'-OutputDirectory',$aliasExcerpt)
+    Check ($process.exit_code -eq 4 -and (ReadResult $aliasExcerpt).inspected_lines -eq 3) 'Alias overlap also prevents fallback duplicate observations'
+    $journalCopy=Join-Path $testRoot 'journal-independent-copy.log'
+    Copy-Item -LiteralPath $journalPath -Destination $journalCopy
+    $run.evidence.tester_journal.segments=@(New-JournalSegment $journalCopy $record.source_offset $record.byte_length)
+    $run.evidence.tester_journal.excerpts=@();Save $runPath $run
+    $independentOut=Join-Path $testRoot 'journal-independent-copy'
+    $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$runPath,'-OutputDirectory',$independentOut)
+    $independentRead=ReadResult $independentOut
+    Check ($process.exit_code -eq 0 -and $independentRead.inspected_lines -eq 6 -and $independentRead.segments[0].file_identity -cne $independentRead.segments[1].file_identity) 'Equal bytes in independent files remain distinct journal evidence'
+    $firstLineBytes=$encoding.GetByteCount(($segment -split "`r`n")[0]+"`r`n")
+    $run.evidence.terminal_journal=[pscustomobject]@{appended_byte_length=$firstLineBytes;limit_exceeded=$false;segments=@(New-JournalSegment $journalPath $record.source_offset $firstLineBytes);excerpts=@()}
+    $run.evidence.tester_journal=[pscustomobject]@{appended_byte_length=($record.byte_length-$firstLineBytes);limit_exceeded=$false;segments=@(New-JournalSegment $journalAlias ($record.source_offset+$firstLineBytes) ($record.byte_length-$firstLineBytes));excerpts=@()}
+    Save $runPath $run
+    $disjointOut=Join-Path $testRoot 'journal-alias-disjoint'
+    $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$runPath,'-OutputDirectory',$disjointOut)
+    Check ($process.exit_code -eq 0 -and (ReadResult $disjointOut).inspected_lines -eq 3) 'Non-overlapping ranges through file aliases remain complete evidence'
+    $budgetPath=New-JournalCase 'overlap-budget' ("AA`t0`t10:00:01.000`tFixture`t"+('x'*500)+"`r`nBB`t0`t10:00:02.000`tFixture`t"+('y'*500)+"`r`n")
+    $budgetRun=Read-Mql5ReleaseJson $budgetPath;$budgetRecord=$budgetRun.evidence.terminal_journal.segments[0]
+    $budgetAlias=Join-Path $testRoot 'overlap-budget-alias.log'
+    New-Item -ItemType HardLink -Path $budgetAlias -Target $budgetRecord.path | Out-Null
+    foreach ($selectedPath in @($budgetRecord.path,$budgetAlias)) {
+        $budgetRun.evidence.tester_journal=[pscustomobject]@{appended_byte_length=$budgetRecord.byte_length;limit_exceeded=$false;segments=@(New-JournalSegment $selectedPath 0 $budgetRecord.byte_length);excerpts=@()}
+        Save $budgetPath $budgetRun
+        $budgetOutput=Join-Path $testRoot ('journal-overlap-budget-'+[guid]::NewGuid().ToString('N'))
+        $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$budgetPath,'-OutputDirectory',$budgetOutput,'-MaxBytes',([string]$budgetRecord.byte_length))
+        $budgetRead=ReadResult $budgetOutput
+        Check ($process.exit_code -eq 4 -and $budgetRead.inspected_lines -eq 2 -and $budgetRead.evidence_status -eq 'partial_segments' -and -not $budgetRead.truncated -and $budgetRead.budgeted_bytes -eq $budgetRecord.byte_length) 'Skipped physical overlap cannot consume the byte budget or invent truncation'
+    }
+    $run.evidence.terminal_journal=$journal
     $run.evidence.tester_journal=[pscustomobject]@{appended_byte_length=0;limit_exceeded=$false;segments=@();excerpts=@()}
     $excerptPath=Join-Path $testRoot 'excerpts-only.json'
     Save $excerptPath @{schema_version=2;status='engine_smoke_passed';evidence=@{terminal_journal=@{appended_byte_length=4096;segments=@();excerpts=@(('x'*2048))};tester_journal=$run.evidence.tester_journal}}

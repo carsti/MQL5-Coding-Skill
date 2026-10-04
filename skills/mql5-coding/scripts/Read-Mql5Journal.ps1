@@ -62,27 +62,32 @@ try {
     foreach ($kind in @('terminal_journal','tester_journal')) {
         $journal=Get-ToolkitValue $evidence $kind
         $segments=@(Get-ToolkitValue $journal 'segments' @())
-        $usable=0;$recordedBytes=0
+        $usable=0;$recordedBytes=0;$overlapDetected=$false
         if ($null -eq $journal) {$missingJournals++}
         if (Get-ToolkitValue $journal 'limit_exceeded' $false) {$result.truncated=$true}
         foreach ($segment in $segments) {
-            $record=[ordered]@{journal=$kind;path=(Get-ToolkitValue $segment 'path');source_offset=(Get-ToolkitValue $segment 'source_offset');byte_length=(Get-ToolkitValue $segment 'byte_length');sha256=(Get-ToolkitValue $segment 'sha256');status='unavailable';hash_verified=$false;starts_at_line_boundary=$null;ends_at_line_boundary=$null;reason=$null}
+            $record=[ordered]@{journal=$kind;path=(Get-ToolkitValue $segment 'path');source_offset=(Get-ToolkitValue $segment 'source_offset');byte_length=(Get-ToolkitValue $segment 'byte_length');sha256=(Get-ToolkitValue $segment 'sha256');file_identity=$null;status='unavailable';hash_verified=$false;starts_at_line_boundary=$null;ends_at_line_boundary=$null;reason=$null}
             try {
                 foreach ($field in @('source_offset','byte_length')) {
                     $value=Get-ToolkitValue $segment $field
                     if (($value -isnot [int] -and $value -isnot [long]) -or $value -lt 0 -or $value % 2) {throw 'Invalid UTF-16 byte range.'}
                 }
                 if ($segment.sha256 -isnot [string] -or $segment.sha256 -cnotmatch '^[0-9a-f]{64}$') {throw 'Missing segment digest.'}
-                if ($segment.byte_length -gt ($MaxBytes-$bytesUsed)) {$result.truncated=$true;throw 'Analysis byte limit reached.'}
                 $file=Resolve-ToolkitPath $segment.path ([IO.Path]::GetDirectoryName($path))
-                $fileKey=$file.ToLowerInvariant()
-                if (-not $ranges.ContainsKey($fileKey)) {$ranges[$fileKey]=@()}
-                foreach ($range in $ranges[$fileKey]) {
-                    if ($segment.source_offset -lt $range.end -and $segment.source_offset+$segment.byte_length -gt $range.start) {throw 'Overlapping recorded segments are uncertain and are not counted twice.'}
-                }
                 $stream=[IO.File]::Open($file,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
                 try {
                     if ($segment.source_offset -gt $stream.Length -or $segment.byte_length -gt ($stream.Length-$segment.source_offset)) {throw 'Recorded segment range is unavailable.'}
+                    $fileKey=[Mql5Coding.JobProcessLaunch]::GetFileIdentity($stream.SafeFileHandle)
+                    $record.file_identity=$fileKey
+                    if (-not $ranges.ContainsKey($fileKey)) {$ranges[$fileKey]=@()}
+                    foreach ($range in $ranges[$fileKey]) {
+                        if ($segment.source_offset -lt $range.end -and $segment.source_offset+$segment.byte_length -gt $range.start) {
+                            $overlapDetected=$true
+                            $record.reason='Overlapping recorded segment was not processed twice.'
+                            throw 'Overlapping recorded segments are uncertain and are not counted twice.'
+                        }
+                    }
+                    if ($segment.byte_length -gt ($MaxBytes-$bytesUsed)) {$result.truncated=$true;throw 'Analysis byte limit reached.'}
                     $record.starts_at_line_boundary=$segment.source_offset -eq 0
                     if ($segment.source_offset -ge 2) {
                         $stream.Position=$segment.source_offset-2
@@ -117,11 +122,11 @@ try {
                 }
             } catch {
                 if ($record.hash_verified) {$record.status='processing_failed';$record.reason='Segment hash matched, but observation processing was incomplete.'}
-                else {$record.reason='Segment unavailable, invalid, beyond analysis limits, or hash mismatch.'}
+                elseif ($null -eq $record.reason) {$record.reason='Segment unavailable, invalid, beyond analysis limits, or hash mismatch.'}
             }
             $result.segments+=@($record)
         }
-        if ($usable -eq 0) {
+        if ($usable -eq 0 -and -not $overlapDetected) {
             $excerptIndex=0
             foreach ($excerpt in @(Get-ToolkitValue $journal 'excerpts' @())) {
                 if ($excerpt -isnot [string]) {throw 'Journal excerpt must be a string.'}
@@ -132,6 +137,10 @@ try {
                 $excerptIndex++
                 if ($excerpt.Length) {Add-JournalObservation $excerpt $kind $path -1 $excerptIndex $false}
             }
+        } elseif ($usable -eq 0 -and $overlapDetected -and @(Get-ToolkitValue $journal 'excerpts' @()).Count -gt 0) {
+            # Fallback excerpts cannot establish independence from the physical
+            # journal ranges already inspected, so leave them uncounted.
+            $result.issues+=@(@{code='overlap_excerpt_fallback_skipped';journal=$kind})
         }
         $expectedBytes=Get-ToolkitValue $journal 'appended_byte_length'
         if ($null -ne $journal -and (($expectedBytes -isnot [int] -and $expectedBytes -isnot [long]) -or $expectedBytes -lt 0 -or $expectedBytes -ne $recordedBytes)) {$missingJournals++}
