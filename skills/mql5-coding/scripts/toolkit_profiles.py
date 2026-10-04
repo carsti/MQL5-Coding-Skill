@@ -102,6 +102,21 @@ def compare_profiles(a: dict, b: dict, expectations: dict | None = None) -> dict
     if set(required) - {"workload", "build_conditions", "source_identity"}:
         raise InputError("Unknown profiling condition")
     compatible = compatibility(a["conditions"], b["conditions"], required)
+    if any(x["conditions"]["build_conditions"] is None for x in (a, b)):
+        # Incomplete build metadata must not hide a conflict in known settings.
+        # The reader retains these values only after the CSV hash is verified.
+        observed_builds = []
+        for profile in (a, b):
+            build = dict(profile["recorded_identity"].get("recorded_build_conditions", {}))
+            if "metaeditor_build" in build:
+                build["metaeditor_build"] = str(build["metaeditor_build"])
+            observed_builds.append(build)
+        partial = compatibility(*observed_builds, sorted(BUILD_KEYS))
+        compatible["missing"].extend("build_conditions." + key for key in partial["missing"])
+        compatible["differences"].extend({**item, "condition": "build_conditions." + item["condition"]}
+                                         for item in partial["differences"])
+        if partial["status"] == "incompatible":
+            compatible["status"] = "incompatible"
     ambiguous = bool(a["duplicates"] or b["duplicates"])
     if (expectations or {}).get("require_successful_runs"):
         compatible["missing"].append("profiler_export_has_no_tester_run_status")

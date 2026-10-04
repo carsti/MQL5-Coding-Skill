@@ -121,6 +121,8 @@ Comparisons match exact unique function names within the recorded compilation-un
 
 Equivalent integer and digit-string MetaEditor build numbers compare as the same build. The original recorded build-condition representation remains available in `recorded_identity.recorded_build_conditions`.
 
+When required build fields are missing, comparison still examines every available required build setting from hash-linked conditions. Known conflicts produce `incompatible` alongside missing fields such as `build_conditions.architecture`; matching partial settings remain `insufficient_evidence`. Conditions whose export hash does not match cannot supply build-setting evidence. Observed CPU differences remain available for matched functions, while expectations stay `not_evaluable` until all required conditions and evidence are satisfied.
+
 Workload objects and arrays compare recursively by JSON type and value. Booleans, numbers, and strings remain distinct; equal integer and decimal JSON numbers compare as the same numeric value. Type mismatches make conditions incompatible and prevent expectation evaluation.
 
 See native definitions at [MT5 testing reports](https://www.metatrader5.com/en/terminal/help/algotrading/testing_report) and [MetaEditor profiling](https://www.metatrader5.com/en/metaeditor/help/development/profiling). Tests retain genuine sanitized input provenance. UI actions used once to prepare those fixtures are not shipped as runtime automation.

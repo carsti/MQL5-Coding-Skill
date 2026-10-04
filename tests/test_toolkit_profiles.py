@@ -68,6 +68,125 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(result["unmatched"]["baseline"], ["FixtureFold", "OnStart"])
         self.assertEqual(result["unmatched"]["candidate"], ["FixtureFold", "OnStart"])
 
+    def test_partial_build_conditions_keep_genuine_inlining_conflict(self):
+        reports = []
+        for name in ('native-functions', 'native-functions-inlined'):
+            recorded = json.loads((FIXTURES/(name+'-conditions.json')).read_text(encoding='utf-8'))
+            recorded['build_conditions'].pop('architecture')
+            path = self.root/(name+'-partial.json')
+            path.write_text(json.dumps(recorded), encoding='utf-8')
+            report = native_profile(FIXTURES/(name+'.csv'), path)
+            self.assertEqual(report['evidence_linkage']['status'], 'hash_verified')
+            self.assertIsNone(report['conditions']['build_conditions'])
+            reports.append(report)
+        expectations = {'metrics': [{'metric': 'OnStart.self_cpu_samples', 'target': 'candidate', 'minimum': '0'}]}
+        result = compare_profiles(*reports, expectations)
+        self.assertEqual(result['compatibility']['status'], 'incompatible')
+        self.assertIn('build_conditions.architecture', result['compatibility']['missing'])
+        self.assertEqual(result['compatibility']['differences'], [
+            {'condition': 'build_conditions.profiling_inlining', 'baseline': 'disabled', 'candidate': 'enabled'}])
+        self.assertEqual(result['matched_functions'], ['OnStart'])
+        self.assertEqual(result['metrics']['OnStart.self_cpu_samples']['difference']['state'], 'finite')
+        self.assertEqual(result['expectations']['status'], 'not_evaluable')
+        self.assertFalse(result['speed_improvement_established'])
+
+    def test_partial_build_conditions_compare_each_available_required_field(self):
+        template = json.loads((FIXTURES/'native-functions-conditions.json').read_text(encoding='utf-8'))
+        changes = {'metaeditor_build': 6236, 'profiling_inlining': 'enabled',
+                   'profiling_optimizations': 'disabled', 'architecture': 'arm64',
+                   'environment_id': 'different-recorded-environment'}
+        for field, value in changes.items():
+            with self.subTest(field=field):
+                missing = 'architecture' if field != 'architecture' else 'environment_id'
+                a, b = copy.deepcopy(template), copy.deepcopy(template)
+                a['build_conditions'].pop(missing)
+                b['build_conditions'][field] = value
+                for partial_candidate in (False, True):
+                    if partial_candidate:
+                        b['build_conditions'].pop(missing)
+                    reports = []
+                    for name, recorded in (('baseline', a), ('candidate', b)):
+                        path = self.root/(name+'.json')
+                        path.write_text(json.dumps(recorded), encoding='utf-8')
+                        reports.append(native_profile(FIXTURES/'native-functions.csv', path))
+                    result = compare_profiles(*reports)
+                    self.assertEqual(result['compatibility']['status'], 'incompatible')
+                    self.assertIn('build_conditions.'+missing, result['compatibility']['missing'])
+                    before = str(template['build_conditions'][field]) if field == 'metaeditor_build' else template['build_conditions'][field]
+                    after = str(value) if field == 'metaeditor_build' else value
+                    self.assertEqual(result['compatibility']['differences'], [
+                        {'condition': 'build_conditions.'+field, 'baseline': before, 'candidate': after}])
+                    self.assertEqual(result['expectations']['status'], 'not_requested')
+
+    def test_partial_build_conditions_do_not_invent_conflicts_or_comparability(self):
+        template = json.loads((FIXTURES/'native-functions-conditions.json').read_text(encoding='utf-8'))
+        for case in ('one_partial', 'both_partial', 'different_missing_fields', 'equivalent_build', 'unlinked'):
+            with self.subTest(case=case):
+                a, b = copy.deepcopy(template), copy.deepcopy(template)
+                a['build_conditions'].pop('architecture')
+                if case != 'one_partial':
+                    b['build_conditions'].pop('environment_id' if case == 'different_missing_fields' else 'architecture')
+                if case == 'equivalent_build':
+                    b['build_conditions']['metaeditor_build'] = str(b['build_conditions']['metaeditor_build'])
+                if case == 'unlinked':
+                    b['profile_sha256'] = '0'*64
+                    b['build_conditions']['profiling_inlining'] = 'enabled'
+                reports = []
+                for name, recorded in (('baseline', a), ('candidate', b)):
+                    path = self.root/(name+'.json')
+                    path.write_text(json.dumps(recorded), encoding='utf-8')
+                    reports.append(native_profile(FIXTURES/'native-functions.csv', path))
+                result = compare_profiles(*reports)
+                self.assertEqual(result['compatibility']['status'], 'insufficient_evidence')
+                self.assertEqual(result['compatibility']['differences'], [])
+                self.assertIn('build_conditions.architecture', result['compatibility']['missing'])
+                if case == 'different_missing_fields':
+                    self.assertIn('build_conditions.environment_id', result['compatibility']['missing'])
+                if case == 'unlinked':
+                    self.assertEqual(reports[1]['evidence_linkage']['status'], 'mismatch')
+                    self.assertEqual(reports[1]['recorded_identity'], {})
+                self.assertFalse(result['speed_improvement_established'])
+
+    def test_partial_build_conditions_cli_exit_codes_and_expectation_gates(self):
+        template = json.loads((FIXTURES/'native-functions-conditions.json').read_text(encoding='utf-8'))
+        expectation_path = self.root/'expectations.json'
+        expectation_path.write_text(json.dumps({'schema_version': 1, 'metrics': [
+            {'metric': 'OnStart.self_cpu_samples', 'target': 'candidate', 'minimum': '0'}]}), encoding='utf-8')
+        for case, expected_code, status in (
+            ('complete_conflict', 3, 'incompatible'), ('partial_conflict', 3, 'incompatible'),
+            ('partial_equal', 4, 'insufficient_evidence'), ('complete_equal', 0, 'comparable'),
+            ('unlinked_conflict', 4, 'insufficient_evidence')):
+            with self.subTest(case=case):
+                a, b = copy.deepcopy(template), copy.deepcopy(template)
+                if case.startswith('partial'):
+                    for recorded in (a, b):
+                        recorded['build_conditions'].pop('architecture')
+                if case.endswith('conflict'):
+                    b['build_conditions']['profiling_inlining'] = 'enabled'
+                if case == 'unlinked_conflict':
+                    b['profile_sha256'] = '0'*64
+                paths = []
+                for name, recorded in (('baseline', a), ('candidate', b)):
+                    path = self.root/(case+'-'+name+'.json')
+                    path.write_text(json.dumps(recorded), encoding='utf-8')
+                    paths.append(path)
+                output = self.root/(case+'-output')
+                process = subprocess.run([sys.executable, '-B', str(SCRIPTS/'mql5_toolkit.py'), 'profile', 'compare',
+                    '--baseline', str(FIXTURES/'native-functions.csv'), '--candidate', str(FIXTURES/'native-functions.csv'),
+                    '--baseline-conditions', str(paths[0]), '--candidate-conditions', str(paths[1]),
+                    '--expectations', str(expectation_path), '--output', str(output)], capture_output=True)
+                self.assertEqual(process.returncode, expected_code)
+                result = json.loads((output/'result.json').read_text(encoding='utf-8'))
+                self.assertEqual(result['compatibility']['status'], status)
+                self.assertEqual(result['exit_code'], expected_code)
+                self.assertEqual(result['expectations']['status'], 'pass' if expected_code == 0 else 'not_evaluable')
+                self.assertFalse(result['speed_improvement_established'])
+                self.assertNotIn(b'Traceback', process.stderr)
+                for path in paths:
+                    source = next(p['evidence_linkage']['source'] for p in (result['baseline'], result['candidate'])
+                                  if p['evidence_linkage']['source']['path'] == str(path))
+                    self.assertEqual(source['sha256'], digest(path.read_bytes()))
+
     def test_invalid_recorded_build_conditions(self):
         recorded = json.loads((FIXTURES/"native-functions-conditions.json").read_text())
         path = self.root/"conditions.json"

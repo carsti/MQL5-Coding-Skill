@@ -503,6 +503,26 @@ exit $LASTEXITCODE
     $comparison=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'includes','compare','--baseline',(Join-Path $crChanged 'result.json'),'--candidate',(Join-Path $crDeleted 'result.json'),'--output',$crDeleteImpact) $testRoot 30
     $crImpact=ReadResult $crDeleteImpact
     Check ($comparison.exit_code -eq 0 -and $crImpact.differences.Count -eq 1 -and $crImpact.differences[0].kind -eq 'removed' -and $crImpact.possible_affected_entrypoints[0] -ceq $crEntry -and $crImpact.differences[0].consumer_coverage_unknown) 'Deleted headers retain prior CR-only source consumers and disclose missing evidence'
+    $profileFixtures=Join-Path $repo 'tests\fixtures\profiles'
+    $partialBaseline=Read-Mql5ReleaseJson (Join-Path $profileFixtures 'native-functions-conditions.json')
+    $partialCandidate=Read-Mql5ReleaseJson (Join-Path $profileFixtures 'native-functions-inlined-conditions.json')
+    $partialBaseline.build_conditions.PSObject.Properties.Remove('architecture')
+    $partialCandidate.build_conditions.PSObject.Properties.Remove('architecture')
+    $partialBaselinePath=Join-Path $testRoot 'partial-profile-baseline.json'
+    $partialCandidatePath=Join-Path $testRoot 'partial-profile-candidate.json'
+    Save $partialBaselinePath $partialBaseline
+    Save $partialCandidatePath $partialCandidate
+    $profileExpectations=Join-Path $testRoot 'profile-expectations.json'
+    Save $profileExpectations @{schema_version=1;metrics=@(@{metric='OnStart.self_cpu_samples';target='candidate';minimum='0'})}
+    $profileConflict=Join-Path $testRoot 'profile-partial-conflict'
+    $comparison=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'profile','compare','--baseline',(Join-Path $profileFixtures 'native-functions.csv'),'--candidate',(Join-Path $profileFixtures 'native-functions-inlined.csv'),'--baseline-conditions',$partialBaselinePath,'--candidate-conditions',$partialCandidatePath,'--expectations',$profileExpectations,'--output',$profileConflict) $testRoot 30
+    $profileRead=ReadResult $profileConflict
+    $profileMetric=Get-ToolkitValue $profileRead.metrics 'OnStart.self_cpu_samples'
+    Check ($comparison.exit_code -eq 3 -and $profileRead.compatibility.status -eq 'incompatible' -and $profileRead.compatibility.missing -contains 'build_conditions.architecture' -and $profileRead.compatibility.differences.Count -eq 1 -and $profileRead.compatibility.differences[0].condition -eq 'build_conditions.profiling_inlining' -and $profileRead.expectations.status -eq 'not_evaluable' -and $profileMetric.difference.state -eq 'finite' -and -not $profileRead.speed_improvement_established) 'Missing profiling metadata cannot hide a known inlining conflict or permit expectations'
+    $profileMissing=Join-Path $testRoot 'profile-partial-equal'
+    $comparison=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'profile','compare','--baseline',(Join-Path $profileFixtures 'native-functions.csv'),'--candidate',(Join-Path $profileFixtures 'native-functions.csv'),'--baseline-conditions',$partialBaselinePath,'--candidate-conditions',$partialBaselinePath,'--expectations',$profileExpectations,'--output',$profileMissing) $testRoot 30
+    $profileRead=ReadResult $profileMissing
+    Check ($comparison.exit_code -eq 4 -and $profileRead.compatibility.status -eq 'insufficient_evidence' -and $profileRead.compatibility.missing -contains 'build_conditions.architecture' -and $profileRead.compatibility.differences.Count -eq 0 -and $profileRead.expectations.status -eq 'not_evaluable') 'Matching partial profiling settings still require missing build evidence'
     'TOOLKIT_POWERSHELL_TESTS='+$checks
 } finally {
     $env:MQL5_SCENARIO_TEST_TRACE=$oldTrace;$env:MQL5_SCENARIO_TEST_REPORT=$oldReport
