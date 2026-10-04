@@ -222,14 +222,19 @@ try {
     foreach ($pending in $result.scenarios) {if ($pending.status -eq 'skipped' -and $pending.reason -eq 'not_started') {$pending.reason='aborted_after_wrapper_failure'}}
 } finally {
     $result.duration_milliseconds=$clock.ElapsedMilliseconds
-    if ($output) {Save-BatchCheckpoint}
+    if ($output) {
+        try {Save-BatchCheckpoint}
+        catch {Set-ToolkitPublicationFailure $result}
+    }
 }
 if ($output) {
-    $table=@("id`tstatus`tcompile_exit`ttester_exit`trecorded_tester_status`tanalysis_exits`tcleanup_verified")
-    foreach ($scenario in $result.scenarios) {
-        $table+=@((@($scenario.id,$scenario.status,(Get-ToolkitValue $scenario.compile 'exit_code'),(Get-ToolkitValue $scenario.tester 'exit_code'),(Get-ToolkitValue $scenario.tester 'recorded_status'),(@($scenario.analysis | ForEach-Object {$_.exit_code}) -join ','),$scenario.cleanup_verified) -join "`t"))
-    }
-    [IO.File]::WriteAllLines((Join-Path $output 'results.tsv'),[string[]]$table,(New-Object Text.UTF8Encoding($false)))
-    Save-ToolkitResult $output $result @('scenario batch',('Action: '+$Action),('Status: '+$result.status),('Scenarios: '+$result.scenarios.Count),('Exit code: '+$result.exit_code))
+    try {
+        $table=@("id`tstatus`tcompile_exit`ttester_exit`trecorded_tester_status`tanalysis_exits`tcleanup_verified")
+        foreach ($scenario in $result.scenarios) {
+            $table+=@((@($scenario.id,$scenario.status,(Get-ToolkitValue $scenario.compile 'exit_code'),(Get-ToolkitValue $scenario.tester 'exit_code'),(Get-ToolkitValue $scenario.tester 'recorded_status'),(@($scenario.analysis | ForEach-Object {$_.exit_code}) -join ','),$scenario.cleanup_verified) -join "`t"))
+        }
+        [IO.File]::WriteAllLines((Join-Path $output 'results.tsv'),[string[]]$table,(New-Object Text.UTF8Encoding($false)))
+        Save-ToolkitResult $output $result @('scenario batch',('Action: '+$Action),('Status: '+$result.status),('Scenarios: '+$result.scenarios.Count),('Exit code: '+$result.exit_code))
+    } catch {Set-ToolkitPublicationFailure $result}
 } else {Write-Error 'Select a new absolute output directory.' -ErrorAction Continue}
 exit $result.exit_code

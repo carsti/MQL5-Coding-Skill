@@ -62,6 +62,14 @@ function Save-ToolkitResult([string]$Root,$Result,[string[]]$Summary) {
     foreach ($line in $Summary) {Write-Output $line}
     Write-Output ('Evidence: '+(Join-Path $Root 'result.json'))
 }
+function Set-ToolkitPublicationFailure($Result) {
+    $Result.status='failed';$Result.exit_code=2
+    if (@($Result.issues | Where-Object {$_.code -eq 'output_publication_failed'}).Count -eq 0) {
+        $Result.issues+=@(@{code='output_publication_failed';message='Output could not be saved; retained files may be partial.'})
+    }
+    # Do not expose exception text, paths or an unbounded PowerShell error record.
+    [Console]::Error.WriteLine('Toolkit output could not be saved. Retained files may be partial; check process exit code 2.')
+}
 function Get-ToolkitPython([string]$Selected) {
     if ($Selected) {
         if ($Selected -notmatch '^[A-Za-z]:[\\/]') {throw 'PythonPath must be absolute.'}

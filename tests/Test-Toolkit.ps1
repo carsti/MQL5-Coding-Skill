@@ -31,6 +31,8 @@ function New-JournalSegment([string]$Path,[int]$Offset,[int]$Length) {
 $oldTrace=$env:MQL5_SCENARIO_TEST_TRACE;$oldReport=$env:MQL5_SCENARIO_TEST_REPORT
 try {
     $python=if ($PythonPath) {Get-ToolkitPython $PythonPath} elseif (Get-Command python -ErrorAction SilentlyContinue) {(Get-Command python).Source} else {Get-ToolkitPython ''}
+    $publication=Invoke-ToolkitProcess $hostExe @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'Test-ToolkitPublication.ps1'),'-PythonPath',$python) $testRoot 90
+    Check ($publication.exit_code -eq 0 -and $publication.cleanup_verified -and $publication.stdout -match 'TOOLKIT_PUBLICATION_TESTS=32') ('Toolkit output failure checks failed: '+$publication.stderr)
     Check ((Get-ToolkitValue @{exit_code=3} 'exit_code') -eq 3 -and (Get-ToolkitValue ([ordered]@{exit_code=4}) 'exit_code') -eq 4) 'Dictionary exit codes are retained'
     $raceEvidence=& {
         $script:toolkitRaceOutput=Join-Path $testRoot 'output-creation-race'

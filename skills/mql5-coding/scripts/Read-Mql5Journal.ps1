@@ -154,6 +154,9 @@ try {
 } catch {
     $result.issues+=@(@{code='invalid_input_or_tooling';message='Inspect tester-result schema, evidence paths, byte ranges, and output selection.'})
 }
-if ($null -ne $output) {Save-ToolkitResult $output $result @('journal read',('Status: '+$result.status),('Evidence: '+$result.evidence_status),('Inspected lines: '+$result.inspected_lines),('Groups: '+$result.groups.Count),('Exit code: '+$result.exit_code))}
+if ($null -ne $output) {
+    try {Save-ToolkitResult $output $result @('journal read',('Status: '+$result.status),('Evidence: '+$result.evidence_status),('Inspected lines: '+$result.inspected_lines),('Groups: '+$result.groups.Count),('Exit code: '+$result.exit_code))}
+    catch {Set-ToolkitPublicationFailure $result}
+}
 else {Write-Error 'Select a new absolute output directory.' -ErrorAction Continue}
 exit $result.exit_code
