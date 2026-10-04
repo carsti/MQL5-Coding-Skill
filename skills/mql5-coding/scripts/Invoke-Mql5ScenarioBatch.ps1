@@ -81,7 +81,9 @@ try {
     }
     foreach ($scenario in $manifest.scenarios) {
         Assert-ToolkitFields $scenario @('id','profile') @('expected_marker_file','baseline_report','baseline_result','expectations')
-        if ($scenario.id -isnot [string] -or $scenario.id -cnotmatch '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$' -or $scenario.id -match '^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$' -or $ids.ContainsKey($scenario.id)) {throw 'Invalid or duplicate scenario identity.'}
+        # .NET's '$' can match before a final LF. Identities must match in full
+        # before any earlier scenario is allowed to compile or start testing.
+        if ($scenario.id -isnot [string] -or $scenario.id -cnotmatch '\A[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\z' -or $scenario.id -match '\A(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])\z' -or $ids.ContainsKey($scenario.id)) {throw 'Invalid or duplicate scenario identity.'}
         $ids[$scenario.id]=$true
         if ($scenario.profile -isnot [string]) {throw 'Scenario profile must be a path.'}
         $profilePath=Resolve-ToolkitPath $scenario.profile $base

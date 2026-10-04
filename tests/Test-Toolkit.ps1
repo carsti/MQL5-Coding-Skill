@@ -277,6 +277,28 @@ exit $LASTEXITCODE
     $validated=Join-Path $testRoot 'batch-validate'
     $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$validated,'-PythonPath',$python) $fixtureScripts
     Check ($process.exit_code -eq 0 -and -not (Test-Path -LiteralPath $env:MQL5_SCENARIO_TEST_TRACE)) ('Validation launched code or failed: '+$process.stderr+$process.stdout+((ReadResult $validated).issues | ConvertTo-Json -Compress))
+    foreach ($case in @(
+        @{name='trailing-lf';id="later`n"},
+        @{name='trailing-crlf';id="later`r`n"},
+        @{name='embedded-lf';id="la`nter"},
+        @{name='trailing-tab';id="later`t"}
+    )) {
+        Save $manifestPath @{schema_version=1;scenarios=@(@{id='first';profile=$profiles.success},@{id=$case.id;profile=$profiles.success})}
+        $manifestHash=Get-Mql5ReleaseHash $manifestPath
+        foreach ($action in @('Validate','Execute')) {
+            $rejected=Join-Path $testRoot ('batch-identity-'+$case.name+'-'+$action)
+            $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$rejected,'-PythonPath',$python,'-Action',$action) $fixtureScripts
+            $rejectedRead=ReadResult $rejected
+            Check ($process.exit_code -eq 2 -and $process.cleanup_verified -and $rejectedRead.status -eq 'failed' -and $rejectedRead.scenarios.Count -eq 0 -and -not (Test-Path -LiteralPath $env:MQL5_SCENARIO_TEST_TRACE) -and (Get-Mql5ReleaseHash $manifestPath) -ceq $manifestHash) ($case.name+' scenario identity must fail '+$action+' before any earlier scenario executes')
+        }
+    }
+    foreach ($id in @(('A'*64),'scenario_9-ok')) {
+        Save $manifestPath @{schema_version=1;scenarios=@(@{id=$id;profile=$profiles.success})}
+        $identityOutput=Join-Path $testRoot ('batch-valid-identity-'+[guid]::NewGuid().ToString('N'))
+        $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$identityOutput,'-PythonPath',$python) $fixtureScripts
+        $identityRead=ReadResult $identityOutput
+        Check ($process.exit_code -eq 0 -and $identityRead.status -eq 'validated' -and $identityRead.scenarios[0].id -ceq $id -and -not (Test-Path -LiteralPath $env:MQL5_SCENARIO_TEST_TRACE)) 'Valid scenario identities retain their full spelling, including the 64-character boundary'
+    }
     $nonce='a'*32
     $markerCases=@(
         @{name='punctuation';text=('MQL5_CODING_PASS:'+$nonce+':invalid!')},
