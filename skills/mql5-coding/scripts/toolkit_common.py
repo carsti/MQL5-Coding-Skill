@@ -131,6 +131,9 @@ def number(raw: str | None, unit: str | None = None) -> dict:
         try:
             value = Decimal(text.replace(" ", "").replace(",", ""))
             if value.is_finite() and abs(value.adjusted()) <= 500:
+                if unit == "count" and (value < 0 or value != value.to_integral_value()):
+                    return {"state": "unparseable", "value": None, "unit": unit, "raw": raw,
+                            "reason": "invalid_count"}
                 return {"state": "finite", "value": decimal_text(value), "unit": unit, "raw": raw}
         except InvalidOperation:
             pass

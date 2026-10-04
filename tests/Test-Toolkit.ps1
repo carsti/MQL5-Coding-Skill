@@ -545,6 +545,35 @@ exit $LASTEXITCODE
         $impactRead=ReadResult $unicodeImpact
         Check ($comparison.exit_code -eq 0 -and $impactRead.differences.Count -eq 1 -and $impactRead.differences[0].kind -eq 'changed' -and $impactRead.differences[0].path -ceq $unicodeHeader -and $impactRead.possible_affected_entrypoints[0] -ceq $unicodeEntry) 'Changed native Unicode-named headers retain possible consumers through the comparison CLI'
     }
+    $reportFixtures=Join-Path $repo 'tests\fixtures\reports'
+    $countHtml=[IO.File]::ReadAllText((Join-Path $reportFixtures 'mixed-trades.htm'),[Text.Encoding]::Unicode)
+    $countCases=@(@{label='Total Trades';metric='trades';raw='1.5';code=4},@{label='Total Deals';metric='deals';raw='-1';code=4},@{label='Ticks';metric='ticks';raw='123.25';code=4},@{label='Total Trades';metric='trades';raw='56.00';code=0})
+    foreach ($variant in @('utf8','utf16')) {
+        $caseIndex=0
+        foreach ($countCase in $countCases) {
+            $name='count-'+$variant+'-'+$caseIndex;$caseIndex++
+            $pattern='('+[regex]::Escape($countCase.label)+':</td>\s*<td[^>]*><b>)([^<]*)(</b>)'
+            if ([regex]::Matches($countHtml,$pattern).Count -ne 1) {throw 'Expected one native count cell.'}
+            $candidateHtml=[regex]::Replace($countHtml,$pattern,[Text.RegularExpressions.MatchEvaluator]{param($match);return $match.Groups[1].Value+$countCase.raw+$match.Groups[3].Value})
+            $candidateReport=Join-Path $testRoot ($name+'.htm')
+            $encoding=if ($variant -eq 'utf16') {[Text.Encoding]::Unicode} else {New-Object Text.UTF8Encoding($false)}
+            [IO.File]::WriteAllText($candidateReport,$candidateHtml,$encoding)
+            $candidateHash=Get-Mql5ReleaseHash $candidateReport
+            $candidateRun=Read-Mql5ReleaseJson (Join-Path $reportFixtures 'mixed-trades-result.json')
+            $candidateRun.artifacts.report.sha256=$candidateHash
+            $candidateRun.artifacts.report.byte_length=(Get-Item -LiteralPath $candidateReport).Length
+            $candidateRun.fixture_derivation='Synthetic invalid/valid count mutation; not a tester execution'
+            $candidateRunPath=Join-Path $testRoot ($name+'.json');Save $candidateRunPath $candidateRun
+            $expectationPath=Join-Path $testRoot ($name+'-expectations.json')
+            Save $expectationPath @{schema_version=1;metrics=@(@{metric=$countCase.metric;target='candidate';minimum='0'})}
+            $comparisonRoot=Join-Path $testRoot ($name+'-comparison')
+            $comparison=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'report','compare','--baseline',(Join-Path $reportFixtures 'mixed-trades.htm'),'--baseline-result',(Join-Path $reportFixtures 'mixed-trades-result.json'),'--candidate',$candidateReport,'--candidate-result',$candidateRunPath,'--expectations',$expectationPath,'--output',$comparisonRoot) $testRoot 30
+            $countRead=ReadResult $comparisonRoot
+            $measurement=(Get-ToolkitValue $countRead.metrics $countCase.metric).candidate
+            $valid=if ($countCase.code -eq 0) {$measurement.state -eq 'finite' -and $measurement.value -ceq '56.00' -and $countRead.expectations.status -eq 'pass'} else {$measurement.state -eq 'unparseable' -and $null -eq $measurement.value -and $measurement.reason -eq 'invalid_count' -and $countRead.expectations.status -eq 'not_evaluable'}
+            Check ($comparison.exit_code -eq $countCase.code -and $countRead.exit_code -eq $countCase.code -and $countRead.status -eq 'completed' -and $countRead.candidate.evidence_linkage.status -eq 'hash_verified' -and $countRead.compatibility.status -eq 'comparable' -and $measurement.raw -ceq $countCase.raw -and $measurement.unit -eq 'count' -and $countRead.sources[1].sha256 -ceq $candidateHash -and (Get-Mql5ReleaseHash $candidateReport) -ceq $candidateHash -and $valid) 'Invalid native report counts cannot pass or fail expectations; valid whole counts remain evaluable and input bytes are preserved'
+        }
+    }
     $profileFixtures=Join-Path $repo 'tests\fixtures\profiles'
     $partialBaseline=Read-Mql5ReleaseJson (Join-Path $profileFixtures 'native-functions-conditions.json')
     $partialCandidate=Read-Mql5ReleaseJson (Join-Path $profileFixtures 'native-functions-inlined-conditions.json')

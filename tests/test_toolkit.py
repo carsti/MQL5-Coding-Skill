@@ -4,6 +4,7 @@ import copy
 import errno
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -194,6 +195,105 @@ class ToolkitTests(unittest.TestCase):
         self.assertIsNone(report["conditions"]["deposit"])
         self.assertEqual(report["configuration_evidence"]["Initial Deposit"]["raw"], "100 000.00%")
         self.assertEqual(compare_reports(self.report(), report)["compatibility"]["status"], "insufficient_evidence")
+
+    def test_count_measurements_require_nonnegative_integers(self):
+        for raw in ('-1', '-1 234', '-1e2', '1.5', '1,234.5', '1e-3', '0.0000000000000000000001'):
+            with self.subTest(raw=raw):
+                measurement = number(raw, 'count')
+                self.assertEqual(measurement['state'], 'unparseable')
+                self.assertEqual(measurement['reason'], 'invalid_count')
+                self.assertEqual(measurement['raw'], raw)
+                self.assertEqual(measurement['unit'], 'count')
+                self.assertIsNone(measurement['value'])
+        for raw, value in [('0', '0'), ('-0.00', '-0.00'), ('1.00', '1.00'), ('1e2', '100'), ('1,234', '1234')]:
+            self.assertEqual(number(raw, 'count')['value'], value)
+        for raw, state in [(None, 'missing'), ('N/A', 'undefined'), ('NaN', 'special'), ('1.5%', 'unparseable')]:
+            self.assertEqual(number(raw, 'count')['state'], state)
+        for unit in (None, 'USD', 'ratio'):
+            self.assertEqual(number('-1.5', unit)['state'], 'finite')
+
+    def count_candidate(self, label, raw, encoding, name):
+        html = (FIXTURES/'mixed-trades.htm').read_text(encoding='utf-16')
+        pattern = '(' + re.escape(label) + r':</td>\s*<td[^>]*><b>)([^<]*)(</b>)'
+        def replacement(match):
+            _, separator, suffix = match[2].partition('(')
+            return match[1] + raw + (' (' + suffix if separator else '') + match[3]
+        changed, count = re.subn(pattern, replacement, html, count=1)
+        self.assertEqual(count, 1)
+        path = self.root/(name+'.htm')
+        data = changed.encode(encoding)
+        path.write_bytes(data)
+        run = json.loads((FIXTURES/'mixed-trades-result.json').read_text(encoding='utf-8'))
+        run['artifacts']['report'].update(sha256=digest(data), byte_length=len(data))
+        run['fixture_derivation'] = 'Synthetic invalid/valid count mutation; not a tester execution'
+        run_path = self.root/(name+'.json')
+        run_path.write_text(json.dumps(run), encoding='utf-8')
+        return path, run_path, native_report(path, run_path)
+
+    def test_native_report_counts_cannot_evaluate_invalid_statistics(self):
+        baseline = self.report()
+        fields = [('Total Trades', 'trades'), ('Total Deals', 'deals'), ('Bars', 'bars'), ('Ticks', 'ticks'),
+                  ('Symbols', 'symbols'), ('Profit Trades (% of total)', 'winning_trades'),
+                  ('Loss Trades (% of total)', 'losing_trades'), ('Short Trades (won %)', 'short_trades'),
+                  ('Long Trades (won %)', 'long_trades')]
+        for encoding in ('utf-8', 'utf-16'):
+            for label, metric in fields:
+                for raw in ('1.5', '-1'):
+                    with self.subTest(encoding=encoding, metric=metric, raw=raw):
+                        path, _, report = self.count_candidate(label, raw, encoding, 'count-case')
+                        value = report['metrics'][metric]
+                        self.assertEqual(value['state'], 'unparseable')
+                        self.assertEqual(value['reason'], 'invalid_count')
+                        self.assertEqual(value['raw'], raw)
+                        self.assertEqual(value['unit'], 'count')
+                        self.assertGreater(value['evidence']['location']['row'], 0)
+                        self.assertEqual(report['evidence_linkage']['status'], 'hash_verified')
+                        expected = {'metrics': [{'metric': metric, 'target': 'candidate', 'minimum': '0'}]}
+                        result = compare_reports(baseline, report, expected)
+                        self.assertEqual(result['compatibility']['status'], 'comparable')
+                        self.assertEqual(result['expectations']['status'], 'not_evaluable')
+                        self.assertEqual(result['metrics'][metric]['difference']['state'], 'undefined')
+                        if metric in ('bars', 'ticks', 'symbols'):
+                            expected['required_conditions'] = [metric]
+                            result = compare_reports(baseline, report, expected)
+                            self.assertEqual(result['compatibility']['status'], 'insufficient_evidence')
+                            self.assertIn(metric, result['compatibility']['missing'])
+                        if metric+'_percent' in report['metrics']:
+                            self.assertEqual(report['metrics'][metric+'_percent']['value'], baseline['metrics'][metric+'_percent']['value'])
+                        self.assertEqual(report['sources'][0]['sha256'], digest(path.read_bytes()))
+                        self.assertEqual(report['metrics']['net_profit']['value'], '120.86')
+                        self.assertEqual(report['metrics']['gross_loss']['value'], '-146.98')
+
+    def test_report_count_cli_expectations_and_evidence(self):
+        cases = [('Total Trades', 'trades', '1.5', 4), ('Total Deals', 'deals', '-1', 4),
+                 ('Ticks', 'ticks', '123.25', 4), ('Total Trades', 'trades', '56.00', 0)]
+        for encoding in ('utf-8', 'utf-16'):
+            for index, (label, metric, raw, code) in enumerate(cases):
+                with self.subTest(encoding=encoding, metric=metric, raw=raw):
+                    name = 'count-cli-'+encoding+'-'+str(index)
+                    path, run_path, _ = self.count_candidate(label, raw, encoding, name)
+                    self.expectation(metric, minimum='0')
+                    originals = {p: p.read_bytes() for p in (path, run_path, self.root/'expectations.json')}
+                    output = self.root/(name+'-output')
+                    process = subprocess.run([sys.executable, '-B', str(SCRIPTS/'mql5_toolkit.py'), 'report', 'compare',
+                        '--baseline', str(FIXTURES/'mixed-trades.htm'), '--baseline-result', str(FIXTURES/'mixed-trades-result.json'),
+                        '--candidate', str(path), '--candidate-result', str(run_path),
+                        '--expectations', str(self.root/'expectations.json'), '--output', str(output)], capture_output=True)
+                    self.assertEqual(process.returncode, code, process.stderr)
+                    self.assertNotIn(b'Traceback', process.stderr)
+                    self.assertLess(len(process.stdout), 4096)
+                    result = json.loads((output/'result.json').read_text(encoding='utf-8'))
+                    self.assertEqual(result['status'], 'completed')
+                    self.assertEqual(result['exit_code'], code)
+                    self.assertEqual(result['compatibility']['status'], 'comparable')
+                    self.assertEqual(result['expectations']['status'], 'pass' if code == 0 else 'not_evaluable')
+                    measurement = result['metrics'][metric]['candidate']
+                    self.assertEqual(measurement['state'], 'finite' if code == 0 else 'unparseable')
+                    self.assertEqual(measurement['raw'], raw)
+                    self.assertEqual(result['sources'][1]['sha256'], digest(originals[path]))
+                    self.assertTrue((output/'summary.txt').is_file())
+                    for selected, data in originals.items():
+                        self.assertEqual(selected.read_bytes(), data)
 
     def test_unsupported_malformed_duplicate_layouts(self):
         for old, new in [("Settings</b>", "Einstellungen</b>"), ("</table>", ""), ("Gross Loss:", "Gross Profit:")]:
