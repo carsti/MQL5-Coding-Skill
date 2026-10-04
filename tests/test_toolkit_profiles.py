@@ -153,6 +153,34 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(recorded["baseline"]["recorded_identity"]["elapsed_duration_milliseconds"]["value"], "12.5")
         self.assertEqual(recorded["baseline"]["evidence_linkage"]["source"]["sha256"], digest(paths[0].read_bytes()))
 
+    def test_cli_invalid_unicode_produces_complete_failure_evidence(self):
+        template = json.loads((FIXTURES/"native-functions-conditions.json").read_text())
+        workloads = ({"value": "\ud800"}, {"value": ["\udfff"]}, {"\ud800": "value"},
+                     {"value": "\U0001f600\u00e9"})
+        for index, workload in enumerate(workloads):
+            path = self.root/("unicode-conditions-" + str(index) + ".json")
+            path.write_text(json.dumps({**template, "workload": workload}), encoding="utf-8")
+            original = path.read_bytes()
+            output = self.root/("unicode-output-" + str(index))
+            process = subprocess.run([sys.executable, "-B", str(SCRIPTS/"mql5_toolkit.py"), "profile", "read",
+                                      "--input", str(FIXTURES/"native-functions.csv"), "--conditions", str(path),
+                                      "--output", str(output)], capture_output=True)
+            with self.subTest(workload=ascii(workload)):
+                expected_code = 0 if index == 3 else 2
+                self.assertEqual(process.returncode, expected_code, process.stderr)
+                self.assertNotIn(b"Traceback", process.stderr)
+                self.assertLess(len(process.stdout), 4096)
+                recorded = json.loads((output/"result.json").read_text(encoding="utf-8"))
+                self.assertEqual(recorded["exit_code"], expected_code)
+                self.assertEqual(recorded["status"], "completed" if index == 3 else "failed")
+                if index != 3:
+                    self.assertEqual(recorded["issues"][0]["code"], "invalid_input_or_tooling")
+                    self.assertEqual(recorded["issues"][0]["message"], "Invalid UTF-8 JSON")
+                else:
+                    self.assertEqual(recorded["conditions"]["workload"], workload)
+                self.assertTrue((output/"summary.txt").is_file())
+                self.assertEqual(path.read_bytes(), original)
+
     def test_hash_mismatch_and_explicit_evidence(self):
         conditions = json.loads((FIXTURES/"native-functions-conditions.json").read_text())
         conditions["profile_sha256"] = "0"*64

@@ -310,6 +310,10 @@ exit $LASTEXITCODE
     $numericExpectations=Join-Path $testRoot 'batch-numeric-string-bound'
     $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$numericExpectations,'-PythonPath',$python,'-Action','Execute') $fixtureScripts
     Check ($process.exit_code -eq 2 -and [IO.File]::ReadAllText($env:MQL5_SCENARIO_TEST_TRACE) -ceq $before) 'Decimal JSON bounds cannot satisfy string fields or launch compilation'
+    [IO.File]::WriteAllText($invalidExpectations,'{"schema_version":1,"metrics":[{"metric":"\ud800","target":"candidate","minimum":"0"}]}',(New-Object Text.UTF8Encoding($false)))
+    $unicodeExpectations=Join-Path $testRoot 'batch-unpaired-unicode'
+    $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$unicodeExpectations,'-PythonPath',$python,'-Action','Execute') $fixtureScripts
+    Check ($process.exit_code -eq 2 -and [IO.File]::ReadAllText($env:MQL5_SCENARIO_TEST_TRACE) -ceq $before -and (ReadResult $unicodeExpectations).status -eq 'failed') 'Unpaired Unicode in expectations fails validation before compilation'
     $profileInventory=Join-Path $testRoot 'profile-inventory'
     $analyzer=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'includes','inventory','--project-profile',$profiles.success,'--powershell',$hostExe,'--output',$profileInventory) $testRoot 30
     Check ($analyzer.exit_code -eq 0 -and (ReadResult $profileInventory).profile.path -eq $profiles.success) 'Python inventory reuses existing profile validation'

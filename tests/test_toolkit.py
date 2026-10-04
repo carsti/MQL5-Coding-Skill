@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "skills/mql5-coding/scripts"
 sys.path.insert(0, str(SCRIPTS))
-from toolkit_common import InputError, differences, digest, load_expectations, number
+from toolkit_common import InputError, differences, digest, load_expectations, number, read_json
 from toolkit_reports import compare_reports, native_report
 from toolkit_includes import compare_snapshots, directives, inventory
 from mql5_toolkit import execute, parser as cli_parser
@@ -38,6 +38,26 @@ class ToolkitTests(unittest.TestCase):
         path = self.root/"expectations.json"
         path.write_text(json.dumps(value), encoding="utf-8")
         return load_expectations(path)
+
+    def test_json_rejects_unpaired_surrogates_in_keys_and_nested_values(self):
+        path = self.root/"unicode.json"
+        for value in ({"value": "\ud800"}, {"value": ["\udfff"]}, {"\ud800": "value"},
+                      {"value": {"nested": ["\ud800text\udfff"]}}):
+            data = json.dumps(value).encode("utf-8")
+            path.write_bytes(data)
+            with self.subTest(value=ascii(value)):
+                with self.assertRaisesRegex(InputError, "Invalid UTF-8 JSON"):
+                    read_json(path)
+                with self.assertRaises(InputError):
+                    read_json(path, data=data)
+
+    def test_json_preserves_valid_literal_and_escaped_unicode(self):
+        path = self.root/"valid-unicode.json"
+        expected = {"\U0001f600": {"text": ["\u00e9", "\U0001f600", "\\ud800"]}}
+        for escaped in (False, True):
+            path.write_text(json.dumps(expected, ensure_ascii=escaped), encoding="utf-8")
+            with self.subTest(escaped=escaped):
+                self.assertEqual(read_json(path), expected)
 
     def test_genuine_native_statistics(self):
         # Independently checked directly in the retained native report cells.

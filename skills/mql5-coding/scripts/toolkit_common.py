@@ -51,6 +51,25 @@ def object_keys(pairs: list) -> dict:
     return result
 
 
+def validate_json_text(value) -> None:
+    # JSON escapes can decode to unpaired surrogates even when the input bytes
+    # are valid UTF-8. Reject them before results reach the UTF-8 publisher.
+    # Iterators keep traversal memory bounded by nesting rather than width.
+    pending = [iter((value,))]
+    while pending:
+        try:
+            item = next(pending[-1])
+        except StopIteration:
+            pending.pop()
+            continue
+        if isinstance(item, str):
+            item.encode("utf-8")
+        elif isinstance(item, dict):
+            pending.extend((iter(item.values()), iter(item)))
+        elif isinstance(item, list):
+            pending.append(iter(item))
+
+
 def read_json(path: Path, limit: int = 32 * 1024 * 1024, *, data: bytes | None = None) -> dict:
     data = path.read_bytes() if data is None else data
     if len(data) > limit:
@@ -59,6 +78,7 @@ def read_json(path: Path, limit: int = 32 * 1024 * 1024, *, data: bytes | None =
         value = json.loads(data.decode("utf-8-sig"), object_pairs_hook=object_keys,
                            parse_float=Decimal,
                            parse_constant=lambda s: (_ for _ in ()).throw(InputError("Nonstandard JSON number")))
+        validate_json_text(value)
     except (UnicodeError, json.JSONDecodeError, InvalidOperation) as exc:
         raise InputError("Invalid UTF-8 JSON") from exc
     if not isinstance(value, dict):
