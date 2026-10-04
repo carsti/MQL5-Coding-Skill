@@ -105,11 +105,13 @@ def directives(text: str) -> list[tuple[int, str, str]]:
             directive_start = i if all(ch.isspace() for ch in cleaned[line_start:i]) else None
         i += 1
     result, offset = [], 0
-    for line_number, line in enumerate("".join(cleaned).splitlines(keepends=True), 1):
+    # splitlines() also splits Unicode NEL/LS/PS inside strings and filenames.
+    # Only normalized physical newlines delimit a preprocessor source line.
+    for line_number, line in enumerate("".join(cleaned).split("\n"), 1):
         match = re.match(r"\s*#\s*([A-Za-z_]\w*)\b(.*)", line.rstrip("\r\n"))
         if match and offset + line.index("#") in markers:
             result.append((line_number, match.group(1), match.group(2).strip()))
-        offset += len(line)
+        offset += len(line) + 1
     if state == "block":
         result.append((text.count("\n")+1, "unsupported", "unterminated comment"))
     return result

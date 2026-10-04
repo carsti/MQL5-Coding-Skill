@@ -642,6 +642,80 @@ class ToolkitTests(unittest.TestCase):
                 self.assertEqual(directives('/* incomplete' + endings[0]),
                                  [(2, 'unsupported', 'unterminated comment')])
 
+    def test_unicode_text_keeps_physical_directive_lines(self):
+        for separator in ('\u0085', '\u2028', '\u2029', '\u0085\u2028\u2029'):
+            for ending in ('\n', '\r\n', '\r'):
+                with self.subTest(separator=ascii(separator), ending=ascii(ending)):
+                    header = 'Header' + separator + 'Name.mqh'
+                    lines = ['string title="A' + separator + 'B";', '#include "' + header + '"',
+                             '#ifdef ENABLED', '#include <' + header + '>', '#endif']
+                    self.assertEqual(directives(ending.join(lines) + ending),
+                                     [(2, 'include', '"' + header + '"'), (3, 'ifdef', 'ENABLED'),
+                                      (4, 'include', '<' + header + '>'), (5, 'endif', '')])
+
+    def test_unicode_header_shared_consumers_and_snapshots(self):
+        header_name = 'Header\u0085\u2028\u2029Name.mqh'
+        for index, ending in enumerate(('\n', '\r\n', '\r')):
+            for encoding in ('utf-8-sig', 'utf-16'):
+                with self.subTest(encoding=encoding, ending=ascii(ending)):
+                    root = self.root / ('unicode-' + str(index) + '-' + encoding)
+                    root.mkdir()
+                    entries = [root/'A.mq5', root/'B.mq5']
+                    code = ending.join(['#property strict', 'string label="A\u0085B\u2028C\u2029D";',
+                                        '#include "' + header_name + '"', '#include "Shared.mqh"', ''])
+                    entries[0].write_bytes(code.encode(encoding))
+                    entries[1].write_bytes(('#include "' + header_name + '"' + ending).encode(encoding))
+                    header, shared = root/header_name, root/'Shared.mqh'
+                    header.write_bytes(('int HeaderValue(void) { return 7; }' + ending).encode(encoding))
+                    shared.write_bytes(('int SharedValue(void) { return 2; }' + ending).encode(encoding))
+                    originals = {p: p.read_bytes() for p in (*entries, header, shared)}
+                    before = inventory(root, entries, [])
+                    self.assertEqual(before['coverage'], 'selected_entrypoints_scanned')
+                    self.assertEqual(before['unresolved'], [])
+                    self.assertEqual(before['possible_consumers'].get(str(header)), sorted(map(str, entries)))
+                    self.assertEqual([(e['line'], e['target']) for e in before['dependencies'] if e['source'] == str(entries[0])],
+                                     [(3, str(header)), (4, str(shared))])
+                    for path, data in originals.items():
+                        self.assertEqual(path.read_bytes(), data)
+                        self.assertEqual(next(f['sha256'] for f in before['files'] if f['path'] == str(path)), digest(data))
+                    header.write_bytes(('int HeaderValue(void) { return 8; }' + ending).encode(encoding))
+                    changed = inventory(root, entries, [])
+                    impact = compare_snapshots(before, changed)
+                    self.assertEqual([(d['path'], d['kind']) for d in impact['differences']], [(str(header), 'changed')])
+                    self.assertEqual(impact['possible_affected_entrypoints'], sorted(map(str, entries)))
+                    header.unlink()
+                    removed = compare_snapshots(changed, inventory(root, entries, []))
+                    self.assertEqual([(d['path'], d['kind']) for d in removed['differences']], [(str(header), 'removed')])
+                    self.assertEqual(removed['possible_affected_entrypoints'], sorted(map(str, entries)))
+                    self.assertTrue(removed['differences'][0]['consumer_coverage_unknown'])
+
+    def test_genuine_unicode_include_separator_fixture(self):
+        fixture = (Path(__file__).parent/'fixtures/unicode-include-separators').resolve()
+        provenance = json.loads((fixture/'provenance.json').read_text(encoding='utf-8'))
+        self.assertEqual(provenance['separator_codepoints'], ['U+0085', 'U+2028', 'U+2029'])
+        self.assertEqual(len(provenance['variants']), 2)
+        for variant in provenance['variants']:
+            with self.subTest(encoding=variant['source_encoding']):
+                folder = fixture/variant['directory']
+                for record in variant['files']:
+                    data = (folder/record['path']).read_bytes()
+                    self.assertEqual((len(data), digest(data)), (record['byte_length'], record['sha256']))
+                log = (folder/'native-compile.log').read_bytes()
+                self.assertEqual(digest(log), variant['sanitized_log_sha256'])
+                self.assertIn(b'Result: 0 errors, 0 warnings', log)
+                self.assertEqual((variant['compilation_status'], variant['exit_code'], variant['errors'], variant['warnings']),
+                                 ('success', 0, 0, 0))
+                self.assertFalse(variant['syntax_only'])
+                entry = folder/'Probe.mq5'
+                snapshot = inventory(folder, [entry], [])
+                self.assertEqual(snapshot['coverage'], 'selected_entrypoints_scanned')
+                self.assertEqual(snapshot['unresolved'], [])
+                self.assertEqual([e['line'] for e in snapshot['dependencies']], variant['expected_include_lines'])
+                self.assertEqual([e['target'] for e in snapshot['dependencies']],
+                                 [str(folder/path) for path in variant['expected_include_paths']])
+                for name in variant['expected_include_paths']:
+                    self.assertEqual(snapshot['possible_consumers'].get(str(folder/name)), [str(entry)])
+
     def test_cr_sources_keep_shared_header_consumers(self):
         for name, endings in (("lf", ("\n",)), ("crlf", ("\r\n",)),
                               ("cr", ("\r",)), ("mixed", ("\r", "\n", "\r\n"))):

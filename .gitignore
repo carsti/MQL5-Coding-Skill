@@ -4,6 +4,7 @@ __pycache__/
 !tests/fixtures/includes/native-compile.log
 !tests/fixtures/angle-include-filename/native-compile.log
 !tests/fixtures/carriage-return-includes/*/native-compile.log
+!tests/fixtures/unicode-include-separators/*/native-compile.log
 *.ex4
 *.ex5
 test-results/

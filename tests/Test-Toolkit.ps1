@@ -525,6 +525,26 @@ exit $LASTEXITCODE
     $comparison=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'includes','compare','--baseline',(Join-Path $crChanged 'result.json'),'--candidate',(Join-Path $crDeleted 'result.json'),'--output',$crDeleteImpact) $testRoot 30
     $crImpact=ReadResult $crDeleteImpact
     Check ($comparison.exit_code -eq 0 -and $crImpact.differences.Count -eq 1 -and $crImpact.differences[0].kind -eq 'removed' -and $crImpact.possible_affected_entrypoints[0] -ceq $crEntry -and $crImpact.differences[0].consumer_coverage_unknown) 'Deleted headers retain prior CR-only source consumers and disclose missing evidence'
+    foreach ($variant in @('utf8','utf16')) {
+        $unicodeProject=Join-Path $testRoot ('unicode-inventory-'+$variant)
+        Copy-Item -LiteralPath (Join-Path $repo ('tests\fixtures\unicode-include-separators\'+$variant)) -Destination $unicodeProject -Recurse
+        $unicodeEntry=Join-Path $unicodeProject 'Probe.mq5'
+        $unicodeHeader=Join-Path $unicodeProject ('Header'+[char]0x85+[char]0x2028+[char]0x2029+'Name.mqh')
+        $entryHash=Get-Mql5ReleaseHash $unicodeEntry
+        $unicodeBaseline=Join-Path $testRoot ('unicode-baseline-'+$variant)
+        $analyzer=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'includes','inventory','--root',$unicodeProject,'--output',$unicodeBaseline) $testRoot 30
+        $unicodeRead=ReadResult $unicodeBaseline
+        Check ($analyzer.exit_code -eq 0 -and $unicodeRead.coverage -eq 'selected_entrypoints_scanned' -and $unicodeRead.unresolved.Count -eq 0 -and $unicodeRead.dependencies.Count -eq 2 -and $unicodeRead.dependencies[0].line -eq 3 -and $unicodeRead.dependencies[1].line -eq 4 -and $unicodeRead.dependencies[0].target -ceq $unicodeHeader -and @(Get-ToolkitValue $unicodeRead.possible_consumers $unicodeHeader)[0] -ceq $unicodeEntry -and (Get-Mql5ReleaseHash $unicodeEntry) -ceq $entryHash) 'Native Unicode text and header names retain complete dependencies, physical source lines, and unchanged source bytes'
+        $encoding=if ($variant -eq 'utf16') {[Text.Encoding]::Unicode} else {New-Object Text.UTF8Encoding($true)}
+        [IO.File]::WriteAllText($unicodeHeader,"int HeaderValue(void) { return 8; }`r`n",$encoding)
+        $unicodeChanged=Join-Path $testRoot ('unicode-changed-'+$variant)
+        $analyzer=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'includes','inventory','--root',$unicodeProject,'--output',$unicodeChanged) $testRoot 30
+        if ($analyzer.exit_code -ne 0) {throw 'Changed Unicode inventory failed.'}
+        $unicodeImpact=Join-Path $testRoot ('unicode-impact-'+$variant)
+        $comparison=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'includes','compare','--baseline',(Join-Path $unicodeBaseline 'result.json'),'--candidate',(Join-Path $unicodeChanged 'result.json'),'--output',$unicodeImpact) $testRoot 30
+        $impactRead=ReadResult $unicodeImpact
+        Check ($comparison.exit_code -eq 0 -and $impactRead.differences.Count -eq 1 -and $impactRead.differences[0].kind -eq 'changed' -and $impactRead.differences[0].path -ceq $unicodeHeader -and $impactRead.possible_affected_entrypoints[0] -ceq $unicodeEntry) 'Changed native Unicode-named headers retain possible consumers through the comparison CLI'
+    }
     $profileFixtures=Join-Path $repo 'tests\fixtures\profiles'
     $partialBaseline=Read-Mql5ReleaseJson (Join-Path $profileFixtures 'native-functions-conditions.json')
     $partialCandidate=Read-Mql5ReleaseJson (Join-Path $profileFixtures 'native-functions-inlined-conditions.json')

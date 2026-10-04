@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "operation": "genuine_unicode_include_separator_fixture",
+  "preparation": "Nontrading EA with Unicode NEL, line-separator, and paragraph-separator characters in a string and a literal header filename. Exact source bytes were compiled by the existing compiler wrapper.",
+  "sanitization": "Native UTF-16 logs were decoded to UTF-8, physical CRLF endings became LF, and the isolated source-directory prefix became <fixture-root>. Original logs, receipts, and EX5 artifacts remain in local review evidence.",
+  "evidence_limits": "These native compilations establish the recorded characters inside strings and include filenames on MetaEditor build 6235. No terminal or tester was launched. Inventories retain possible dependencies rather than exact compiler consumption.",
+  "separator_codepoints": [
+    "U+0085",
+    "U+2028",
+    "U+2029"
+  ],
+  "documentation": {
+    "index_revision": "ec0dbca96e12f4d877dd33b7593158c61156cb7b490b42bf559bf97445f83339",
+    "read_topics": [
+      {
+        "title": "String Type",
+        "topic_id": "mql5:4195758c7d7a42d3a84b78cc",
+        "section_id": null
+      },
+      {
+        "title": "Including Files (#include)",
+        "topic_id": "mql5:3d2e853ca7e9b5fc6c2d1c7e",
+        "section_id": null
+      },
+      {
+        "title": "OnInit",
+        "topic_id": "mql5:af61adf3ac8e17ba825a4fb3",
+        "section_id": null
+      },
+      {
+        "title": "OnTick",
+        "topic_id": "mql5:88cfa0c6607b1dc2827dc4ff",
+        "section_id": null
+      }
+    ]
+  },
+  "variants": [
+    {
+      "directory": "utf8",
+      "source_encoding": "utf-8-sig",
+      "source_line_endings": "CRLF",
+      "compilation_status": "success",
+      "exit_code": 0,
+      "errors": 0,
+      "warnings": 0,
+      "syntax_only": false,
+      "compiler_build": 6235,
+      "compiler_file_version": "5.0.0.6235",
+      "compiler_sha256": "f94db507aa3267ee1e428af747a9827c95fe6d69d5a272e67160a35ad08d8315",
+      "compiled_expert_sha256": "b446a0359acecfb8318b5ceee9fc080cbb6f45464dd942ea4713c73d49718939",
+      "original_log_sha256": "b62ee5343c7bd354e97410687844671ad9cd4cfbd2f6114a45b7ed5df30990e3",
+      "original_receipt_sha256": "9fded6551beb9b55bb63f300ac850e92a063d81635fbdc0e104d24e3df2ac4c0",
+      "sanitized_log_sha256": "d3bcc6be4e1d7dc0625c7a60206b227840b17fb68a16f6a43a830662a43ecd1e",
+      "files": [
+        {
+          "path": "Probe.mq5",
+          "byte_length": 192,
+          "sha256": "ecf4699bb87c6394df3d26e66d0ac446658311094376dc0aaf0bb263630fc202"
+        },
+        {
+          "path": "Header\u0085\u2028\u2029Name.mqh",
+          "byte_length": 40,
+          "sha256": "33b0500bf60589d520fd12459802c4ef6609bee43becad0cb8a423d22a2e481a"
+        },
+        {
+          "path": "Shared.mqh",
+          "byte_length": 40,
+          "sha256": "8dbedbb8a4c41b57cfceb0535b895024334a90fb747497f6d6f59bc34d778afe"
+        }
+      ],
+      "expected_include_lines": [
+        3,
+        4
+      ],
+      "expected_include_paths": [
+        "Header\u0085\u2028\u2029Name.mqh",
+        "Shared.mqh"
+      ]
+    },
+    {
+      "directory": "utf16",
+      "source_encoding": "utf-16",
+      "source_line_endings": "CRLF",
+      "compilation_status": "success",
+      "exit_code": 0,
+      "errors": 0,
+      "warnings": 0,
+      "syntax_only": false,
+      "compiler_build": 6235,
+      "compiler_file_version": "5.0.0.6235",
+      "compiler_sha256": "f94db507aa3267ee1e428af747a9827c95fe6d69d5a272e67160a35ad08d8315",
+      "compiled_expert_sha256": "6641e9fead925e5a0f1a001f3bfe7fa89a4232c812ffca2d0082743c40bb961a",
+      "original_log_sha256": "67e5bfbb9f6c82e394dad966c9ab741ca6ce4bb5ecbf1f1b19f253959df5c6d4",
+      "original_receipt_sha256": "f7d31a096971189d9b1d00349c613e635b6b4b5bb7e186b88700d4714fdca12f",
+      "sanitized_log_sha256": "c916ce75bf3c86051d436bd4a8bd2563faa0f25286a396a76be2b8aa4f2c338f",
+      "files": [
+        {
+          "path": "Probe.mq5",
+          "byte_length": 360,
+          "sha256": "1db6a8f932656626f0cec1434afe4aa2f5346d10ee2a95d70c8f7a87dc18c74c"
+        },
+        {
+          "path": "Header\u0085\u2028\u2029Name.mqh",
+          "byte_length": 76,
+          "sha256": "06a661fe6c602ebeb2247d65a544779488ad492c87b1414b365f06d08da278a1"
+        },
+        {
+          "path": "Shared.mqh",
+          "byte_length": 76,
+          "sha256": "555bdbd3ed56fb9f11eda328d3df19230c7ba4b1f72158be67190ef3174e8bcf"
+        }
+      ],
+      "expected_include_lines": [
+        3,
+        4
+      ],
+      "expected_include_paths": [
+        "Header\u0085\u2028\u2029Name.mqh",
+        "Shared.mqh"
+      ]
+    }
+  ]
+}
