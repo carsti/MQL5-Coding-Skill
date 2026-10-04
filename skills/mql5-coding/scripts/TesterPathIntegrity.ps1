@@ -459,6 +459,62 @@ function Assert-ExpectedApplicationMarker {
     }
 }
 
+function Read-ExpectedApplicationMarkerFile {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    try {
+        if ($stream.Length -gt 65536) {
+            throw 'ExpectedLogMarkerFile cannot exceed 65536 bytes.'
+        }
+        $bytes = New-Object byte[] ([int]$stream.Length)
+        $read = 0
+        while ($read -lt $bytes.Length) {
+            $got = $stream.Read($bytes, $read, $bytes.Length - $read)
+            if ($got -le 0) {
+                throw 'ExpectedLogMarkerFile ended before its declared byte length was read.'
+            }
+            $read += $got
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+    $strictUtf8 = New-Object Text.UTF8Encoding($false, $true)
+    $offset = 0
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xef -and $bytes[1] -eq 0xbb -and $bytes[2] -eq 0xbf) {
+        $offset = 3
+    }
+    $text = $strictUtf8.GetString($bytes, $offset, $bytes.Length - $offset)
+    $markers = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($marker in ($text -split '\r\n|\n|\r')) {
+        if ([string]::IsNullOrWhiteSpace($marker)) {
+            continue
+        }
+        Assert-ExpectedApplicationMarker -Marker $marker -SourceName 'Each non-empty ExpectedLogMarkerFile line'
+        $markers.Add($marker)
+    }
+    if ($markers.Count -eq 0) {
+        throw 'ExpectedLogMarkerFile contains no non-empty markers.'
+    }
+    return [pscustomobject]@{bytes = $bytes; markers = $markers.ToArray()}
+}
+
+function Assert-ExpectedApplicationMarkerSet {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Markers)
+
+    if ($Markers.Count -gt 64) {
+        throw 'No more than 64 unique expected log markers are allowed.'
+    }
+    $characterCount = 0
+    foreach ($marker in $Markers) {
+        $characterCount += $marker.Length
+    }
+    if ($characterCount -gt 8192) {
+        throw 'Expected log markers cannot exceed 8192 aggregate characters.'
+    }
+}
+
 function ConvertFrom-TerminalOriginText {
     param(
         [Parameter(Mandatory)][string]$Text,

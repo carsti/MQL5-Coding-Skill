@@ -4112,6 +4112,51 @@ try {
             -not [bool]$validMarkerFile.Result.process.process_created
         ) -Message "A valid $markerFileCaseName marker file did not pass synthetic preflight."
     }
+    # Exercise the actual tester entry point after sharing its marker reader
+    # with batch validation. These fixtures never execute the fake terminal.
+    foreach ($markerContractCase in @(
+            @{ name='punctuation'; text=($markerFileProtocol+':invalid!'); valid=$false },
+            @{ name='nested-label'; text=($markerFileProtocol+':invalid:label'); valid=$false },
+            @{ name='unicode-label'; text=($markerFileProtocol+':'+[char]0xe9); valid=$false },
+            @{ name='long-label'; text=($markerFileProtocol+':'+('Z'*65)); valid=$false },
+            @{ name='utf16'; text=$markerFileProtocol; valid=$false; utf16=$true },
+            @{ name='65-markers'; text=((1..65 | ForEach-Object {$markerFileProtocol+':case_'+$_}) -join "`n"); valid=$false },
+            @{ name='aggregate-limit'; text=((1..64 | ForEach-Object {'MQL5_CODING_PASS:'+('F'*64)+':'+('x'*61)+$_.ToString('D3')}) -join "`n"); valid=$false },
+            @{ name='file-limit'; text=($markerFileProtocol+"`n"+(' '*65536)); valid=$false },
+            @{ name='no-label'; text=$markerFileProtocol; valid=$true; count=1 },
+            @{ name='label-boundary'; text=('MQL5_CODING_PASS:'+('F'*64)+':'+('Z'*64)); valid=$true; count=1 },
+            @{ name='utf8-bom'; text=("`r`n"+$markerFileProtocol+":Case_9.ok-`r`n"); valid=$true; bom=$true; count=1 },
+            @{ name='collection-boundary'; text=((1..64 | ForEach-Object {'MQL5_CODING_PASS:'+('F'*64)+':'+('x'*43)+$_.ToString('D3')}) -join "`n"); valid=$true; count=64 }
+        )) {
+        $encoding=if ($markerContractCase.ContainsKey('utf16')) {[Text.Encoding]::Unicode} else {New-Object Text.UTF8Encoding($markerContractCase.ContainsKey('bom'))}
+        [IO.File]::WriteAllText($markerFileFixture,$markerContractCase.text,$encoding)
+        $markerBytes=[IO.File]::ReadAllBytes($markerFileFixture)
+        $sha=[Security.Cryptography.SHA256]::Create()
+        try {$markerHash=([BitConverter]::ToString($sha.ComputeHash($markerBytes))).Replace('-','').ToLowerInvariant()} finally {$sha.Dispose()}
+        $markerContract=Invoke-RunnerCase `
+            -Name ('preflight-marker-contract-'+$markerContractCase.name) `
+            -Mode PreflightOnly `
+            -TerminalPath $terminal `
+            -TerminalDataPath $dataPath `
+            -ExpertPath $expert `
+            -PresetPath $preset `
+            -ExpertSha256 $expertHash `
+            -ExpectedLogMarkerFile $markerFileFixture
+        if ($markerContractCase.valid) {
+            Assert-True -Condition (
+                $markerContract.ExitCode -eq 0 -and
+                $markerContract.Result.status -eq 'preflight_passed' -and
+                $markerContract.Result.inputs.expected_log_marker_count -eq $markerContractCase.count -and
+                $markerContract.Result.inputs.expected_log_marker_file_sha256 -ceq $markerHash -and
+                -not [bool]$markerContract.Result.process.process_created
+            ) -Message ($markerContractCase.name+' marker boundary did not preserve real tester preflight or its source hash.')
+        } else {
+            Assert-True -Condition ($markerContract.ExitCode -eq 2 -and $null -eq $markerContract.Result) `
+                -Message ($markerContractCase.name+' markers were not rejected by the real tester before staging.')
+        }
+        Assert-True -Condition ([Convert]::ToBase64String([IO.File]::ReadAllBytes($markerFileFixture)) -ceq [Convert]::ToBase64String($markerBytes)) `
+            -Message 'Marker validation changed input evidence.'
+    }
 
     $preflight = Invoke-RunnerCase `
         -Name 'preflight' `

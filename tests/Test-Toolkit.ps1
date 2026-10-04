@@ -277,6 +277,44 @@ exit $LASTEXITCODE
     $validated=Join-Path $testRoot 'batch-validate'
     $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$validated,'-PythonPath',$python) $fixtureScripts
     Check ($process.exit_code -eq 0 -and -not (Test-Path -LiteralPath $env:MQL5_SCENARIO_TEST_TRACE)) ('Validation launched code or failed: '+$process.stderr+$process.stdout+((ReadResult $validated).issues | ConvertTo-Json -Compress))
+    $nonce='a'*32
+    $markerCases=@(
+        @{name='punctuation';text=('MQL5_CODING_PASS:'+$nonce+':invalid!')},
+        @{name='nested-label';text=('MQL5_CODING_PASS:'+$nonce+':invalid:label')},
+        @{name='unicode-label';text=('MQL5_CODING_PASS:'+$nonce+':'+[char]0xe9)},
+        @{name='long-label';text=('MQL5_CODING_PASS:'+$nonce+':'+('Z'*65))},
+        @{name='utf16';text=('MQL5_CODING_PASS:'+$nonce+':fixture');utf16=$true},
+        @{name='65-markers';text=((1..65 | ForEach-Object {'MQL5_CODING_PASS:'+$nonce+':case_'+$_}) -join "`n")},
+        @{name='aggregate-limit';text=((1..64 | ForEach-Object {'MQL5_CODING_PASS:'+('F'*64)+':'+('x'*61)+$_.ToString('D3')}) -join "`n")},
+        @{name='file-limit';text=('MQL5_CODING_PASS:'+$nonce+":fixture`n"+(' '*65536))}
+    )
+    foreach ($case in $markerCases) {
+        $markerFile=Join-Path $testRoot ('invalid-'+$case.name+'-markers.txt')
+        $encoding=if ($case.ContainsKey('utf16')) {[Text.Encoding]::Unicode} else {New-Object Text.UTF8Encoding($false)}
+        [IO.File]::WriteAllText($markerFile,$case.text,$encoding)
+        $markerHash=Get-Mql5ReleaseHash $markerFile
+        Save $manifestPath @{schema_version=1;scenarios=@(@{id='first';profile=$profiles.success},@{id='invalid-marker';profile=$profiles.success;expected_marker_file=$markerFile})}
+        foreach ($action in @('Validate','Execute')) {
+            $rejected=Join-Path $testRoot ('batch-marker-'+$case.name+'-'+$action)
+            $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$rejected,'-PythonPath',$python,'-Action',$action) $fixtureScripts
+            $rejectedRead=ReadResult $rejected
+            Check ($process.exit_code -eq 2 -and $process.cleanup_verified -and $rejectedRead.status -eq 'failed' -and $rejectedRead.scenarios.Count -eq 0 -and -not (Test-Path -LiteralPath $env:MQL5_SCENARIO_TEST_TRACE) -and (Get-Mql5ReleaseHash $markerFile) -ceq $markerHash) ($case.name+' markers must fail '+$action+' before any earlier scenario executes')
+        }
+    }
+    foreach ($case in @(
+        @{name='no-label';text=('MQL5_CODING_PASS:'+$nonce)},
+        @{name='label-boundary';text=('MQL5_CODING_PASS:'+('F'*64)+':'+('Z'*64))},
+        @{name='utf8-bom';text=("`r`nMQL5_CODING_PASS:"+$nonce+":Case_9.ok-`r`n");bom=$true},
+        @{name='collection-boundary';text=((1..64 | ForEach-Object {'MQL5_CODING_PASS:'+('F'*64)+':'+('x'*43)+$_.ToString('D3')}) -join "`n")}
+    )) {
+        $markerFile=Join-Path $testRoot ('valid-'+$case.name+'-markers.txt')
+        [IO.File]::WriteAllText($markerFile,$case.text,(New-Object Text.UTF8Encoding($case.ContainsKey('bom'))))
+        $markerHash=Get-Mql5ReleaseHash $markerFile
+        Save $manifestPath @{schema_version=1;scenarios=@(@{id='valid-marker';profile=$profiles.success;expected_marker_file=$markerFile})}
+        $validOutput=Join-Path $testRoot ('batch-marker-'+$case.name)
+        $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$validOutput,'-PythonPath',$python) $fixtureScripts
+        Check ($process.exit_code -eq 0 -and (ReadResult $validOutput).status -eq 'validated' -and -not (Test-Path -LiteralPath $env:MQL5_SCENARIO_TEST_TRACE) -and (Get-Mql5ReleaseHash $markerFile) -ceq $markerHash) ($case.name+' markers remain valid without launching execution')
+    }
     $randomProfile=Read-Mql5ReleaseJson $profiles.success
     $randomProfile.tester.settings.execution_mode=-1
     $randomProfilePath=Join-Path $testRoot 'random-delay-profile.json';Save $randomProfilePath $randomProfile

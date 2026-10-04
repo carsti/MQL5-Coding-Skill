@@ -320,75 +320,16 @@ try {
     }
     if (-not [string]::IsNullOrWhiteSpace($ExpectedLogMarkerFile)) {
         $markerFile = Resolve-ExistingFile -Path $ExpectedLogMarkerFile -Name 'ExpectedLogMarkerFile' -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
-        $markerFileStream = [IO.File]::Open(
-            $markerFile,
-            [IO.FileMode]::Open,
-            [IO.FileAccess]::Read,
-            [IO.FileShare]::Read
-        )
-        try {
-            if ($markerFileStream.Length -gt 65536) {
-                throw 'ExpectedLogMarkerFile cannot exceed 65536 bytes.'
-            }
-            $markerFileBytes = New-Object byte[] ([int]$markerFileStream.Length)
-            $markerFileBytesRead = 0
-            while ($markerFileBytesRead -lt $markerFileBytes.Length) {
-                $read = $markerFileStream.Read(
-                    $markerFileBytes,
-                    $markerFileBytesRead,
-                    $markerFileBytes.Length - $markerFileBytesRead
-                )
-                if ($read -le 0) {
-                    throw 'ExpectedLogMarkerFile ended before its declared byte length was read.'
-                }
-                $markerFileBytesRead += $read
-            }
-        }
-        finally {
-            $markerFileStream.Dispose()
-        }
-        $strictUtf8 = New-Object Text.UTF8Encoding($false, $true)
-        $markerFileOffset = 0
-        if ($markerFileBytes.Length -ge 3 -and
-            $markerFileBytes[0] -eq 0xef -and
-            $markerFileBytes[1] -eq 0xbb -and
-            $markerFileBytes[2] -eq 0xbf) {
-            $markerFileOffset = 3
-        }
-        $markerFileText = $strictUtf8.GetString(
-            $markerFileBytes,
-            $markerFileOffset,
-            $markerFileBytes.Length - $markerFileOffset
-        )
-        $markerFileHasMarkers = $false
-        foreach ($marker in ($markerFileText -split '\r\n|\n|\r')) {
-            if ([string]::IsNullOrWhiteSpace($marker)) {
-                continue
-            }
-            Assert-ExpectedApplicationMarker `
-                -Marker $marker `
-                -SourceName 'Each non-empty ExpectedLogMarkerFile line'
-            $markerFileHasMarkers = $true
+        $markerFileEvidence = Read-ExpectedApplicationMarkerFile -Path $markerFile
+        foreach ($marker in $markerFileEvidence.markers) {
             if (-not $markers.Contains($marker)) {
                 $markers.Add($marker)
             }
         }
-        if (-not $markerFileHasMarkers) {
-            throw 'ExpectedLogMarkerFile contains no non-empty markers.'
-        }
         $result.inputs.expected_log_marker_file = $markerFile
-        $result.inputs.expected_log_marker_file_sha256 = Get-BytesSha256 -Bytes $markerFileBytes
+        $result.inputs.expected_log_marker_file_sha256 = Get-BytesSha256 -Bytes $markerFileEvidence.bytes
     }
-    if ($markers.Count -gt 64) {
-        throw 'No more than 64 unique expected log markers are allowed.'
-    }
-    $markerCharacterCount = 0
-    foreach ($marker in $markers) {
-        $markerCharacterCount += $marker.Length
-    }
-    if ($markerCharacterCount -gt 8192) {
-        throw 'Expected log markers cannot exceed 8192 aggregate characters.'
-    }
+    Assert-ExpectedApplicationMarkerSet -Markers $markers.ToArray()
     $markerHashes = New-Object 'System.Collections.Generic.List[string]'
     foreach ($marker in $markers) {
         $markerHashes.Add((Get-TextSha256 -Text $marker))

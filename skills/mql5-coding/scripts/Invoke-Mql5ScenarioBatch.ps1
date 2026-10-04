@@ -12,6 +12,7 @@ $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'ToolkitSupport.ps1')
 . (Join-Path $PSScriptRoot 'Mql5ProjectProfile.ps1')
 . (Join-Path $PSScriptRoot 'TesterEvidence.ps1')
+. (Join-Path $PSScriptRoot 'TesterPathIntegrity.ps1')
 $hostExe=if ($PSVersionTable.PSEdition -eq 'Core') {Join-Path $PSHOME 'pwsh.exe'} else {Join-Path $PSHOME 'powershell.exe'}
 $output=$null;$current=$null;$abort=$false
 $result=[ordered]@{schema_version=1;operation='scenario batch';action=$Action;status='failed';manifest=$null;scenarios=@();issues=@();exit_code=2;duration_milliseconds=$null;duration_is_ea_cost=$false}
@@ -99,9 +100,10 @@ try {
         if ($item.baseline_result -and -not $item.baseline_report) {throw 'Baseline result requires a baseline report.'}
         if ($item.expectations -and -not $item.baseline_report) {throw 'Comparison expectations require a baseline report.'}
         if ($item.expected_marker_file) {
-            $markers=@([IO.File]::ReadAllLines($item.expected_marker_file,(New-Object Text.UTF8Encoding($false,$true))) | Where-Object {-not [string]::IsNullOrWhiteSpace($_)})
-            if (-not $markers.Count -or $markers.Count -gt 100 -or @($markers | Select-Object -Unique).Count -ne $markers.Count) {throw 'Invalid expected marker file.'}
-            foreach ($marker in $markers) {if ($marker -cnotmatch '^MQL5_CODING_PASS:[0-9a-fA-F]{32,64}(?::[^\s]+)?$') {throw 'Invalid application marker protocol.'}}
+            $markerFileEvidence=Read-ExpectedApplicationMarkerFile -Path $item.expected_marker_file
+            $markers=$markerFileEvidence.markers
+            if (@($markers | Select-Object -Unique).Count -ne $markers.Count) {throw 'Invalid expected marker file.'}
+            Assert-ExpectedApplicationMarkerSet -Markers $markers
         }
         if ($item.expectations) {
             $checkCode='import sys; sys.path.insert(0,sys.argv[1]); from toolkit_common import load_expectations; from toolkit_reports import CORE_CONDITIONS; e=load_expectations(__import__("pathlib").Path(sys.argv[2])); bad=(set(e.get("required_conditions",[]))-set(CORE_CONDITIONS)-{"terminal_image_sha256","terminal_build","history_quality","bars","ticks","symbols"}) | (set(e.get("required_evidence",[]))-{ "linked_run","source_hash","expert_hash","preset_hash"})'+"`n"+'if bad: raise ValueError("Unsupported report evidence requirement")'+"`n"+'print("EXPECTATIONS_VALID")'
