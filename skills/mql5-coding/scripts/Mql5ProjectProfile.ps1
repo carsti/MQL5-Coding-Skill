@@ -1,5 +1,6 @@
 #Requires -Version 5.1
 # Shared data-only profile validation. Execution remains in the existing wrappers.
+. (Join-Path $PSScriptRoot 'SkillRelease.ps1')
 function Assert-Mql5ProfileObject($Object, [string[]]$Fields) {
     if ($Object -isnot [pscustomobject]) {throw 'Profile section must be a JSON object.'}
     $actual=@($Object.PSObject.Properties.Name)
@@ -38,22 +39,7 @@ function Get-Mql5ProfileStoredPath([string]$Path, [string]$Base, [switch]$AllowO
     return $relative.Replace('/','\')
 }
 function Assert-Mql5ProfileJsonString([string]$Token) {
-    # Both supported JSON converters replace unpaired escaped UTF-16 units.
-    # Inspect serialized escapes first, respecting escaped literal backslashes.
-    $escapes=@([regex]::Matches($Token,'\\(?:u[0-9a-fA-F]{4}|.)'))
-    for ($index=0; $index -lt $escapes.Count; $index++) {
-        $escape=$escapes[$index]
-        if ($escape.Value.Length -ne 6 -or $escape.Value[1] -cne 'u') {continue}
-        $unit=[Convert]::ToInt32($escape.Value.Substring(2),16)
-        if ($unit -ge 0xd800 -and $unit -le 0xdbff) {
-            if ($index+1 -ge $escapes.Count) {throw 'Profile JSON contains invalid Unicode text.'}
-            $next=$escapes[$index+1]
-            if ($next.Index -ne $escape.Index+6 -or $next.Value.Length -ne 6 -or $next.Value[1] -cne 'u') {throw 'Profile JSON contains invalid Unicode text.'}
-            $low=[Convert]::ToInt32($next.Value.Substring(2),16)
-            if ($low -lt 0xdc00 -or $low -gt 0xdfff) {throw 'Profile JSON contains invalid Unicode text.'}
-            $index++
-        } elseif ($unit -ge 0xdc00 -and $unit -le 0xdfff) {throw 'Profile JSON contains invalid Unicode text.'}
-    }
+    Assert-Mql5JsonString $Token
 }
 function Assert-Mql5ProfileJsonKeys([string]$Text) {
     # ConvertFrom-Json can collapse duplicate keys. Refuse ambiguous selectors,
@@ -145,8 +131,7 @@ function Read-Mql5ProjectProfile([string]$Path) {
     $stream=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
     try {
         if ($stream.Length -lt 1 -or $stream.Length -gt 262144) {throw 'Profile must contain 1-262144 bytes.'}
-        $reader=New-Object IO.StreamReader($stream,(New-Object Text.UTF8Encoding($false,$true)),$true)
-        try {$text=$reader.ReadToEnd()} finally {$reader.Dispose()}
+        $text=Read-Mql5JsonText $stream
     } finally {$stream.Dispose()}
     # ConvertFrom-Json enumerates a one-item root array in both supported
     # shells. Check the serialized root before that array can become an object.

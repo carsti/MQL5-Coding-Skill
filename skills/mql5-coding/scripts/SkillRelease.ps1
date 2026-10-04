@@ -65,17 +65,53 @@ function Assert-Mql5ReleaseIntent($Intent,[string]$Target) {
         if ($Intent.restore_backup_id -isnot [string] -or $Intent.restore_backup_id -cnotmatch '\A[0-9a-f]{32}\z') {throw 'Invalid pending rollback intent.'}
     }
 }
+function Assert-Mql5JsonString([string]$Token) {
+    # Both supported JSON converters replace unpaired escaped UTF-16 units.
+    # Inspect serialized escapes first, respecting escaped literal backslashes.
+    $escapes=@([regex]::Matches($Token,'\\(?:u[0-9a-fA-F]{4}|.)'))
+    for ($index=0; $index -lt $escapes.Count; $index++) {
+        $escape=$escapes[$index]
+        if ($escape.Value.Length -ne 6 -or $escape.Value[1] -cne 'u') {continue}
+        $unit=[Convert]::ToInt32($escape.Value.Substring(2),16)
+        if ($unit -ge 0xd800 -and $unit -le 0xdbff) {
+            if ($index+1 -ge $escapes.Count) {throw 'JSON contains invalid Unicode text.'}
+            $next=$escapes[$index+1]
+            if ($next.Index -ne $escape.Index+6 -or $next.Value.Length -ne 6 -or $next.Value[1] -cne 'u') {throw 'JSON contains invalid Unicode text.'}
+            $low=[Convert]::ToInt32($next.Value.Substring(2),16)
+            if ($low -lt 0xdc00 -or $low -gt 0xdfff) {throw 'JSON contains invalid Unicode text.'}
+            $index++
+        } elseif ($unit -ge 0xdc00 -and $unit -le 0xdfff) {throw 'JSON contains invalid Unicode text.'}
+    }
+}
+function Read-Mql5JsonText([IO.Stream]$Stream) {
+    if ($Stream.Length -gt 1048576) {throw 'JSON metadata is too large.'}
+    $buffer=New-Object byte[] ([int]$Stream.Length)
+    $read=0
+    while ($read -lt $buffer.Length) {
+        $got=$Stream.Read($buffer,$read,$buffer.Length-$read)
+        if ($got -eq 0) {throw 'Incomplete JSON metadata read.'}
+        $read+=$got
+    }
+    $reader=[IO.StreamReader]::new([IO.MemoryStream]::new($buffer,$false),(New-Object Text.UTF8Encoding($false,$true)),$true)
+    try {
+        $text=$reader.ReadToEnd()
+        # BOM detection can select a forgiving UTF-16/UTF-32 decoder despite
+        # the strict initial UTF-8 encoding. Validate these exact captured
+        # bytes with a strict clone of the encoding actually selected.
+        $strictEncoding=$reader.CurrentEncoding.Clone()
+        $strictEncoding.DecoderFallback=[Text.DecoderFallback]::ExceptionFallback
+        [void]$strictEncoding.GetCharCount($buffer)
+        return $text
+    } finally {$reader.Dispose()}
+}
 function Read-Mql5ReleaseJson([string]$Path,[byte[]]$Bytes) {
     if ($PSBoundParameters.ContainsKey('Bytes')) {
         if ($null -eq $Bytes -or $Bytes.Length -gt 1048576) {throw 'Release metadata buffer is unavailable or too large.'}
-        # Reuse the same validator on a captured byte buffer. StreamReader's
-        # BOM detection preserves the existing ReadAllText encoding behavior.
-        $reader=[IO.StreamReader]::new([IO.MemoryStream]::new($Bytes,$false),(New-Object Text.UTF8Encoding($false,$true)),$true)
-        try {$text=$reader.ReadToEnd()} finally {$reader.Dispose()}
+        $stream=[IO.MemoryStream]::new($Bytes,$false)
     } else {
-        if ((Get-Item -LiteralPath $Path).Length -gt 1048576) {throw 'Release metadata is too large.'}
-        $text=[IO.File]::ReadAllText($Path,(New-Object Text.UTF8Encoding($false,$true)))
+        $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
     }
+    try {$text=Read-Mql5JsonText $stream} finally {$stream.Dispose()}
     # Refuse array roots before ConvertFrom-Json can unwrap a single element.
     if (-not $text.TrimStart().StartsWith('{')) {throw 'Release metadata must have a JSON object at its root.'}
     # Refuse duplicate, case-aliased and escaped JSON keys before ConvertFrom-Json.
@@ -85,6 +121,7 @@ function Read-Mql5ReleaseJson([string]$Path,[byte[]]$Bytes) {
             '{' {$stack.Push(@{});continue} '[' {$stack.Push($null);continue}
             '}' {if ($stack.Count) {[void]$stack.Pop()};continue} ']' {if ($stack.Count) {[void]$stack.Pop()};continue}
         }
+        Assert-Mql5JsonString $token.Value
         $next=$token.Index+$token.Length
         while ($next -lt $text.Length -and [char]::IsWhiteSpace($text[$next])) {$next++}
         if ($next -lt $text.Length -and $text[$next] -eq ':' -and $stack.Count -and $null -ne $stack.Peek()) {

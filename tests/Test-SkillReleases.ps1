@@ -51,6 +51,62 @@ Reject {Read-Mql5ReleaseJson -Path $unavailablePath -Bytes ([Text.Encoding]::UTF
 Reject {Read-Mql5ReleaseJson -Path $unavailablePath -Bytes ([byte[]]@(123,34,107,34,58,34,255,34,125))} 'Buffered JSON rejects malformed UTF-8'
 Reject {Read-Mql5ReleaseJson -Path $unavailablePath -Bytes (New-Object byte[] 1048577)} 'Buffered JSON enforces the existing metadata byte limit'
 Reject {Read-Mql5ReleaseJson -Path $unavailablePath -Bytes ([byte[]]@())} 'Buffered JSON rejects an explicitly empty document'
+# The shared reader must reject malformed Unicode before a selected path or
+# retained message can be replaced by ConvertFrom-Json. All other JSON is valid.
+$unicodeCodecs=@(
+    (New-Object Text.UTF8Encoding($false,$true)),
+    (New-Object Text.UTF8Encoding($true,$true)),
+    (New-Object Text.UnicodeEncoding($false,$true,$true))
+)
+$malformedText=@(
+    '{"label":"\ud800"}', '{"label":"\udfff"}',
+    '{"label":"\udfff\ud800"}', '{"label":"\ud800A"}',
+    '{"label":"\ud800\u0061"}', '{"label":"\ud800\ud800"}',
+    '{"label":"\ud800\\udfff"}', '{"\ud800":1}',
+    '{"nested":{"items":["\udfff"]}}'
+)
+$validText=@(
+    @{json='\ud83d\ude00';expected=[char]::ConvertFromUtf32(0x1f600)},
+    @{json='\uDbFF\uDfFF';expected=[char]::ConvertFromUtf32(0x10ffff)},
+    @{json='\\ud800';expected='\ud800'},
+    @{json='\\\ud83d\ude00';expected=('\'+[char]::ConvertFromUtf32(0x1f600))},
+    @{json='\u00e9';expected=([char]0xe9).ToString()},
+    @{json=[char]::ConvertFromUtf32(0x1f600);expected=[char]::ConvertFromUtf32(0x1f600)},
+    @{json=([char]0xfffd).ToString();expected=([char]0xfffd).ToString()}
+)
+$unicodeJsonPath=Join-Path $work 'unicode-metadata.json'
+foreach ($codec in $unicodeCodecs) {
+    foreach ($text in $malformedText) {
+        $raw=[byte[]]($codec.GetPreamble()+$codec.GetBytes($text))
+        [IO.File]::WriteAllBytes($unicodeJsonPath,$raw)
+        Reject {Read-Mql5ReleaseJson -Path $unicodeJsonPath -Bytes $raw} 'Buffered JSON rejects unpaired Unicode escapes'
+        Reject {Read-Mql5ReleaseJson -Path $unicodeJsonPath} 'File JSON rejects unpaired Unicode escapes'
+    }
+    foreach ($case in $validText) {
+        $text='{"label":"'+$case.json+'"}'
+        $raw=[byte[]]($codec.GetPreamble()+$codec.GetBytes($text))
+        [IO.File]::WriteAllBytes($unicodeJsonPath,$raw)
+        Check ((Read-Mql5ReleaseJson -Path $unicodeJsonPath -Bytes $raw).label -ceq $case.expected) 'Buffered JSON preserves valid Unicode and literal backslash text'
+        Check ((Read-Mql5ReleaseJson -Path $unicodeJsonPath).label -ceq $case.expected) 'File JSON preserves valid Unicode and literal backslash text'
+    }
+}
+# A BOM must not change the strict decoding policy. Inject isolated UTF-16
+# units as actual bytes; do not pass them through a forgiving text encoder.
+foreach ($bigEndian in @($false,$true)) {
+    $codec=New-Object Text.UnicodeEncoding($bigEndian,$true,$true)
+    foreach ($unit in @(0xd800,0xdfff)) {
+        $unitBytes=if ($bigEndian) {[byte[]]@(($unit -shr 8),($unit -band 255))} else {[byte[]]@(($unit -band 255),($unit -shr 8))}
+        $raw=[byte[]]($codec.GetPreamble()+$codec.GetBytes('{"label":"')+$unitBytes+$codec.GetBytes('"}'))
+        [IO.File]::WriteAllBytes($unicodeJsonPath,$raw)
+        Reject {Read-Mql5ReleaseJson -Path $unicodeJsonPath -Bytes $raw} 'Buffered BOM JSON rejects malformed UTF-16 bytes'
+        Reject {Read-Mql5ReleaseJson -Path $unicodeJsonPath} 'File BOM JSON rejects malformed UTF-16 bytes'
+    }
+    $text='{"label":"'+[char]::ConvertFromUtf32(0x1f600)+([char]0xfffd)+'"}'
+    $raw=[byte[]]($codec.GetPreamble()+$codec.GetBytes($text))
+    [IO.File]::WriteAllBytes($unicodeJsonPath,$raw)
+    Check ((Read-Mql5ReleaseJson -Path $unicodeJsonPath -Bytes $raw).label -ceq ([char]::ConvertFromUtf32(0x1f600)+[char]0xfffd)) 'Buffered UTF-16 BOM retains valid pairs and literal replacement text'
+    Check ((Read-Mql5ReleaseJson -Path $unicodeJsonPath).label -ceq ([char]::ConvertFromUtf32(0x1f600)+[char]0xfffd)) 'File UTF-16 BOM retains valid pairs and literal replacement text'
+}
 function ChangeZip([string]$Name,[string]$Entry,[string]$Content,[switch]$Add) {
     $path=Join-Path $work ($Name+'.zip');Copy-Item -LiteralPath $archive -Destination $path
     $zip=[IO.Compression.ZipFile]::Open($path,[IO.Compression.ZipArchiveMode]::Update)

@@ -197,6 +197,24 @@ try {
         $invoked=Run 'Invoke-Mql5Project.ps1' @{ProfilePath=$unicodePath}
         Check ($invoked.code -eq 0 -and ($invoked.stdout | ConvertFrom-Json).name -ceq $case.expected) 'Profile validation did not preserve valid Unicode through the command interface.'
     }
+    foreach ($bigEndian in @($false,$true)) {
+        $codec=New-Object Text.UnicodeEncoding($bigEndian,$true,$true)
+        $parts=$textControl -split '"Fixture"',2
+        foreach ($unit in @(0xd800,0xdfff)) {
+            $unitBytes=if ($bigEndian) {[byte[]]@(($unit -shr 8),($unit -band 255))} else {[byte[]]@(($unit -band 255),($unit -shr 8))}
+            $raw=[byte[]]($codec.GetPreamble()+$codec.GetBytes($parts[0]+'"')+$unitBytes+$codec.GetBytes('"'+$parts[1]))
+            [IO.File]::WriteAllBytes($unicodePath,$raw)
+            $rejected=$false
+            try {[void](Read-Mql5ProjectProfile $unicodePath)} catch {$rejected=$true}
+            Check $rejected 'A BOM made profile decoding accept an isolated UTF-16 unit.'
+            $invoked=Run 'Invoke-Mql5Project.ps1' @{ProfilePath=$unicodePath;Action='Compile'}
+            Check ($invoked.code -eq 2) 'Malformed UTF-16 profile bytes reached compilation.'
+        }
+        $name=[char]::ConvertFromUtf32(0x1f600)+[char]0xfffd
+        $serialized=$textControl.Replace('"Fixture"',('"'+$name+'"'))
+        [IO.File]::WriteAllBytes($unicodePath,([byte[]]($codec.GetPreamble()+$codec.GetBytes($serialized))))
+        Check ((Read-Mql5ProjectProfile $unicodePath).name -ceq $name) 'Valid BOM Unicode profile names were not preserved.'
+    }
     $arrayProfile=Join-Path $project 'array-profile.json'
     [IO.File]::WriteAllText($arrayProfile,('['+($base | ConvertTo-Json -Depth 8)+']'),(New-Object Text.UTF8Encoding($false)))
     $rejected=$false

@@ -59,6 +59,21 @@ try {
     $claimedOutput=New-ToolkitOutput $newOutput
     $reused=$false;try {New-ToolkitOutput $newOutput | Out-Null} catch {$reused=$true}
     Check ($claimedOutput -ceq $newOutput -and $reused -and (Get-Item -LiteralPath (Join-Path $newOutput '.toolkit-owner')).Length -eq 32) 'A new Unicode output directory is claimed once and repeat use is refused'
+    $unicodeRunPath=Join-Path $testRoot 'unicode-run.json'
+    $unicodeRun='{"schema_version":2,"status":"engine_smoke_passed","evidence":{"terminal_journal":{"appended_byte_length":0,"limit_exceeded":false,"segments":[],"excerpts":["AA\t0\t10:00:01.000\tFixture\tobserved TEXT"]},"tester_journal":{"appended_byte_length":0,"limit_exceeded":false,"segments":[],"excerpts":[]}}}'
+    [IO.File]::WriteAllText($unicodeRunPath,$unicodeRun.Replace('TEXT',([char]0xfffd).ToString()),(New-Object Text.UTF8Encoding($false)))
+    $unicodeOutput=Join-Path $testRoot 'journal-valid-replacement-character'
+    $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$unicodeRunPath,'-OutputDirectory',$unicodeOutput)
+    $unicodeRead=ReadResult $unicodeOutput
+    Check ($process.exit_code -eq 4 -and $unicodeRead.groups[0].message -ceq ('observed '+[char]0xfffd)) 'A literal Unicode replacement character remains valid journal text'
+    foreach ($escape in @('\ud800','\udfff')) {
+        [IO.File]::WriteAllText($unicodeRunPath,$unicodeRun.Replace('TEXT',$escape),(New-Object Text.UTF8Encoding($false)))
+        $unicodeHash=Get-Mql5ReleaseHash $unicodeRunPath
+        $unicodeOutput=Join-Path $testRoot ('journal-invalid-unicode-'+[guid]::NewGuid().ToString('N'))
+        $process=Run 'Read-Mql5Journal.ps1' @('-TesterResultPath',$unicodeRunPath,'-OutputDirectory',$unicodeOutput)
+        $unicodeRead=ReadResult $unicodeOutput
+        Check ($process.exit_code -eq 2 -and $process.cleanup_verified -and $unicodeRead.status -eq 'failed' -and $unicodeRead.groups.Count -eq 0 -and (Get-Mql5ReleaseHash $unicodeRunPath) -ceq $unicodeHash) 'Malformed journal JSON must fail rather than silently rewriting observed text'
+    }
     $journalPath=Join-Path $testRoot 'journal.log'
     $prefix="prefix`r`n"
     $segment="AA`t0`t10:00:01.000`tFixture`tpassword=hidden repeated`r`nBB`t0`t10:00:02.000`tFixture`tpassword=other repeated`r`nCC`t0`t10:00:03.000`tFixture`tMQL5_CODING_PASS:$('a'*32):test`r`n"
@@ -279,6 +294,26 @@ exit $LASTEXITCODE
     $validated=Join-Path $testRoot 'batch-validate'
     $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$validated,'-PythonPath',$python) $fixtureScripts
     Check ($process.exit_code -eq 0 -and -not (Test-Path -LiteralPath $env:MQL5_SCENARIO_TEST_TRACE)) ('Validation launched code or failed: '+$process.stderr+$process.stdout+((ReadResult $validated).issues | ConvertTo-Json -Compress))
+    # A real file at the replacement path makes accepting the invalid selector
+    # observable; a missing file would mask silent JSON character replacement.
+    $unicodeProfile=Join-Path $testRoot ('selected'+[char]0xfffd+'.json')
+    Copy-Item -LiteralPath $profiles.success -Destination $unicodeProfile
+    $unicodeManifest='{"schema_version":1,"scenarios":[{"id":"first","profile":'+($profiles.success | ConvertTo-Json)+'},{"id":"later","profile":"selectedTEXT.json"}]}'
+    [IO.File]::WriteAllText($manifestPath,$unicodeManifest.Replace('TEXT',([char]0xfffd).ToString()),(New-Object Text.UTF8Encoding($false)))
+    $unicodeOutput=Join-Path $testRoot 'batch-valid-replacement-path'
+    $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$unicodeOutput,'-PythonPath',$python) $fixtureScripts
+    $unicodeRead=ReadResult $unicodeOutput
+    Check ($process.exit_code -eq 0 -and $unicodeRead.scenarios[1].profile.path -ceq $unicodeProfile -and -not (Test-Path -LiteralPath $env:MQL5_SCENARIO_TEST_TRACE)) 'A literal replacement-character profile path stays valid and preserves the selected identity'
+    foreach ($escape in @('\ud800','\udfff')) {
+        [IO.File]::WriteAllText($manifestPath,$unicodeManifest.Replace('TEXT',$escape),(New-Object Text.UTF8Encoding($false)))
+        $unicodeHash=Get-Mql5ReleaseHash $manifestPath
+        foreach ($action in @('Validate','Execute')) {
+            $unicodeOutput=Join-Path $testRoot ('batch-invalid-unicode-'+[guid]::NewGuid().ToString('N'))
+            $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$unicodeOutput,'-PythonPath',$python,'-Action',$action) $fixtureScripts
+            $unicodeRead=ReadResult $unicodeOutput
+            Check ($process.exit_code -eq 2 -and $process.cleanup_verified -and $unicodeRead.status -eq 'failed' -and $unicodeRead.scenarios.Count -eq 0 -and -not (Test-Path -LiteralPath $env:MQL5_SCENARIO_TEST_TRACE) -and (Get-Mql5ReleaseHash $manifestPath) -ceq $unicodeHash) 'Invalid Unicode in any manifest selector must fail the complete batch before an earlier scenario can execute'
+        }
+    }
     foreach ($case in @(
         @{name='trailing-lf';id="later`n"},
         @{name='trailing-crlf';id="later`r`n"},
