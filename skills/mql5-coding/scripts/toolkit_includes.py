@@ -54,6 +54,9 @@ def validated_profile(path: Path, shell: str | None) -> dict:
 
 
 def directives(text: str) -> list[tuple[int, str, str]]:
+    # Align comment masking and physical line counting for LF, CRLF, and CR.
+    # Normalize only this decoded scan buffer; inventory hashes original bytes.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     # Replace comments with whitespace while retaining newlines and quoted text.
     # A parallel mask records only '#' outside both comments and strings.
     cleaned, markers = list(text), set()

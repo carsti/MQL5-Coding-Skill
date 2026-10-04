@@ -1,0 +1,1 @@
+#property strict#include "First.mqh"// A single-line comment before a real dependency.#include "Shared.mqh"int OnInit(void) { return FirstValue()+SharedValue()-3; }void OnTick(void) {}

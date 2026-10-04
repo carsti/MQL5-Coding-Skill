@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "operation": "genuine_carriage_return_include_fixture",
+  "preparation": "Nontrading EA and two literal local headers compiled by the existing Compile-Mql5.ps1 wrapper. Probe.mq5 bytes are unchanged from the actual native compilations.",
+  "sanitization": "Native UTF-16 compiler logs were decoded to UTF-8, physical CRLF ends became LF, and the isolated source-directory prefix became <fixture-root>. Original logs, receipts, and EX5 artifacts remain in local review evidence.",
+  "evidence_limits": "Compilation verifies these sources on the recorded compiler build. No MT5 terminal or tester was launched. The include inventory records possible consumers rather than exact compiler consumption.",
+  "line_endings_evidence": "The Comments CHM passage says that single-line comments end at a newline without enumerating newline byte encodings. CR support is established by these native compilations.",
+  "documentation": {
+    "index_revision": "ec0dbca96e12f4d877dd33b7593158c61156cb7b490b42bf559bf97445f83339",
+    "read_topics": [
+      {
+        "topic_id": "mql5:9657d25f31e210971393f5ef",
+        "title": "Comments",
+        "section_id": null
+      },
+      {
+        "topic_id": "mql5:3d2e853ca7e9b5fc6c2d1c7e",
+        "title": "Including Files (#include)",
+        "section_id": null
+      },
+      {
+        "topic_id": "mql5:af61adf3ac8e17ba825a4fb3",
+        "title": "OnInit",
+        "section_id": null
+      },
+      {
+        "topic_id": "mql5:88cfa0c6607b1dc2827dc4ff",
+        "title": "OnTick",
+        "section_id": null
+      }
+    ]
+  },
+  "variants": [
+    {
+      "directory": "utf8",
+      "source_encoding": "utf-8",
+      "source_line_endings": "CR",
+      "compilation_status": "success",
+      "exit_code": 0,
+      "errors": 0,
+      "warnings": 0,
+      "syntax_only": false,
+      "compiler_build": 6235,
+      "compiler_file_version": "5.0.0.6235",
+      "compiler_sha256": "f94db507aa3267ee1e428af747a9827c95fe6d69d5a272e67160a35ad08d8315",
+      "compiled_expert_sha256": "3d178e0fc6985e0874fc83169ad13e528036dc7c75c2720e40402e46050bdf11",
+      "original_log_sha256": "89a8036dd368d1a946aef134e26072ed73d41dbd26be4350501fc9b94ed5f26c",
+      "original_receipt_sha256": "014f228d0d606437b90dbf39704f6133a1f66672056d0f4b2f0b5a6aabc69b19",
+      "sanitized_log_sha256": "3cfc4e81bd8b4a2e92531c893a6c6f0c31e647e02bf9cd2ea4bdf9c0e1fe9372",
+      "files": [
+        {
+          "path": "Probe.mq5",
+          "byte_length": 190,
+          "sha256": "1d1ba8e849bf0bb5a6ef8e74124e46b5d176fce8d280de9fd352dc8967b2616c"
+        },
+        {
+          "path": "First.mqh",
+          "byte_length": 35,
+          "sha256": "585fbbac54e93372e353b1cea820ed6eba0aaa4b8c996d3874d367cb93a85bdf"
+        },
+        {
+          "path": "Shared.mqh",
+          "byte_length": 36,
+          "sha256": "aecbf160d9e0a04abb8b142b0e2996d8d3a596f7a33b1bf00e756d58a118bcb5"
+        }
+      ]
+    },
+    {
+      "directory": "utf16",
+      "source_encoding": "utf-16-le-bom",
+      "source_line_endings": "CR",
+      "compilation_status": "success",
+      "exit_code": 0,
+      "errors": 0,
+      "warnings": 0,
+      "syntax_only": false,
+      "compiler_build": 6235,
+      "compiler_file_version": "5.0.0.6235",
+      "compiler_sha256": "f94db507aa3267ee1e428af747a9827c95fe6d69d5a272e67160a35ad08d8315",
+      "compiled_expert_sha256": "3433b73e7a0f48483e82839086effb3ff64339571c98f07061106f8810ff8b2c",
+      "original_log_sha256": "ed7204761e5a11522ccb83ba9de4a3d00d0ab046ae1886280bb9588c21084034",
+      "original_receipt_sha256": "4239004723e9eae01cd929c56cfb597f52d6166fe34132fbb901b4faf803ce46",
+      "sanitized_log_sha256": "b6d9c21a7c70c959b5ff91bbc27ca2b499f997f3a8e9cd75fef79f49833ed410",
+      "files": [
+        {
+          "path": "Probe.mq5",
+          "byte_length": 382,
+          "sha256": "6f95630e0707885e5bdee7323e2eb42096ebddef9f6a4868bc9c095d23a3b463"
+        },
+        {
+          "path": "First.mqh",
+          "byte_length": 35,
+          "sha256": "585fbbac54e93372e353b1cea820ed6eba0aaa4b8c996d3874d367cb93a85bdf"
+        },
+        {
+          "path": "Shared.mqh",
+          "byte_length": 36,
+          "sha256": "aecbf160d9e0a04abb8b142b0e2996d8d3a596f7a33b1bf00e756d58a118bcb5"
+        }
+      ]
+    }
+  ]
+}

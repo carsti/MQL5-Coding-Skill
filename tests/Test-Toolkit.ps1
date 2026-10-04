@@ -476,6 +476,33 @@ exit $LASTEXITCODE
     $comparison=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'includes','compare','--baseline',(Join-Path $standardInventory 'result.json'),'--candidate',(Join-Path $changedInventory 'result.json'),'--output',$standardImpact) $testRoot 30
     $impactRead=ReadResult $standardImpact
     Check ($comparison.exit_code -eq 0 -and $impactRead.differences.Count -eq 1 -and $impactRead.differences[0].path -ceq $standardHeader -and $impactRead.differences[0].kind -eq 'changed' -and $impactRead.possible_affected_entrypoints[0] -ceq $inventoryEntry) 'Native-style saved-profile snapshots retain changed standard-header consumers'
+    $crProject=Join-Path $testRoot ('CR inventory '+[char]0xe9)
+    [void][IO.Directory]::CreateDirectory($crProject)
+    $crEntry=Join-Path $crProject 'Probe.mq5'
+    $crShared=Join-Path $crProject 'Shared.mqh'
+    [IO.File]::WriteAllText($crEntry,"#include `"First.mqh`"`r// comment`r#include `"Shared.mqh`"`r",(New-Object Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText((Join-Path $crProject 'First.mqh'),"// first header`n",(New-Object Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText($crShared,"// original shared header`n",(New-Object Text.UTF8Encoding($false)))
+    $crBaseline=Join-Path $testRoot 'cr-inventory-baseline'
+    $analyzer=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'includes','inventory','--root',$crProject,'--entrypoint',$crEntry,'--output',$crBaseline) $testRoot 30
+    $crRead=ReadResult $crBaseline
+    Check ($analyzer.exit_code -eq 0 -and $crRead.coverage -eq 'selected_entrypoints_scanned' -and $crRead.dependencies.Count -eq 2 -and $crRead.dependencies[1].line -eq 3 -and $crRead.dependencies[1].target -ceq $crShared -and @(Get-ToolkitValue $crRead.possible_consumers $crShared)[0] -ceq $crEntry) 'CR-only sources retain includes after line comments through the CLI'
+    [IO.File]::WriteAllText($crShared,"// changed shared header`n",(New-Object Text.UTF8Encoding($false)))
+    $crChanged=Join-Path $testRoot 'cr-inventory-changed'
+    $analyzer=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'includes','inventory','--root',$crProject,'--entrypoint',$crEntry,'--output',$crChanged) $testRoot 30
+    if ($analyzer.exit_code -ne 0) {throw 'Changed CR inventory failed.'}
+    $crChangeImpact=Join-Path $testRoot 'cr-change-impact'
+    $comparison=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'includes','compare','--baseline',(Join-Path $crBaseline 'result.json'),'--candidate',(Join-Path $crChanged 'result.json'),'--output',$crChangeImpact) $testRoot 30
+    $crImpact=ReadResult $crChangeImpact
+    Check ($comparison.exit_code -eq 0 -and $crImpact.differences.Count -eq 1 -and $crImpact.differences[0].path -ceq $crShared -and $crImpact.differences[0].kind -eq 'changed' -and $crImpact.possible_affected_entrypoints[0] -ceq $crEntry) 'Changed headers keep their CR-only source consumers through the CLI'
+    [IO.File]::Delete($crShared)
+    $crDeleted=Join-Path $testRoot 'cr-inventory-deleted'
+    $analyzer=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'includes','inventory','--root',$crProject,'--entrypoint',$crEntry,'--output',$crDeleted) $testRoot 30
+    if ($analyzer.exit_code -ne 0) {throw 'Deleted CR inventory failed.'}
+    $crDeleteImpact=Join-Path $testRoot 'cr-delete-impact'
+    $comparison=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'includes','compare','--baseline',(Join-Path $crChanged 'result.json'),'--candidate',(Join-Path $crDeleted 'result.json'),'--output',$crDeleteImpact) $testRoot 30
+    $crImpact=ReadResult $crDeleteImpact
+    Check ($comparison.exit_code -eq 0 -and $crImpact.differences.Count -eq 1 -and $crImpact.differences[0].kind -eq 'removed' -and $crImpact.possible_affected_entrypoints[0] -ceq $crEntry -and $crImpact.differences[0].consumer_coverage_unknown) 'Deleted headers retain prior CR-only source consumers and disclose missing evidence'
     'TOOLKIT_POWERSHELL_TESTS='+$checks
 } finally {
     $env:MQL5_SCENARIO_TEST_TRACE=$oldTrace;$env:MQL5_SCENARIO_TEST_REPORT=$oldReport

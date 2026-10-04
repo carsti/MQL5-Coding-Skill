@@ -618,6 +618,100 @@ class ToolkitTests(unittest.TestCase):
         self.assertNotIn("bad.mqh", str(snap["dependencies"]))
         self.assertEqual(directives('/*\n#include "bad"\n*/\n#include <x> // comment\n'), [(4, "include", "<x>")])
 
+    def test_include_directives_supported_physical_line_endings(self):
+        lines = [
+            '// comment before includes',
+            "#include <Owner's.mqh>",
+            'string quoted = "#include <Hidden.mqh>";',
+            '/* multi-line comment',
+            '#include "Hidden.mqh"',
+            '*/',
+            '#ifdef ENABLED',
+            '#include "Shared.mqh"',
+            '#endif',
+            '#include <Last.mqh> // trailing comment',
+        ]
+        expected = [(2, 'include', "<Owner's.mqh>"), (7, 'ifdef', 'ENABLED'),
+                    (8, 'include', '"Shared.mqh"'), (9, 'endif', ''),
+                    (10, 'include', '<Last.mqh>')]
+        for name, endings in (("LF", ("\n",)), ("CRLF", ("\r\n",)),
+                              ("CR", ("\r",)), ("mixed", ("\r", "\n", "\r\n"))):
+            with self.subTest(line_endings=name):
+                text = ''.join(line + endings[i % len(endings)] for i, line in enumerate(lines))
+                self.assertEqual(directives(text), expected)
+                self.assertEqual(directives('/* incomplete' + endings[0]),
+                                 [(2, 'unsupported', 'unterminated comment')])
+
+    def test_cr_sources_keep_shared_header_consumers(self):
+        for name, endings in (("lf", ("\n",)), ("crlf", ("\r\n",)),
+                              ("cr", ("\r",)), ("mixed", ("\r", "\n", "\r\n"))):
+            for encoding in ('utf-8', 'utf-16'):
+                with self.subTest(line_endings=name, encoding=encoding):
+                    root = self.root / (name + '-' + encoding)
+                    root.mkdir()
+                    shared, leaf = root/'Shared.mqh', root/'Leaf.mqh'
+                    entries = [root/'A.mq5', root/'B.mq5']
+                    logical = ['// comment', '#ifdef ENABLED', '#include "Shared.mqh"', '#endif']
+                    data = ''.join(line + endings[i % len(endings)] for i, line in enumerate(logical)).encode(encoding)
+                    for entry in entries:
+                        entry.write_bytes(data)
+                    shared.write_bytes(('// shared comment' + endings[0] + '#include "Leaf.mqh"' + endings[-1]).encode(encoding))
+                    leaf.write_text('// original independently specified header\n', encoding='utf-8')
+                    consumers = sorted(map(str, entries))
+                    before = inventory(root, entries, [])
+                    self.assertEqual(before['coverage'], 'selected_entrypoints_scanned')
+                    self.assertEqual(before['possible_consumers'].get(str(leaf)), consumers)
+                    for edge in before['dependencies']:
+                        if edge['source'] in consumers:
+                            self.assertEqual((edge['line'], edge['conditional_context'], edge['active_dependency']),
+                                             (3, ['#ifdef ENABLED'], 'unknown'))
+                    for entry in entries:
+                        record = next(f for f in before['files'] if f['path'] == str(entry))
+                        self.assertEqual(record['sha256'], digest(data))
+                        self.assertEqual(entry.read_bytes(), data)
+                    leaf.write_text('// changed independently specified header\n', encoding='utf-8')
+                    changed = inventory(root, entries, [])
+                    impact = compare_snapshots(before, changed)
+                    self.assertEqual(impact['possible_affected_entrypoints'], consumers)
+                    self.assertEqual([(f['path'], f['kind']) for f in impact['differences']], [(str(leaf), 'changed')])
+                    leaf.unlink()
+                    removed = compare_snapshots(changed, inventory(root, entries, []))
+                    self.assertEqual(removed['possible_affected_entrypoints'], consumers)
+                    self.assertEqual([(f['path'], f['kind']) for f in removed['differences']], [(str(leaf), 'removed')])
+                    self.assertTrue(removed['differences'][0]['consumer_coverage_unknown'])
+
+    def test_genuine_carriage_return_include_fixture(self):
+        fixture = (Path(__file__).parent/'fixtures/carriage-return-includes').resolve()
+        provenance = json.loads((fixture/'provenance.json').read_text(encoding='utf-8'))
+        self.assertEqual(len(provenance['variants']), 2)
+        for variant in provenance['variants']:
+            with self.subTest(encoding=variant['source_encoding']):
+                folder = fixture/variant['directory']
+                for record in variant['files']:
+                    data = (folder/record['path']).read_bytes()
+                    self.assertEqual((len(data), digest(data)), (record['byte_length'], record['sha256']))
+                log = (folder/'native-compile.log').read_bytes()
+                self.assertEqual(digest(log), variant['sanitized_log_sha256'])
+                self.assertEqual((variant['compilation_status'], variant['exit_code'], variant['errors'], variant['warnings']),
+                                 ('success', 0, 0, 0))
+                self.assertFalse(variant['syntax_only'])
+                self.assertIn(b'including <fixture-root>\\First.mqh', log)
+                self.assertIn(b'including <fixture-root>\\Shared.mqh', log)
+                self.assertIn(b'Result: 0 errors, 0 warnings', log)
+                entry = folder/'Probe.mq5'
+                raw = entry.read_bytes()
+                decoded = raw.decode('utf-16' if raw.startswith(b'\xff\xfe') else 'utf-8')
+                self.assertIn('\r', decoded)
+                self.assertNotIn('\n', decoded)
+                snapshot = inventory(folder, [entry], [])
+                self.assertEqual(snapshot['coverage'], 'selected_entrypoints_scanned')
+                self.assertEqual(snapshot['unresolved'], [])
+                self.assertEqual([(e['line'], e['declaration']) for e in snapshot['dependencies']],
+                                 [(2, '"First.mqh"'), (4, '"Shared.mqh"')])
+                self.assertEqual(snapshot['possible_consumers'].get(str(folder/'Shared.mqh')), [str(entry)])
+                source_record = next(f for f in snapshot['files'] if f['path'] == str(entry))
+                self.assertEqual(source_record['sha256'], digest(raw))
+
     def test_angle_include_filename_keeps_following_directives(self):
         for prefix in ("#include ", "# include ", "/* leading */ #include /* before filename */ "):
             with self.subTest(prefix=prefix):
