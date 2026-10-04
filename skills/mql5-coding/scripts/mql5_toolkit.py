@@ -123,7 +123,11 @@ def main(argv=None) -> int:
                   "issues": [{"code": "invalid_input_or_tooling", "message": str(exc) if isinstance(exc, InputError) else "Input processing failed; inspect the selected format, paths, and tooling"}]}
         if args.family in {"report", "profile"}:
             result["parsing"] = {"status": "failed"}
-    return publish(output, result)
+    try:
+        return publish(output, result)
+    except OSError:
+        print("Cannot finish writing toolkit evidence; check output access and free space. Retained files may be incomplete.", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

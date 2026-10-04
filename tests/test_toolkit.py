@@ -1197,6 +1197,61 @@ class ToolkitTests(unittest.TestCase):
         self.assertEqual(read["entrypoints"], [str(alias)])
         self.assertEqual(read["coverage"], "uncertain")
 
+    def test_cli_output_io_failures_are_tooling_failures(self):
+        # The public exit-code contract classifies failed evidence writes as 2,
+        # including failures after parsing succeeded or after a partial write.
+        shim = """
+from pathlib import Path
+import errno
+import sys
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1])
+from mql5_toolkit import main
+target = Path(sys.argv[3]) / sys.argv[4]
+original_open = Path.open
+class FullDiskStream:
+    def __init__(self, stream):
+        self.stream = stream
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        self.stream.close()
+    def write(self, value):
+        self.stream.write(value[:1])
+        raise OSError(errno.ENOSPC, "simulated full evidence volume")
+def failing_open(path, *args, **kwargs):
+    if path != target:
+        return original_open(path, *args, **kwargs)
+    if sys.argv[5] == "permission":
+        raise PermissionError(errno.EACCES, "simulated denied evidence write")
+    return FullDiskStream(original_open(path, *args, **kwargs))
+with patch.object(Path, "open", failing_open):
+    sys.exit(main(["report", "read", "--input", sys.argv[2], "--output", sys.argv[3]]))
+"""
+        fixture = FIXTURES/"mixed-trades.htm"
+        original = fixture.read_bytes()
+        for artifact in ("result.json", "summary.txt"):
+            for failure in ("permission", "full_disk"):
+                with self.subTest(artifact=artifact, failure=failure):
+                    output = self.root/(artifact + "-" + failure)
+                    proc = subprocess.run([sys.executable, "-B", "-c", shim, str(SCRIPTS),
+                                           str(fixture), str(output), artifact, failure], capture_output=True)
+                    self.assertEqual(proc.returncode, 2, proc.stderr)
+                    self.assertNotIn(b"Traceback", proc.stderr)
+                    self.assertIn(b"incomplete", proc.stderr)
+                    self.assertLess(len(proc.stderr), 256)
+                    self.assertEqual(proc.stdout, b"")
+                    self.assertTrue(output.is_dir())
+                    self.assertEqual(fixture.read_bytes(), original)
+                    if failure == "full_disk":
+                        self.assertEqual(len((output/artifact).read_bytes()), 1)
+                    else:
+                        self.assertFalse((output/artifact).exists())
+                    if artifact == "summary.txt":
+                        recorded = json.loads((output/"result.json").read_text(encoding="utf-8"))
+                        self.assertEqual(recorded["parsing"]["status"], "success")
+                        self.assertEqual(recorded["metrics"]["net_profit"]["value"], "120.86")
+
     def test_cli_unicode_output_under_a_legacy_pipe_encoding(self):
         output = self.root/"analysis-\u7ed3\u679c"
         env = {**os.environ, "PYTHONIOENCODING": "ascii"}
