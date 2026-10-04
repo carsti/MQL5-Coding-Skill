@@ -48,9 +48,10 @@ function New-ToolkitOutput([string]$Path) {
     $full=Assert-Mql5ReleasePath $Path
     if ($Path -notmatch '^[A-Za-z]:[\\/]' -or (Test-Path -LiteralPath $full)) {throw 'Select a new absolute output directory.'}
     if (-not (Test-Path -LiteralPath ([IO.Path]::GetDirectoryName($full)) -PathType Container)) {throw 'Output parent directory is unavailable.'}
-    # Directory creation itself is not exclusive on Windows; reserve a create-new owner file
-    # after creation and refuse a concurrent winner before publishing any evidence.
-    [IO.Directory]::CreateDirectory($full) | Out-Null
+    # Reuse the tester's native exclusive create: CreateDirectory returning an
+    # existing directory cannot establish ownership after the preceding check.
+    if (-not ('Mql5Coding.JobProcessLaunch' -as [type])) {Add-Type -Path (Join-Path $PSScriptRoot 'TesterProcessJob.cs')}
+    if (-not [Mql5Coding.JobProcessLaunch]::TryCreateDirectory($full)) {throw 'Select a new absolute output directory.'}
     $owner=[IO.File]::Open((Join-Path $full '.toolkit-owner'),[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
     try {$bytes=[Text.Encoding]::UTF8.GetBytes([guid]::NewGuid().ToString('N'));$owner.Write($bytes,0,$bytes.Length)} finally {$owner.Dispose()}
     return $full

@@ -31,6 +31,8 @@ Exit codes: `0` processing completed, `1` explicit expectations failed, `2` inva
 
 The Python CLI writes UTF-8 to stdout and stderr, including redirected pipes. Unicode evidence paths remain readable without changing the operation's exit status because of a legacy console encoding.
 
+The PowerShell journal and scenario helpers reuse the tester's native exclusive directory creation. A folder created by another writer after the initial path check is refused before claiming it or writing artifacts, preserving that writer's evidence.
+
 ## Reports and comparisons
 
 Supported input is the English native MT5 HTML Settings/Results table layout covered by repository trading and no-trade fixtures, encoded as UTF-16LE with BOM or UTF-8. Nested/malformed tables, ambiguous duplicate statistics, and other layouts/languages are rejected. Table, row, and cell elements must close in their nesting order; unmatched or mismatched closures are invalid input. Individual absent fields remain missing. Do not use a no-trade fixture alone to validate trading statistics. Source hashes identify exact analyzed bytes, including encoding.

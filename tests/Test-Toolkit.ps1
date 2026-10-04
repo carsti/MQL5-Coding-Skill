@@ -27,6 +27,31 @@ $oldTrace=$env:MQL5_SCENARIO_TEST_TRACE;$oldReport=$env:MQL5_SCENARIO_TEST_REPOR
 try {
     $python=if ($PythonPath) {Get-ToolkitPython $PythonPath} elseif (Get-Command python -ErrorAction SilentlyContinue) {(Get-Command python).Source} else {Get-ToolkitPython ''}
     Check ((Get-ToolkitValue @{exit_code=3} 'exit_code') -eq 3 -and (Get-ToolkitValue ([ordered]@{exit_code=4}) 'exit_code') -eq 4) 'Dictionary exit codes are retained'
+    $raceEvidence=& {
+        $script:toolkitRaceOutput=Join-Path $testRoot 'output-creation-race'
+        $script:toolkitRaceParent=$testRoot;$script:toolkitRaceTriggered=$false
+        $sentinel='Previously retained evidence'
+        function Test-Path {
+            param([string]$LiteralPath,[string]$PathType)
+            if ($LiteralPath -eq $script:toolkitRaceParent -and $PathType -eq 'Container' -and -not $script:toolkitRaceTriggered) {
+                [IO.Directory]::CreateDirectory($script:toolkitRaceOutput) | Out-Null
+                [IO.File]::WriteAllText((Join-Path $script:toolkitRaceOutput 'summary.txt'),$sentinel)
+                $script:toolkitRaceTriggered=$true
+            }
+            return Microsoft.PowerShell.Management\Test-Path @PSBoundParameters
+        }
+        $rejected=$false
+        try {
+            $claimed=New-ToolkitOutput $script:toolkitRaceOutput
+            Save-ToolkitResult $claimed @{schema_version=1;status='completed';operation='race fixture'} @('Replacement evidence') | Out-Null
+        } catch {$rejected=$true}
+        [pscustomobject]@{rejected=$rejected;triggered=$script:toolkitRaceTriggered;preserved=([IO.File]::ReadAllText((Join-Path $script:toolkitRaceOutput 'summary.txt')) -ceq $sentinel);owner_created=(Microsoft.PowerShell.Management\Test-Path -LiteralPath (Join-Path $script:toolkitRaceOutput '.toolkit-owner'));result_created=(Microsoft.PowerShell.Management\Test-Path -LiteralPath (Join-Path $script:toolkitRaceOutput 'result.json'))}
+    }
+    Check ($raceEvidence.triggered -and $raceEvidence.rejected -and $raceEvidence.preserved -and -not $raceEvidence.owner_created -and -not $raceEvidence.result_created) 'A directory created between checks cannot be claimed or have its evidence overwritten'
+    $newOutput=Join-Path $testRoot ('new output '+[char]0xe9)
+    $claimedOutput=New-ToolkitOutput $newOutput
+    $reused=$false;try {New-ToolkitOutput $newOutput | Out-Null} catch {$reused=$true}
+    Check ($claimedOutput -ceq $newOutput -and $reused -and (Get-Item -LiteralPath (Join-Path $newOutput '.toolkit-owner')).Length -eq 32) 'A new Unicode output directory is claimed once and repeat use is refused'
     $journalPath=Join-Path $testRoot 'journal.log'
     $prefix="prefix`r`n"
     $segment="AA`t0`t10:00:01.000`tFixture`tpassword=hidden repeated`r`nBB`t0`t10:00:02.000`tFixture`tpassword=other repeated`r`nCC`t0`t10:00:03.000`tFixture`tMQL5_CODING_PASS:$('a'*32):test`r`n"
