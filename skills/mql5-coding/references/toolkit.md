@@ -45,6 +45,8 @@ An optional existing tester result uses schema 2. Its recorded report hash and l
 
 Malformed nested records, invalid hash strings, and nonfinite recorded deposits are invalid input. Missing optional records remain evidence gaps. SHA-256 hex case is normalized for matching while the recorded report evidence is preserved.
 
+Recorded `execution_mode` accepts integer `-1`, matching the existing tester and project-profile interfaces. Its signed value remains distinct from `0` and positive fixed delays during comparisons. Values below `-1` and non-integer values are invalid. The random-delay meaning was `Not verified in the installed MQL5 CHM`; it was verified in MetaQuotes' [How to Start the Trading Platform](https://www.metatrader5.com/en/terminal/help/start_advanced/start), under the tester configuration settings. Importing this setting does not verify execution or make differing delay settings comparable.
+
 Required comparison conditions are symbol, period, reported dates, model, deposit, currency, leverage, execution mode, and effective input rows. A known difference is `incompatible`; missing conditions are `insufficient_evidence`; matching conditions are `comparable`. Report/run conflicts are gaps. Artifact identity changes do not make code-revision comparisons incompatible. Terminal and data-quality information is retained separately and can be explicitly required.
 
 Deposit conditions use an exact decimal identity: trailing fractional zeros and equivalent zero signs are removed without rounding input digits. Distinct accepted finite amounts cannot become equal through the arithmetic context. The original deposit text remains in the configuration evidence.

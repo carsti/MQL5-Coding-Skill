@@ -61,8 +61,9 @@ def recorded_settings(run: dict) -> tuple[dict, dict, dict, dict]:
         raise InputError("Tester-result report byte_length must be a nonnegative integer")
     for key in ("model", "execution_mode", "leverage"):
         value = settings.get(key)
-        if value is not None and (type(value) is not int or value < 0):
-            raise InputError("Tester-result " + key + " must be a nonnegative integer")
+        minimum = -1 if key == "execution_mode" else 0
+        if value is not None and (type(value) is not int or value < minimum):
+            raise InputError("Tester-result " + key + " must be an integer of at least " + str(minimum))
     for key in ("symbol", "period", "currency", "from_date", "to_date"):
         value = settings.get(key)
         if value is not None and (not isinstance(value, str) or not value.strip()):

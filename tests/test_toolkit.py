@@ -253,6 +253,83 @@ class ToolkitTests(unittest.TestCase):
         self.assertFalse(report["recorded_run"]["verified_execution"])
         self.assertEqual(compare_reports(self.report(), report)["compatibility"]["status"], "insufficient_evidence")
 
+    def test_random_execution_mode_is_retained_for_native_reports(self):
+        # Recorded settings are derived for import testing; these fixtures do
+        # not establish a new tester run or its random-delay behavior.
+        for name in ("no-trades", "profitable-only", "mixed-trades"):
+            with self.subTest(fixture=name):
+                run = json.loads((FIXTURES/(name+"-result.json")).read_text(encoding="utf-8"))
+                run["inputs"]["execution_mode"] = -1
+                path = self.root/(name+"-random-mode.json")
+                path.write_text(json.dumps(run), encoding="utf-8")
+                report = native_report(FIXTURES/(name+".htm"), path)
+                self.assertEqual(report["conditions"]["execution_mode"], "-1")
+                self.assertEqual(report["recorded_run"]["requested_settings"]["execution_mode"], -1)
+                self.assertEqual(report["evidence_linkage"]["status"], "hash_verified")
+                self.assertEqual(report["metrics"], self.report(name)["metrics"])
+                self.assertFalse(report["recorded_run"]["verified_execution"])
+                self.assertEqual(report["recorded_run"]["source"]["sha256"], digest(path.read_bytes()))
+
+    def test_cli_random_execution_mode_comparisons_and_invalid_values(self):
+        original = json.loads((FIXTURES/"mixed-trades-result.json").read_text(encoding="utf-8"))
+        expectations = self.root/"execution-mode-expectations.json"
+        expectations.write_text(json.dumps({"schema_version": 1, "metrics": [
+            {"metric": "net_profit", "target": "candidate", "minimum": "120", "maximum": "121"}]}), encoding="utf-8")
+        runs = []
+        for mode in (-1, 0, 100):
+            path = self.root/("execution-mode-"+str(mode)+".json")
+            path.write_text(json.dumps({**original, "inputs": {**original["inputs"], "execution_mode": mode}}), encoding="utf-8")
+            runs.append(path)
+        for index, (candidate, code) in enumerate(((runs[0], 0), (runs[1], 3), (runs[2], 3))):
+            output = self.root/("execution-comparison-"+str(index))
+            process = subprocess.run([sys.executable, "-B", str(SCRIPTS/"mql5_toolkit.py"), "report", "compare",
+                                      "--baseline", str(FIXTURES/"mixed-trades.htm"), "--candidate", str(FIXTURES/"mixed-trades.htm"),
+                                      "--baseline-result", str(runs[0]), "--candidate-result", str(candidate),
+                                      "--expectations", str(expectations), "--output", str(output)], capture_output=True)
+            with self.subTest(candidate=candidate.name):
+                self.assertEqual(process.returncode, code, process.stderr)
+                compared = json.loads((output/"result.json").read_text(encoding="utf-8"))
+                self.assertEqual(compared["compatibility"]["status"], "comparable" if code == 0 else "incompatible")
+                self.assertEqual(compared["expectations"]["status"], "pass" if code == 0 else "not_evaluable")
+                self.assertEqual(compared["metrics"]["net_profit"]["difference"]["value"], "0.00")
+                if code:
+                    self.assertEqual([item["condition"] for item in compared["compatibility"]["differences"]], ["execution_mode"])
+        for index, mode in enumerate((-2, True, -1.0, "-1")):
+            path = self.root/("invalid-execution-mode-"+str(index)+".json")
+            path.write_text(json.dumps({**original, "inputs": {**original["inputs"], "execution_mode": mode}}), encoding="utf-8")
+            original_bytes = path.read_bytes()
+            output = self.root/("invalid-execution-output-"+str(index))
+            process = subprocess.run([sys.executable, "-B", str(SCRIPTS/"mql5_toolkit.py"), "report", "read",
+                                      "--input", str(FIXTURES/"mixed-trades.htm"), "--tester-result", str(path),
+                                      "--output", str(output)], capture_output=True)
+            with self.subTest(invalid_mode=mode):
+                self.assertEqual(process.returncode, 2, process.stderr)
+                self.assertNotIn(b"Traceback", process.stderr)
+                self.assertEqual(json.loads((output/"result.json").read_text(encoding="utf-8"))["status"], "failed")
+                self.assertTrue((output/"summary.txt").is_file())
+                self.assertEqual(path.read_bytes(), original_bytes)
+
+    def test_random_execution_mode_keeps_run_status_and_linkage_separate(self):
+        original = json.loads((FIXTURES/"mixed-trades-result.json").read_text(encoding="utf-8"))
+        original["inputs"]["execution_mode"] = -1
+        original["status"] = "evidence_failed"
+        path = self.root/"failed-random-mode-run.json"
+        path.write_text(json.dumps(original), encoding="utf-8")
+        report = native_report(FIXTURES/"mixed-trades.htm", path)
+        self.assertEqual(report["evidence_linkage"]["status"], "hash_verified")
+        self.assertEqual(report["recorded_run"]["status"], "evidence_failed")
+        self.assertFalse(report["recorded_run"]["successful_status_recorded"])
+        self.assertFalse(report["recorded_run"]["verified_execution"])
+        expectations = self.expectation(minimum="0")
+        expectations["require_successful_runs"] = True
+        self.assertEqual(compare_reports(report, report, expectations)["expectations"]["status"], "not_evaluable")
+        original["artifacts"]["report"]["sha256"] = "0"*64
+        path.write_text(json.dumps(original), encoding="utf-8")
+        mismatched = native_report(FIXTURES/"mixed-trades.htm", path)
+        self.assertEqual(mismatched["evidence_linkage"]["status"], "mismatch")
+        self.assertIsNone(mismatched["conditions"]["execution_mode"])
+        self.assertEqual(compare_reports(report, mismatched)["compatibility"]["status"], "insufficient_evidence")
+
     def test_comparison_statuses_artifact_and_supplemental(self):
         a = self.report()
         b = copy.deepcopy(a)

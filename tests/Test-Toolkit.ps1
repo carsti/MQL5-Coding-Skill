@@ -251,6 +251,16 @@ $driver=Join-Path $p.project_root 'driver.exe'
 $source=Join-Path $p.project_root 'Fixture.mq5'
 if (-not $OutputDirectory) {$OutputDirectory=$p.project_root}
 & $driver $Action $p.name $source $OutputDirectory
+$code=$LASTEXITCODE
+# The synthetic tester records the profile's selected execution setting. This
+# validates analysis integration, not real MetaTrader delay behavior.
+$runPath=Join-Path $OutputDirectory 'smoke-result.json'
+if ($Action -eq 'TesterSmoke' -and (Test-Path -LiteralPath $runPath -PathType Leaf)) {
+    $run=Get-Content -LiteralPath $runPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $run.inputs.execution_mode=$p.tester.settings.execution_mode
+    [IO.File]::WriteAllText($runPath,($run | ConvertTo-Json -Depth 12),(New-Object Text.UTF8Encoding($false)))
+}
+$global:LASTEXITCODE=$code
 exit $LASTEXITCODE
 '@
     [IO.File]::WriteAllText((Join-Path $fixtureScripts 'Invoke-Mql5Project.ps1'),$stub,(New-Object Text.UTF8Encoding($false)))
@@ -267,6 +277,15 @@ exit $LASTEXITCODE
     $validated=Join-Path $testRoot 'batch-validate'
     $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$validated,'-PythonPath',$python) $fixtureScripts
     Check ($process.exit_code -eq 0 -and -not (Test-Path -LiteralPath $env:MQL5_SCENARIO_TEST_TRACE)) ('Validation launched code or failed: '+$process.stderr+$process.stdout+((ReadResult $validated).issues | ConvertTo-Json -Compress))
+    $randomProfile=Read-Mql5ReleaseJson $profiles.success
+    $randomProfile.tester.settings.execution_mode=-1
+    $randomProfilePath=Join-Path $testRoot 'random-delay-profile.json';Save $randomProfilePath $randomProfile
+    Save $manifestPath @{schema_version=1;scenarios=@(@{id='random-delay';profile=$randomProfilePath})}
+    $randomBatch=Join-Path $testRoot 'batch-random-delay'
+    $process=Run 'Invoke-Mql5ScenarioBatch.ps1' @('-ManifestPath',$manifestPath,'-OutputDirectory',$randomBatch,'-PythonPath',$python,'-Action','Execute') $fixtureScripts
+    $randomResult=ReadResult $randomBatch
+    $randomAnalysis=Read-Mql5ReleaseJson $randomResult.scenarios[0].analysis[0].result_path
+    Check ($process.exit_code -eq 0 -and $randomResult.scenarios[0].status -eq 'completed' -and $randomResult.scenarios[0].analysis[0].status -eq 'completed' -and $randomAnalysis.conditions.execution_mode -ceq '-1' -and $randomAnalysis.evidence_linkage.status -ceq 'hash_verified') 'A valid random-delay profile completes synthetic tester analysis with its recorded execution setting'
     $full=Join-Path $testRoot 'batch-mixed'
     $scenarios=@('success','compiler-failure','tester-failure','timeout','blocked','missing-result','bad-report') | ForEach-Object {@{id=$_;profile=$profiles[$_]}}
     Save $manifestPath @{schema_version=1;scenarios=@($scenarios)}
