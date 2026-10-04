@@ -414,6 +414,30 @@ exit $LASTEXITCODE
     $profileInventory=Join-Path $testRoot 'profile-inventory'
     $analyzer=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'includes','inventory','--project-profile',$profiles.success,'--powershell',$hostExe,'--output',$profileInventory) $testRoot 30
     Check ($analyzer.exit_code -eq 0 -and (ReadResult $profileInventory).profile.path -eq $profiles.success) 'Python inventory reuses existing profile validation'
+    $inventoryProject=Join-Path $testRoot ('inventory project '+[char]0xe9)
+    $compilerRoot=Join-Path $testRoot 'inventory MQL5 root'
+    $standardRoot=Join-Path $compilerRoot 'Include'
+    [void][IO.Directory]::CreateDirectory($inventoryProject)
+    [void][IO.Directory]::CreateDirectory($standardRoot)
+    $inventoryEntry=Join-Path $inventoryProject 'Inventory.mq5'
+    $standardHeader=Join-Path $standardRoot 'Shared.mqh'
+    [IO.File]::WriteAllText($inventoryEntry,"#include <Shared.mqh>`n",(New-Object Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText($standardHeader,"// independently specified standard header`n",(New-Object Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText((Join-Path $compilerRoot 'Shared.mqh'),"// wrong-root decoy`n",(New-Object Text.UTF8Encoding($false)))
+    $standardProfile=Join-Path $testRoot 'standard-inventory-profile.json'
+    Save $standardProfile @{schema_version=1;name='standard inventory';project_root=$inventoryProject;entrypoints=@('Inventory.mq5');include_path=$compilerRoot;metaeditor_path=$editor;compiler=@{timeout_seconds=5;warnings_as_errors=$false};tester=$null}
+    $standardInventory=Join-Path $testRoot 'standard-profile-inventory'
+    $analyzer=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'includes','inventory','--project-profile',$standardProfile,'--powershell',$hostExe,'--output',$standardInventory) $testRoot 30
+    $standardRead=ReadResult $standardInventory
+    Check ($analyzer.exit_code -eq 0 -and $standardRead.include_roots[0] -ceq $standardRoot -and $standardRead.dependencies[0].target -ceq $standardHeader -and $standardRead.coverage -eq 'selected_entrypoints_scanned') 'Saved compiler roots select their Include child and exclude wrong-root decoys'
+    [IO.File]::WriteAllText($standardHeader,"// independently specified changed standard header`n",(New-Object Text.UTF8Encoding($false)))
+    $changedInventory=Join-Path $testRoot 'standard-profile-changed'
+    $analyzer=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'includes','inventory','--project-profile',$standardProfile,'--powershell',$hostExe,'--output',$changedInventory) $testRoot 30
+    if ($analyzer.exit_code -ne 0) {throw 'Changed standard inventory failed.'}
+    $standardImpact=Join-Path $testRoot 'standard-profile-impact'
+    $comparison=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'includes','compare','--baseline',(Join-Path $standardInventory 'result.json'),'--candidate',(Join-Path $changedInventory 'result.json'),'--output',$standardImpact) $testRoot 30
+    $impactRead=ReadResult $standardImpact
+    Check ($comparison.exit_code -eq 0 -and $impactRead.differences.Count -eq 1 -and $impactRead.differences[0].path -ceq $standardHeader -and $impactRead.differences[0].kind -eq 'changed' -and $impactRead.possible_affected_entrypoints[0] -ceq $inventoryEntry) 'Native-style saved-profile snapshots retain changed standard-header consumers'
     'TOOLKIT_POWERSHELL_TESTS='+$checks
 } finally {
     $env:MQL5_SCENARIO_TEST_TRACE=$oldTrace;$env:MQL5_SCENARIO_TEST_REPORT=$oldReport

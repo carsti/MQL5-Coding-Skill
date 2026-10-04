@@ -79,7 +79,10 @@ def execute(args) -> dict:
                     raise InputError("Project profile changed during validation")
                 root = absolute(profile["project_root"], kind="dir")
                 entries = [selected_entrypoint(p) for p in profile["entrypoints"]]
-                roots = [absolute(profile["include_path"], kind="dir")] if profile["include_path"] else []
+                # Saved IncludePath is the compiler's MQL5 root; native angle
+                # includes use its Include child. Preserve a missing or linked
+                # child for inventory's unresolved/uncertain dependency checks.
+                roots = [absolute(profile["include_path"], kind="dir") / "Include"] if profile["include_path"] else []
             else:
                 root = absolute(args.root, kind="dir")
                 entries = [selected_entrypoint(p) for p in args.entrypoint]

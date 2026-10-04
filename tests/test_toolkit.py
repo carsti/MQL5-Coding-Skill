@@ -523,6 +523,65 @@ class ToolkitTests(unittest.TestCase):
                 self.assertEqual(selected_source(result)["sha256"], digest(original_bytes))
                 self.assertEqual(selected_source(result)["byte_length"], len(original_bytes))
 
+    def test_profile_inventory_uses_compiler_root_standard_directory(self):
+        fixture = Path(__file__).parent/'fixtures/angle-include-filename'
+        copied = self.root/'profile-standard-directory'
+        shutil.copytree(fixture, copied)
+        root, mql5 = copied/'Project', copied/'MQL5'
+        standard, entry = mql5/'Include', root/'Probe.mq5'
+        for name in ("Owner's.mqh", 'Shared.mqh'):
+            (mql5/name).write_text('// wrong-root decoy, not a standard header\n', encoding='utf-8')
+        profile = self.root/'standard-profile.json'
+        profile.write_text('{}', encoding='utf-8')
+        validated = {'project_root': str(root), 'entrypoints': [str(entry)], 'include_path': str(mql5)}
+        args = cli_parser().parse_args(['includes', 'inventory', '--project-profile', str(profile),
+                                       '--output', str(self.root/'unused')])
+        with patch('mql5_toolkit.validated_profile', return_value=validated):
+            before = execute(args)
+            self.assertEqual(before['include_roots'], [str(standard)])
+            self.assertEqual(before['coverage'], 'selected_entrypoints_scanned')
+            self.assertEqual(before['files'], inventory(root, [entry], [standard])['files'])
+            for name in ("Owner's.mqh", 'Shared.mqh'):
+                self.assertEqual(before['possible_consumers'][str(standard/name)], [str(entry)])
+                self.assertNotIn(str(mql5/name), before['possible_consumers'])
+            shared = standard/'Shared.mqh'
+            shared.write_text('// independently specified shared-header change\n', encoding='utf-8')
+            changed = execute(args)
+            impact = compare_snapshots(before, changed)
+            self.assertEqual([(item['path'], item['kind']) for item in impact['differences']], [(str(shared), 'changed')])
+            self.assertEqual(impact['possible_affected_entrypoints'], [str(entry)])
+            shared.unlink()
+            removed = compare_snapshots(changed, execute(args))
+            self.assertEqual([(item['path'], item['kind']) for item in removed['differences']], [(str(shared), 'removed')])
+            self.assertEqual(removed['possible_affected_entrypoints'], [str(entry)])
+            self.assertTrue(removed['differences'][0]['consumer_coverage_unknown'])
+
+    def test_profile_missing_standard_directory_retains_known_sources(self):
+        root, mql5 = self.root/'project', self.root/'MQL5'
+        root.mkdir()
+        mql5.mkdir()
+        entry, local = root/'Probe.mq5', root/'Local.mqh'
+        entry.write_text('#include "Local.mqh"\n#include <Missing.mqh>\n', encoding='utf-8')
+        local.write_text('// known local header\n', encoding='utf-8')
+        (mql5/'Missing.mqh').write_text('// cannot supply a native standard include\n', encoding='utf-8')
+        profile = self.root/'missing-standard-profile.json'
+        profile.write_text('{}', encoding='utf-8')
+        validated = {'project_root': str(root), 'entrypoints': [str(entry)], 'include_path': str(mql5)}
+        args = cli_parser().parse_args(['includes', 'inventory', '--project-profile', str(profile),
+                                       '--output', str(self.root/'unused')])
+        with patch('mql5_toolkit.validated_profile', return_value=validated):
+            snapshot = execute(args)
+            self.assertEqual(snapshot['coverage'], 'uncertain')
+            self.assertEqual(snapshot['possible_consumers'][str(local)], [str(entry)])
+            self.assertEqual([(edge['declaration'], edge['resolution']) for edge in snapshot['unresolved']],
+                             [('<Missing.mqh>', 'unresolved')])
+            self.assertEqual(snapshot['unresolved'][0]['searched_roots'], [str(mql5/'Include')])
+            self.assertNotIn(str(mql5/'Missing.mqh'), snapshot['possible_consumers'])
+            entry.write_text('#include "Local.mqh"\n', encoding='utf-8')
+            self.assertEqual(execute(args)['coverage'], 'selected_entrypoints_scanned')
+            validated['include_path'] = None
+            self.assertEqual(execute(args)['include_roots'], [])
+
     def test_include_profile_changes_stop_inventory(self):
         root, external = self.project()
         profile = self.root/"profile.json"
