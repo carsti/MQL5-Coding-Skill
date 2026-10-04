@@ -21,7 +21,9 @@ def selected_entrypoint(value: str | Path) -> Path:
     path = absolute(path.parent, kind="dir") / path.name
     if not path.is_file():
         raise InputError("Selected input file is unavailable")
-    return path
+    # Normal leaves use the filesystem spelling, matching discovered sources.
+    # Keep linked paths available for the inventory's uncertainty checks.
+    return path if linked_component(path) is not None else path.resolve()
 
 
 def linked_component(path: Path) -> Path | None:

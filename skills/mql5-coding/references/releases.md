@@ -1,6 +1,6 @@
 # Verified releases, updates and rollback
 
-Stable releases use explicit tags, starting at `v1.0.0`; this source prepares package `v1.1.11`. Local preparation and verified offline installation do not publish a GitHub release. The ZIP contains exactly the skill files and a release manifest with the tag, version, reviewed source commit, lengths and SHA-256 of every file. The repository-level packager verifies its own output. Release CI validates both shells and the MCP pair before retaining packages; any later publication must use a successful commit's assets.
+Stable releases use explicit tags, starting at `v1.0.0`; this source prepares package `v1.1.12`. Local preparation and verified offline installation do not publish a GitHub release. The ZIP contains exactly the skill files and a release manifest with the tag, version, reviewed source commit, lengths and SHA-256 of every file. The repository-level packager verifies its own output. Release CI validates both shells and the MCP pair before retaining packages; any later publication must use a successful commit's assets.
 
 Run the trusted installed `scripts/Update-Mql5Skill.ps1` from a directory outside the installed skill. For the first upgrade from an older installation, run the script from a reviewed checkout of this repository. In particular, the 1.0.2 verifier rejects the new `assets/` package location; the reviewed 1.1.0 verifier accepts that bounded location and retains the same manifest, hash, backup, and rollback checks. Do not run an updater from an unverified download. The updater requires Windows PowerShell 5.1 or PowerShell 7; online actions also require authenticated `gh` access to the private repository. Offline updates need neither GitHub access, Python, nor MetaTrader.
 
@@ -34,7 +34,7 @@ If rollback is interrupted again, recovery follows the pending intents back to t
 For an offline update, supply all trust inputs explicitly:
 
 ```powershell
-& $updater -Action Update -Version 1.1.11 -ArchivePath '<absolute-zip-path>' `
+& $updater -Action Update -Version 1.1.12 -ArchivePath '<absolute-zip-path>' `
     -ExpectedArchiveSha256 '<trusted-64-hex-digest>' -ExpectedSourceCommit '<trusted-40-hex-commit>'
 ```
 

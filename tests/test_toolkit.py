@@ -16,7 +16,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "skills/mql5-coding/scripts"
 sys.path.insert(0, str(SCRIPTS))
 from toolkit_common import InputError, differences, digest, load_expectations, number, read_json
 from toolkit_reports import compare_reports, native_report
-from toolkit_includes import compare_snapshots, directives, inventory
+from toolkit_includes import compare_snapshots, directives, inventory, selected_entrypoint
 from mql5_toolkit import execute, parser as cli_parser
 
 FIXTURES = Path(__file__).parent / "fixtures/reports"
@@ -480,6 +480,53 @@ class ToolkitTests(unittest.TestCase):
         self.assertEqual(len([x for x in snap["dependencies"] if x["conditional_context"]]), 1)
         self.assertNotIn("bad.mqh", str(snap["dependencies"]))
         self.assertEqual(directives('/*\n#include "bad"\n*/\n#include <x> // comment\n'), [(4, "include", "<x>")])
+
+    @unittest.skipUnless(os.name == "nt", "Windows case-insensitive filename selection")
+    def test_entrypoint_case_aliases_do_not_invent_source_changes(self):
+        for index, filename in enumerate(("CaseEA.mq5", "Case\u00c9A.mq5")):
+            with self.subTest(filename=filename):
+                root = self.root/("case-project-" + str(index))
+                root.mkdir()
+                entry = root/filename
+                header = root/"Shared.mqh"
+                entry.write_text('#include "Shared.mqh"\nvoid OnTick() {}\n', encoding="utf-8")
+                header.write_text('// initial independently recorded header\n', encoding="utf-8")
+                alias = entry.with_name(filename.swapcase())
+                self.assertTrue(alias.samefile(entry))
+                baseline = inventory(root, [], [])
+                output = self.root/("case-cli-" + str(index))
+                process = subprocess.run([sys.executable, "-B", str(SCRIPTS/"mql5_toolkit.py"), "includes", "inventory",
+                                          "--root", str(root), "--entrypoint", str(alias), "--output", str(output)], capture_output=True)
+                self.assertEqual(process.returncode, 0, process.stderr)
+                candidate = json.loads((output/"result.json").read_text(encoding="utf-8"))
+                self.assertEqual(candidate["entrypoints"], [str(entry)])
+                self.assertEqual(candidate["unselected_entrypoints"], [])
+                self.assertEqual(candidate["coverage"], "selected_entrypoints_scanned")
+                self.assertEqual(candidate["files"], baseline["files"])
+                self.assertEqual(candidate["possible_consumers"], baseline["possible_consumers"])
+                self.assertEqual(compare_snapshots(baseline, candidate)["differences"], [])
+                header.write_text('// separately specified changed header\n', encoding="utf-8")
+                changed = inventory(root, [selected_entrypoint(alias)], [])
+                impact = compare_snapshots(candidate, changed)
+                self.assertEqual([item["path"] for item in impact["differences"]], [str(header)])
+                self.assertEqual(impact["possible_affected_entrypoints"], [str(entry)])
+                self.assertFalse(impact["differences"][0]["consumer_coverage_unknown"])
+
+    @unittest.skipUnless(os.name == "nt", "Windows case-insensitive filename selection")
+    def test_entrypoint_case_alias_does_not_use_an_extra_source_slot(self):
+        root = self.root/"case-budget-project"
+        root.mkdir()
+        entry = root/"CaseEA.mq5"
+        entry.write_text('#include "Shared.mqh"\n', encoding="utf-8")
+        (root/"Shared.mqh").write_text('// included project header\n', encoding="utf-8")
+        alias = entry.with_name("caseea.mq5")
+        self.assertTrue(alias.samefile(entry))
+        # The two existing sources fill this controlled budget. Another spelling
+        # of the same entrypoint must reuse that source's identity.
+        with patch("toolkit_includes.MAX_SOURCE_FILES", 2):
+            snapshot = inventory(root, [selected_entrypoint(alias)], [])
+        self.assertEqual(len(snapshot["files"]), 2)
+        self.assertEqual(snapshot["coverage"], "selected_entrypoints_scanned")
 
     def test_shared_source_changes_cannot_mix_dependency_versions(self):
         root, external = self.project()

@@ -61,6 +61,8 @@ Literal `"file"` includes use the directory of the file containing the directive
 
 The snapshot records project source hashes, reachable external sources, declared edges, conditional context, possible consumers, cycles, unresolved or unsupported forms, and unselected entrypoints. Conditional branches remain possible; macros are not expanded. Explicitly selected directories are canonicalized. Linked entrypoint files retain their alias, and links encountered during discovery or include resolution are disclosed without reading their targets. Linked include candidates retain their alias and linked component as uncertainty. Bounds are 50,000 project files, 10,000 source files, 8 MiB per source, and 128 include levels. Unknown coverage requires further review. Cycles alone are not compilation errors.
 
+Ordinary selected entrypoints use the filesystem's path spelling. Windows filename-case aliases share one recorded source identity with discovery, preventing duplicate source slots, false unselected entrypoints, and spurious snapshot changes. Linked paths retain their aliases for uncertainty checks.
+
 Profile mode fingerprints the selected profile before calling the existing validator and checks it after validation and inventory. A changed profile stops the operation as invalid input. These boundary checks do not prove an atomic snapshot across concurrent changes.
 
 When a shared source is read for multiple entrypoints, its consumed hash must remain the same. A changed hash stops inventory as invalid input, preventing declarations from different source versions from sharing one recorded fingerprint. Retry after source edits finish. This check does not establish an atomic snapshot of the whole project.
