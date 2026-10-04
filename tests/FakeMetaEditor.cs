@@ -126,7 +126,14 @@ internal static class FakeMetaEditor
             File.SetLastWriteTimeUtc(artifactPath, DateTime.UtcNow);
         }
 
-        File.WriteAllText(logPath, result + Environment.NewLine, new UTF8Encoding(false));
+        int logCharacters = 0;
+        string logSize = Environment.GetEnvironmentVariable("FAKE_METAEDITOR_LOG_CHARACTERS");
+        if (!String.IsNullOrEmpty(logSize) && !Int32.TryParse(logSize, out logCharacters))
+            throw new InvalidOperationException("Invalid synthetic compiler log size.");
+        string log = (logCharacters > 0 ? new string('x', logCharacters) + Environment.NewLine : "") + result + Environment.NewLine;
+        Encoding logEncoding = Environment.GetEnvironmentVariable("FAKE_METAEDITOR_LOG_ENCODING") == "utf16"
+            ? (Encoding)new UnicodeEncoding(false, true, true) : new UTF8Encoding(false);
+        File.WriteAllText(logPath, log, logEncoding);
         return 0;
     }
 }

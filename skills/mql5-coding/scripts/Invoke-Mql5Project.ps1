@@ -5,6 +5,7 @@ param(
     [ValidateSet('Validate','Compile','TesterPreflight','TesterSmoke')][string]$Action='Validate',
     [string]$Entrypoint,
     [switch]$SyntaxOnly,
+    [switch]$SuppressLogOutput,
     [string]$CompilationReceiptPath,
     [string]$ExpectedExpertSha256,
     [string]$OutputDirectory,
@@ -73,13 +74,14 @@ try {
             $selected=@($path)
         }
         foreach ($source in $selected) {
-            $parameters=@{SourcePath=$source;MetaEditorPath=$profile.metaeditor_path;TimeoutSeconds=$profile.compiler.timeout_seconds;WarningsAsErrors=$profile.compiler.warnings_as_errors;SyntaxOnly=[bool]$SyntaxOnly}
+            $parameters=@{SourcePath=$source;MetaEditorPath=$profile.metaeditor_path;TimeoutSeconds=$profile.compiler.timeout_seconds;WarningsAsErrors=$profile.compiler.warnings_as_errors;SyntaxOnly=[bool]$SyntaxOnly;SuppressLogOutput=[bool]$SuppressLogOutput}
             if ($null -ne $profile.include_path) {$parameters.IncludePath=$profile.include_path}
             Invoke-Mql5ProfileTool 'Compile-Mql5.ps1' $parameters
             if ($script:profileToolExit -ne 0) {exit $script:profileToolExit}
         }
         exit 0
     }
+    if ($PSBoundParameters.ContainsKey('SuppressLogOutput')) {throw 'SuppressLogOutput applies only to compilation.'}
     if ($SyntaxOnly -or $PSBoundParameters.ContainsKey('Entrypoint')) {throw 'Tester action uses the saved tester entrypoint.'}
     if ($null -eq $profile.tester) {throw 'This profile has no tester configuration.'}
     if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {throw 'Select a new output directory for this tester run.'}

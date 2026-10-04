@@ -262,7 +262,7 @@ try {
     # The controller is real; only its existing profile execution boundary is replaced
     # by a synthetic executable. No test-only override is exposed in the public API.
     $stub=@'
-param([string]$ProfilePath,[string]$Action,[string]$Entrypoint,[string]$CompilationReceiptPath,[string]$OutputDirectory,[string]$ExpectedLogMarkerFile)
+param([string]$ProfilePath,[string]$Action,[string]$Entrypoint,[string]$CompilationReceiptPath,[string]$OutputDirectory,[string]$ExpectedLogMarkerFile,[switch]$SuppressLogOutput)
 $p=Get-Content -LiteralPath $ProfilePath -Raw -Encoding UTF8 | ConvertFrom-Json
 $driver=Join-Path $p.project_root 'driver.exe'
 $source=Join-Path $p.project_root 'Fixture.mq5'
@@ -631,6 +631,8 @@ exit $LASTEXITCODE
     $comparison=Invoke-ToolkitProcess $python @('-B',(Join-Path $scripts 'mql5_toolkit.py'),'profile','compare','--baseline',(Join-Path $profileFixtures 'native-functions.csv'),'--candidate',(Join-Path $profileFixtures 'native-functions.csv'),'--baseline-conditions',$partialBaselinePath,'--candidate-conditions',$partialBaselinePath,'--expectations',$profileExpectations,'--output',$profileMissing) $testRoot 30
     $profileRead=ReadResult $profileMissing
     Check ($comparison.exit_code -eq 4 -and $profileRead.compatibility.status -eq 'insufficient_evidence' -and $profileRead.compatibility.missing -contains 'build_conditions.architecture' -and $profileRead.compatibility.differences.Count -eq 0 -and $profileRead.expectations.status -eq 'not_evaluable') 'Matching partial profiling settings still require missing build evidence'
+    $largeCompile=Invoke-ToolkitProcess $hostExe @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'Test-LargeCompileBatch.ps1'),'-PythonPath',$python) $testRoot 180
+    Check ($largeCompile.exit_code -eq 0 -and $largeCompile.cleanup_verified -and $largeCompile.stdout -match 'LARGE_COMPILE_BATCH_TESTS=') ('Large compiler log integration failed: '+$largeCompile.stderr+$largeCompile.stdout)
     'TOOLKIT_POWERSHELL_TESTS='+$checks
 } finally {
     $env:MQL5_SCENARIO_TEST_TRACE=$oldTrace;$env:MQL5_SCENARIO_TEST_REPORT=$oldReport

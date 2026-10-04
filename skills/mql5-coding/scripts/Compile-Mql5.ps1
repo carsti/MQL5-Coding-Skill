@@ -15,7 +15,9 @@ param(
 
     [switch]$SyntaxOnly,
 
-    [switch]$WarningsAsErrors
+    [switch]$WarningsAsErrors,
+
+    [switch]$SuppressLogOutput
 )
 
 Set-StrictMode -Version Latest
@@ -1292,7 +1294,7 @@ finally {
     if ($null -ne $receiptParentLease) { $receiptParentLease.Dispose() }
 }
 
-if (-not [string]::IsNullOrWhiteSpace($logText)) {
+if (-not $SuppressLogOutput -and -not [string]::IsNullOrWhiteSpace($logText)) {
     Write-Output 'MQL5_METAEDITOR_LOG_BEGIN'
     Write-Output $logText.TrimEnd()
     Write-Output 'MQL5_METAEDITOR_LOG_END'

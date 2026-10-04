@@ -109,7 +109,7 @@ Interpret the wrapper exit code exactly:
 - `3`: compilation timeout.
 - `4`: warnings were promoted to errors.
 
-Report all emitted errors and warnings. Never claim compilation succeeded unless the wrapper returns `0`. A successful compile does not prove correct Strategy Tester behavior, broker compatibility, demo behavior, live behavior, or profitability.
+Report all emitted errors and warnings. Automated batches use `-SuppressLogOutput` to omit the full console log while preserving its exact retained bytes, receipt, summary, and artifact references. Read the receipt's retained log when reporting individual diagnostics; ordinary compilation still prints the log by default. Never claim compilation succeeded unless the wrapper returns `0`. A successful compile does not prove correct Strategy Tester behavior, broker compatibility, demo behavior, live behavior, or profitability.
 
 Retain the path emitted as `MQL5_COMPILE_RECEIPT=<absolute-json-path>`. Each compilation with a validated source creates a unique JSON receipt beside the source, plus an exact byte copy of that run's MetaEditor log when available. The receipt records the compiler version/build and hash, errors, warnings, exit code, options, and source/EX5/log hashes and lengths. Existing receipts and project logs are preserved. Failed and syntax-only attempts do not claim an accepted EX5; a receipt publication failure returns tooling exit code `2`.
 

@@ -307,6 +307,10 @@ internal static class FakeTerminal
                 Thread.Sleep(25);
         }
 
+        string reportFixture = Environment.GetEnvironmentVariable("FAKE_MT5_REPORT_FIXTURE");
+        if (!String.IsNullOrWhiteSpace(reportFixture))
+            File.WriteAllBytes(Path.Combine(dataPath, config["Report"]), File.ReadAllBytes(reportFixture));
+
         if (mode == "exit_7")
             return 7;
         return 0;

@@ -17,13 +17,14 @@ $hostExe=if ($PSVersionTable.PSEdition -eq 'Core') {Join-Path $PSHOME 'pwsh.exe'
 $output=$null;$current=$null;$abort=$false
 $result=[ordered]@{schema_version=1;operation='scenario batch';action=$Action;status='failed';manifest=$null;scenarios=@();issues=@();exit_code=2;duration_milliseconds=$null;duration_is_ea_cost=$false}
 $clock=[Diagnostics.Stopwatch]::StartNew()
-function Invoke-BatchProfile([string[]]$Arguments,[int]$Seconds) {
+function Invoke-BatchProfile([string[]]$Arguments,[int]$Seconds,[bool]$SuppressLogOutput=$false) {
     $command='[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false); $OutputEncoding=[Console]::OutputEncoding; & '+"'"+(Join-Path $PSScriptRoot 'Invoke-Mql5Project.ps1').Replace("'","''")+"'"
     if ($Arguments.Count % 2) {throw 'Profile invocation requires named value pairs.'}
     for ($part=0;$part -lt $Arguments.Count;$part+=2) {
         if ($Arguments[$part] -cnotmatch '^-[A-Za-z][A-Za-z0-9]*$') {throw 'Invalid delegated parameter name.'}
         $command+=' '+$Arguments[$part]+" '"+$Arguments[$part+1].Replace("'","''")+"'"
     }
+    if ($SuppressLogOutput) {$command+=' -SuppressLogOutput'}
     $command+='; exit $LASTEXITCODE'
     $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     return Invoke-ToolkitProcess $hostExe @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded) $output $Seconds
@@ -141,7 +142,7 @@ try {
             Save-BatchCheckpoint
             Assert-BatchSelection $item
             $start=[DateTime]::UtcNow
-            $compiled=Invoke-BatchProfile @('-ProfilePath',$item.profile_path,'-Action','Compile','-Entrypoint',$item.profile.tester.entrypoint) ($item.profile.compiler.timeout_seconds+30)
+            $compiled=Invoke-BatchProfile @('-ProfilePath',$item.profile_path,'-Action','Compile','-Entrypoint',$item.profile.tester.entrypoint) ($item.profile.compiler.timeout_seconds+30) $true
             $current.compile=@{exit_code=$compiled.exit_code;runner_status=$compiled.status;receipt_path=$null}
             $current.cleanup_verified=$compiled.cleanup_verified
             if (-not $compiled.cleanup_verified) {
