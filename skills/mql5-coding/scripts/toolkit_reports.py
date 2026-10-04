@@ -79,6 +79,8 @@ class Tables(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.rows, self.row, self.cell = [], None, None
         self.cell_tag = None
+        self.bold_depth, self.bold_count = 0, 0
+        self.bold_parts, self.outer_parts = [], []
         self.table = 0
         self.depth = 0
         self.row_index = 0
@@ -104,23 +106,37 @@ class Tables(HTMLParser):
                 self.bad = True
             if self.depth:
                 self.row_index += 1
-                self.row = {"table": self.table, "row": self.row_index, "source_line": self.getpos()[0], "cells": []}
+                self.row = {"table": self.table, "row": self.row_index, "source_line": self.getpos()[0], "cells": [], "value_cells": []}
         if tag in {"td", "th"}:
             if self.row is None or self.cell is not None:
                 self.bad = True
             if self.row is not None:
                 self.cell, self.cell_tag = [], tag
+                self.bold_depth, self.bold_count = 0, 0
+                self.bold_parts, self.outer_parts = [], []
+        if tag == "b" and self.cell is not None:
+            if not self.bold_depth:
+                self.bold_count += 1
+            self.bold_depth += 1
         if tag == "br" and self.cell is not None:
             self.cell.append("\n")
+            (self.bold_parts if self.bold_depth else self.outer_parts).append("\n")
 
     def handle_endtag(self, tag):
         if tag == "title":
             self.in_title = False
+        if tag == "b" and self.cell is not None and self.bold_depth:
+            self.bold_depth -= 1
         if tag in {"td", "th"}:
             if self.cell is None or self.row is None or tag != self.cell_tag:
                 self.bad = True
             if self.cell is not None and self.row is not None:
                 self.row["cells"].append("".join(self.cell).strip())
+                # Native values occupy one bold span. Preserve its whitespace
+                # while ignoring layout padding outside it. Other markup keeps
+                # the complete decoded cell so meaningful text cannot be lost.
+                value = "".join(self.bold_parts) if self.bold_count == 1 and not self.bold_depth and not "".join(self.outer_parts).strip() else "".join(self.cell)
+                self.row["value_cells"].append(value)
             self.cell, self.cell_tag = None, None
         if tag == "tr":
             if self.row is None or self.cell is not None:
@@ -138,6 +154,7 @@ class Tables(HTMLParser):
     def handle_data(self, data):
         if self.cell is not None:
             self.cell.append(data)
+            (self.bold_parts if self.bold_depth else self.outer_parts).append(data)
         if self.in_title:
             self.title.append(data)
 
@@ -179,7 +196,7 @@ def native_report(path: Path, result_path: Path | None = None) -> dict:
         if section not in {"Settings", "Results"}:
             continue
         if input_mode and len(cells) == 2 and not cells[0] and cells[1]:
-            inputs.append(cells[1])
+            inputs.append(row["value_cells"][1])
             continue
         for idx, label in enumerate(cells[:-1]):
             if not label.endswith(":"):
@@ -187,7 +204,8 @@ def native_report(path: Path, result_path: Path | None = None) -> dict:
             key = label[:-1]
             if key in records:
                 raise InputError("Duplicate native statistic or configuration label: " + key)
-            record = {"label": label, "raw": cells[idx+1], "location": {k: row[k] for k in ("table", "row", "source_line")}}
+            value = row["value_cells"][idx+1] if key == "Inputs" else cells[idx+1]
+            record = {"label": label, "raw": value, "location": {k: row[k] for k in ("table", "row", "source_line")}}
             record["location"]["label_cell"] = idx + 1
             record["location"]["value_cell"] = idx + 2
             records[key] = record

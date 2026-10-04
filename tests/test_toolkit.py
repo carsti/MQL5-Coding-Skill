@@ -94,6 +94,90 @@ class ToolkitTests(unittest.TestCase):
         path.write_text((FIXTURES/"mixed-trades.htm").read_text(encoding="utf-16").replace(old, new), encoding="utf-8")
         return path
 
+    def input_cell_report(self, token, markup, name, encoding="utf-8", linked=False):
+        html = (FIXTURES/"mixed-trades-utf8.htm").read_text(encoding="utf-8")
+        old = "<b>" + token + "</b>"
+        self.assertEqual(html.count(old), 1)
+        path = self.root/(name + ".htm")
+        path.write_bytes(html.replace(old, markup, 1).encode(encoding))
+        if not linked:
+            return path, None
+        run = json.loads((FIXTURES/"mixed-trades-result.json").read_text(encoding="utf-8"))
+        data = path.read_bytes()
+        run["artifacts"]["report"].update(path=str(path), sha256=digest(data), byte_length=len(data))
+        run["fixture_notes"] = "Synthetic input-cell mutation; no tester was executed."
+        run_path = self.root/(name + "-result.json")
+        run_path.write_text(json.dumps(run), encoding="utf-8")
+        return path, run_path
+
+    def test_report_preserves_first_and_continuation_input_whitespace(self):
+        values = (("<b>Caption=alpha </b>", "Caption=alpha "),
+                  ("<b>Caption=alpha\t</b>", "Caption=alpha\t"),
+                  ("<b>Caption=alpha\n</b>", "Caption=alpha\n"),
+                  ("<b>Caption=alpha&#32;</b>", "Caption=alpha "),
+                  ("<b>Caption=alpha&nbsp;</b>", "Caption=alpha\u00a0"),
+                  ("<b>Caption=alpha<br></b>", "Caption=alpha\n"),
+                  ("<b>Caption= alpha</b>", "Caption= alpha"))
+        for encoding in ("utf-8", "utf-16"):
+            for token, index in (("Info Panel=", 0), ("ForceChartSettings=true", 1)):
+                for case, (markup, expected) in enumerate(values):
+                    with self.subTest(encoding=encoding, row=index, value=ascii(expected)):
+                        path, _ = self.input_cell_report(token, markup, f"input-{encoding}-{index}-{case}", encoding)
+                        report = native_report(path)
+                        self.assertEqual(report["conditions"]["effective_inputs"][index], expected)
+                        self.assertEqual(report["metrics"]["net_profit"]["value"], "120.86")
+                        self.assertEqual(report["sources"][0]["sha256"], digest(path.read_bytes()))
+                        if index == 0:
+                            self.assertEqual(report["configuration_evidence"]["Inputs"]["raw"], expected)
+
+    def test_report_preserves_input_text_outside_or_across_bold_spans(self):
+        cases = ("Caption=alpha ",
+                 "<b>Caption=</b>alpha ",
+                 "<b>Caption=</b><b>alpha </b>",
+                 "<b></b>Caption=alpha ")
+        for encoding in ("utf-8", "utf-16"):
+            for case, markup in enumerate(cases):
+                with self.subTest(encoding=encoding, markup=markup):
+                    path, _ = self.input_cell_report("Info Panel=", markup, f"input-markup-{encoding}-{case}", encoding)
+                    report = native_report(path)
+                    self.assertEqual(report["conditions"]["effective_inputs"][0], "Caption=alpha ")
+                    self.assertEqual(report["configuration_evidence"]["Inputs"]["raw"], "Caption=alpha ")
+
+    def test_cli_comparison_distinguishes_input_whitespace_from_cell_padding(self):
+        self.expectation(minimum="0")
+        cases = (("space", "<b>Caption=alpha </b>", 3),
+                 ("tab", "<b>Caption=alpha\t</b>", 3),
+                 ("entity", "<b>Caption=alpha&#32;</b>", 3),
+                 ("padding", " \t<b>Caption=alpha</b>\n ", 0))
+        for encoding in ("utf-8", "utf-16"):
+            for token, index in (("Info Panel=", 0), ("ForceChartSettings=true", 1)):
+                baseline, baseline_run = self.input_cell_report(token, "<b>Caption=alpha</b>",
+                    f"input-baseline-{encoding}-{index}", encoding, linked=True)
+                for case, markup, expected_code in cases:
+                    with self.subTest(encoding=encoding, row=index, case=case):
+                        name = f"input-candidate-{encoding}-{index}-{case}"
+                        candidate, candidate_run = self.input_cell_report(token, markup, name, encoding, linked=True)
+                        output = self.root/(name+"-output")
+                        process = subprocess.run([sys.executable, "-B", str(SCRIPTS/"mql5_toolkit.py"),
+                            "report", "compare", "--baseline", str(baseline), "--candidate", str(candidate),
+                            "--baseline-result", str(baseline_run), "--candidate-result", str(candidate_run),
+                            "--expectations", str(self.root/"expectations.json"), "--output", str(output)],
+                            capture_output=True)
+                        self.assertEqual(process.returncode, expected_code, process.stderr)
+                        self.assertNotIn(b"Traceback", process.stderr)
+                        result = json.loads((output/"result.json").read_text(encoding="utf-8"))
+                        self.assertEqual(result["exit_code"], expected_code)
+                        self.assertEqual(result["compatibility"]["status"], "comparable" if expected_code == 0 else "incompatible")
+                        self.assertEqual(result["expectations"]["status"], "pass" if expected_code == 0 else "not_evaluable")
+                        self.assertEqual(result["metrics"]["net_profit"]["difference"]["value"], "0.00")
+                        self.assertTrue((output/"summary.txt").is_file())
+                        for recorded in (result["baseline"], result["candidate"]):
+                            self.assertEqual(recorded["evidence_linkage"]["status"], "hash_verified")
+                        if expected_code == 3:
+                            changed = result["compatibility"]["differences"]
+                            self.assertEqual([d["condition"] for d in changed], ["effective_inputs"])
+                            self.assertNotEqual(changed[0]["baseline"][index], changed[0]["candidate"][index])
+
     def test_report_build_header_ignores_settings_and_footer_values(self):
         html = (FIXTURES/"mixed-trades-utf8.htm").read_text(encoding="utf-8")
         self.assertEqual(self.report()["terminal"]["build"], "6235")
