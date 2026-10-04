@@ -37,6 +37,24 @@ function Get-Mql5ProfileStoredPath([string]$Path, [string]$Base, [switch]$AllowO
     if ([string]::IsNullOrEmpty($relative)) {return '.'}
     return $relative.Replace('/','\')
 }
+function Assert-Mql5ProfileJsonString([string]$Token) {
+    # Both supported JSON converters replace unpaired escaped UTF-16 units.
+    # Inspect serialized escapes first, respecting escaped literal backslashes.
+    $escapes=@([regex]::Matches($Token,'\\(?:u[0-9a-fA-F]{4}|.)'))
+    for ($index=0; $index -lt $escapes.Count; $index++) {
+        $escape=$escapes[$index]
+        if ($escape.Value.Length -ne 6 -or $escape.Value[1] -cne 'u') {continue}
+        $unit=[Convert]::ToInt32($escape.Value.Substring(2),16)
+        if ($unit -ge 0xd800 -and $unit -le 0xdbff) {
+            if ($index+1 -ge $escapes.Count) {throw 'Profile JSON contains invalid Unicode text.'}
+            $next=$escapes[$index+1]
+            if ($next.Index -ne $escape.Index+6 -or $next.Value.Length -ne 6 -or $next.Value[1] -cne 'u') {throw 'Profile JSON contains invalid Unicode text.'}
+            $low=[Convert]::ToInt32($next.Value.Substring(2),16)
+            if ($low -lt 0xdc00 -or $low -gt 0xdfff) {throw 'Profile JSON contains invalid Unicode text.'}
+            $index++
+        } elseif ($unit -ge 0xdc00 -and $unit -le 0xdfff) {throw 'Profile JSON contains invalid Unicode text.'}
+    }
+}
 function Assert-Mql5ProfileJsonKeys([string]$Text) {
     # ConvertFrom-Json can collapse duplicate keys. Refuse ambiguous selectors,
     # including differently cased and escaped spellings, before deserialization.
@@ -48,6 +66,7 @@ function Assert-Mql5ProfileJsonKeys([string]$Text) {
             '}' {if ($stack.Count) {[void]$stack.Pop()}; continue}
             ']' {if ($stack.Count) {[void]$stack.Pop()}; continue}
         }
+        Assert-Mql5ProfileJsonString $token.Value
         $next=$token.Index+$token.Length
         while ($next -lt $Text.Length -and [char]::IsWhiteSpace($Text[$next])) {$next++}
         if ($next -lt $Text.Length -and $Text[$next] -eq ':' -and $stack.Count -gt 0 -and $null -ne $stack.Peek()) {

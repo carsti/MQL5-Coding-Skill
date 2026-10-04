@@ -153,6 +153,50 @@ try {
     $validControl=Join-Path $project 'bad-profile.json'
     Save-Json $base $validControl
     Check ((Read-Mql5ProjectProfile $validControl).entrypoints[0] -ieq (Join-Path $project 'First.mq5')) 'The negative-test location does not accept the unmodified valid profile.'
+    # These are serialized escapes, not invalid UTF-16 values passed through
+    # ConvertTo-Json; each case must reach the reader without replacement.
+    $textControl=$base | ConvertTo-Json -Depth 8
+    $unicodePath=Join-Path $project 'unicode-profile.json'
+    $invalidEscapes=@('\ud800','\udfff','\udfff\ud800','\ud800A','\ud800\u0061','\ud800\ud800','\ud800\\udfff')
+    foreach ($escape in $invalidEscapes) {
+        $serialized=$textControl.Replace('"Fixture"',('"'+$escape+'"'))
+        [IO.File]::WriteAllText($unicodePath,$serialized,(New-Object Text.UTF8Encoding($false)))
+        $rejected=$false
+        try {[void](Read-Mql5ProjectProfile $unicodePath)} catch {$rejected=$true}
+        Check $rejected ('Unpaired Unicode escape accepted in profile name: '+$escape)
+        $invoked=Run 'Invoke-Mql5Project.ps1' @{ProfilePath=$unicodePath;Action='Compile'}
+        Check ($invoked.code -eq 2) 'Invalid Unicode reached profile compilation.'
+        Check ([IO.File]::ReadAllText($unicodePath) -ceq $serialized) 'Rejected profile evidence was changed.'
+    }
+    $serialized=$textControl.Replace('"SYNTH"','"SYNTH\ud800"')
+    [IO.File]::WriteAllText($unicodePath,$serialized,(New-Object Text.UTF8Encoding($false)))
+    $rejected=$false
+    try {[void](Read-Mql5ProjectProfile $unicodePath)} catch {$rejected=$_.Exception.Message -match 'Unicode'}
+    Check $rejected 'Invalid Unicode in a tester symbol was not rejected during profile validation.'
+    $invoked=Run 'Invoke-Mql5Project.ps1' @{ProfilePath=$unicodePath;Action='TesterSmoke'}
+    Check ($invoked.code -eq 2) 'Invalid Unicode did not retain the project invocation failure contract.'
+    Check (-not (Test-Path -LiteralPath (Join-Path $project 'First.ex5'))) 'Malformed Unicode caused compilation during validation.'
+    foreach ($serialized in @('{"\ud800":1}','{"name":"prefix\uDbFF\uDBFF"}')) {
+        $rejected=$false
+        try {Assert-Mql5ProfileJsonKeys $serialized} catch {$rejected=$true}
+        Check $rejected 'Invalid Unicode in JSON keys or values was not rejected before deserialization.'
+    }
+    $face=[char]::ConvertFromUtf32(0x1f600)
+    $lastScalar=[char]::ConvertFromUtf32(0x10ffff)
+    foreach ($case in @(
+        @{json='\ud83d\ude00';expected=$face},
+        @{json='\uDbFF\uDfFF';expected=$lastScalar},
+        @{json='\\ud800';expected='\ud800'},
+        @{json='\\\ud83d\ude00';expected=('\'+$face)},
+        @{json='\u00e9';expected=([char]0xe9).ToString()},
+        @{json=$face;expected=$face}
+    )) {
+        $serialized=$textControl.Replace('"Fixture"',('"'+$case.json+'"'))
+        [IO.File]::WriteAllText($unicodePath,$serialized,(New-Object Text.UTF8Encoding($false)))
+        Check ((Read-Mql5ProjectProfile $unicodePath).name -ceq $case.expected) 'Valid Unicode or literal backslash text changed during profile validation.'
+        $invoked=Run 'Invoke-Mql5Project.ps1' @{ProfilePath=$unicodePath}
+        Check ($invoked.code -eq 0 -and ($invoked.stdout | ConvertFrom-Json).name -ceq $case.expected) 'Profile validation did not preserve valid Unicode through the command interface.'
+    }
     $arrayProfile=Join-Path $project 'array-profile.json'
     [IO.File]::WriteAllText($arrayProfile,('['+($base | ConvertTo-Json -Depth 8)+']'),(New-Object Text.UTF8Encoding($false)))
     $rejected=$false

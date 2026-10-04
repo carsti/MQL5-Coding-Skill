@@ -27,7 +27,7 @@ Tester-result, profiler-conditions, comparison-expectation, and include-snapshot
 
 JSON decimal numbers retain their numeric type and exact value during validation and comparison; they cannot satisfy fields that require strings. Results serialize finite decimals as strings. Comparison differences include `type_differences` paths when JSON types differ, so numeric values remain distinguishable from strings in the published evidence.
 
-JSON keys and string values must decode to valid Unicode text. Escaped unpaired surrogates are invalid input and produce exit code 2 with complete failure JSON and a summary. Valid literal Unicode and escaped surrogate pairs retain their text; evidence input bytes remain unchanged.
+JSON keys and string values must decode to valid Unicode text. Escaped unpaired surrogates are invalid input and produce exit code 2 with complete failure JSON and a summary. Valid literal Unicode and escaped surrogate pairs retain their text; evidence input bytes remain unchanged. Saved project profiles use the same Unicode requirement: their shared validator rejects invalid escapes before converting JSON or selecting compilation/tester inputs. Profile validation uses the existing exit-code-2 diagnostic contract rather than analysis result artifacts.
 
 Exit codes: `0` processing completed, `1` explicit expectations failed, `2` invalid input/tooling, `3` incompatible comparison, `4` insufficient evidence or unevaluable expectations. Comparison compatibility takes precedence over expectations. Read success describes processing, including disclosed linkage issues; inspect `evidence_linkage` before using recorded run settings. Console summaries are bounded; inspect the JSON for complete measurements, provenance, and issues.
 
