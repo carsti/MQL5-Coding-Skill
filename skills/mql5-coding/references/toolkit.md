@@ -39,6 +39,8 @@ Supported input is the English native MT5 HTML Settings/Results table layout cov
 
 Native labels, values, units, table/row/cell locations, input rows, reported dates, and available terminal-build headers remain in the JSON. Balance and equity drawdowns, amounts and percentages, trades and deals are separate. Native statistics are extracted rather than recalculated; for example a profitable-only native report can record profit factor `0.00`. This value is preserved.
 
+Terminal build metadata comes from single-cell report headers before `Settings`. EA names and input text such as `(Build 9001)` retain their role as configuration values. Missing build headers remain missing evidence; multiple build headers in the report preamble are ambiguous and invalid input.
+
 An optional existing tester result uses schema 2. Its recorded report hash and length must match before settings or artifact hashes are associated. A copied report may have a different path; bytes establish linkage. Root source, EX5, and preset hashes are recorded identities, not proof that their files still exist. Parsing, recorded tester status, linkage, comparability, and expectations are separate. Report existence never proves tester completion. Requested dates remain separate from reported coverage.
 
 Malformed nested records, invalid hash strings, and nonfinite recorded deposits are invalid input. Missing optional records remain evidence gaps. SHA-256 hex case is normalized for matching while the recorded report evidence is preserved.

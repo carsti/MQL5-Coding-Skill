@@ -227,8 +227,18 @@ def native_report(path: Path, result_path: Path | None = None) -> dict:
                   "currency": currency, "leverage": leverage.group(1) if leverage else None,
                   "execution_mode": None, "effective_inputs": inputs if "Inputs" in records else None}
     linkage = {"status": "not_supplied"}
-    build_headers = [(row, cell, re.fullmatch(r"(.+) \(Build (\d+)\)", cell)) for row in parser.rows for cell in row["cells"]]
-    build_headers = [(row, cell, match) for row, cell, match in build_headers if match]
+    build_headers = []
+    # Native terminal metadata is in the single-cell report preamble. Values
+    # inside settings or later sections can legitimately contain build text.
+    for row in parser.rows:
+        if len(row["cells"]) != 1:
+            continue
+        cell = row["cells"][0]
+        if cell == "Settings":
+            break
+        match = re.fullmatch(r"(.+) \(Build (\d+)\)", cell)
+        if match:
+            build_headers.append((row, cell, match))
     if len(build_headers) > 1:
         raise InputError("Ambiguous terminal build header")
     terminal = {"build": build_headers[0][2].group(2) if build_headers else None,

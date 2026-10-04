@@ -92,6 +92,59 @@ class ToolkitTests(unittest.TestCase):
         path.write_text((FIXTURES/"mixed-trades.htm").read_text(encoding="utf-16").replace(old, new), encoding="utf-8")
         return path
 
+    def test_report_build_header_ignores_settings_and_footer_values(self):
+        html = (FIXTURES/"mixed-trades-utf8.htm").read_text(encoding="utf-8")
+        self.assertEqual(self.report()["terminal"]["build"], "6235")
+        mutations = [
+            ("Info Panel=", "Info Panel=My Label (Build 9001)"),
+            ("ForceChartSettings=true", "Caption=Chart Label (Build 9001)"),
+            ("FixtureMixedTrades", "FixtureMixedTrades (Build 9001)"),
+            ("</table>", '<tr><td>Later note (Build 9001)</td></tr></table>'),
+        ]
+        for encoding in ("utf-8", "utf-16"):
+            for index, (old, new) in enumerate(mutations):
+                with self.subTest(encoding=encoding, field=old):
+                    self.assertIn(old, html)
+                    path = self.root/(f"build-in-value-{index}-{encoding}.htm")
+                    path.write_text(html.replace(old, new, 1), encoding=encoding)
+                    report = native_report(path)
+                    self.assertEqual(report["terminal"]["build"], "6235")
+                    self.assertEqual(report["terminal"]["report_header"], "Fixture-Server (Build 6235)")
+                    self.assertEqual(report["metrics"]["net_profit"]["value"], "120.86")
+                    self.assertEqual(report["sources"][0]["sha256"], digest(path.read_bytes()))
+                    if index < 2:
+                        self.assertIn(new, report["conditions"]["effective_inputs"])
+                    elif index == 2:
+                        self.assertEqual(report["configuration_evidence"]["Expert"]["raw"], new)
+            duplicate = self.root/("duplicate-build-header-" + encoding + ".htm")
+            duplicate.write_text(html.replace("Fixture-Server (Build 6235)",
+                                              'Fixture-Server (Build 6235)</b><br></div></td></tr><tr><td><b>Second-Server (Build 7000)', 1), encoding=encoding)
+            with self.assertRaisesRegex(InputError, "Ambiguous terminal build header"):
+                native_report(duplicate)
+
+    def test_input_build_text_cannot_supply_missing_terminal_evidence(self):
+        html = (FIXTURES/"mixed-trades-utf8.htm").read_text(encoding="utf-8")
+        html = html.replace("Fixture-Server (Build 6235)", "Fixture-Server", 1)
+        html = html.replace("Info Panel=", "Info Panel=My Label (Build 9001)", 1)
+        expectations = self.expectation(minimum="0")
+        expectations["required_conditions"] = ["terminal_build"]
+        for encoding in ("utf-8", "utf-16"):
+            with self.subTest(encoding=encoding):
+                path = self.root/("missing-header-" + encoding + ".htm")
+                path.write_text(html, encoding=encoding)
+                run = json.loads((FIXTURES/"mixed-trades-result.json").read_text(encoding="utf-8"))
+                run["artifacts"]["report"].update(sha256=digest(path.read_bytes()), byte_length=path.stat().st_size)
+                run_path = self.root/("missing-header-" + encoding + ".json")
+                run_path.write_text(json.dumps(run), encoding="utf-8")
+                report = native_report(path, run_path)
+                self.assertIsNone(report["terminal"]["build"])
+                self.assertIsNone(report["terminal"]["report_header"])
+                self.assertIn("Info Panel=My Label (Build 9001)", report["conditions"]["effective_inputs"])
+                compared = compare_reports(report, report, expectations)
+                self.assertEqual(compared["compatibility"]["status"], "insufficient_evidence")
+                self.assertIn("terminal_build", compared["compatibility"]["missing"])
+                self.assertEqual(compared["expectations"]["status"], "not_evaluable")
+
     def test_missing_special_and_pair_preservation(self):
         for original, replacement, metric, state in [("Gross Loss:", "Unknown Gross Loss:", "gross_loss", "missing"), ("<b>1.82</b>", "<b>NaN</b>", "profit_factor", "special"), ("<b>34.50 (0.03%)</b>", "<b>bad</b>", "balance_drawdown_maximal_amount", "unparseable")]:
             report = native_report(self.mutate_report(original, replacement))
