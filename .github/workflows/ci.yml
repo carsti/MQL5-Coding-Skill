@@ -67,6 +67,10 @@ jobs:
         shell: pwsh
         run: .\tests\Test-Skill.ps1
 
+      - name: Test executable metadata with PowerShell 7
+        shell: pwsh
+        run: .\tests\Test-ExecutableMetadata.ps1
+
       - name: Test bounded health output with PowerShell 7
         shell: pwsh
         run: .\tests\Test-HealthProbe.ps1
@@ -78,6 +82,10 @@ jobs:
       - name: Test with Windows PowerShell 5.1
         shell: powershell
         run: .\tests\Test-Skill.ps1
+
+      - name: Test executable metadata with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\Test-ExecutableMetadata.ps1
 
       - name: Test bounded health output with Windows PowerShell 5.1
         shell: powershell

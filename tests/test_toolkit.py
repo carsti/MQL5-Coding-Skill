@@ -27,7 +27,10 @@ FIXTURES = Path(__file__).parent / "fixtures/reports"
 class ToolkitTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="mql5-toolkit-")
-        self.root = Path(self.temp.name)
+        # Windows CI may return an 8.3 alias for TEMP. Evidence paths are
+        # canonical, so fixture expectations and injected I/O failures must use
+        # the same physical directory rather than an unresolved alias.
+        self.root = Path(self.temp.name).resolve()
 
     def tearDown(self):
         self.temp.cleanup()

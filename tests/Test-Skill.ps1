@@ -15,6 +15,7 @@ $testerProcessJobSource = Join-Path $skillRoot 'scripts\TesterProcessJob.cs'
 $testerPathIntegrity = Join-Path $skillRoot 'scripts\TesterPathIntegrity.ps1'
 $testerEvidence = Join-Path $skillRoot 'scripts\TesterEvidence.ps1'
 $compilationReceiptHelper = Join-Path $skillRoot 'scripts\CompilationReceipt.ps1'
+$executableMetadataHelper = Join-Path $skillRoot 'scripts\WindowsExecutableMetadata.ps1'
 $fakeTerminalSource = Join-Path $PSScriptRoot 'FakeTerminal.cs'
 $fakeMetaEditorSource = Join-Path $PSScriptRoot 'FakeMetaEditor.cs'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('mql5-coding-skill-test-' + [guid]::NewGuid().ToString('N'))
@@ -325,6 +326,7 @@ foreach ($requiredFile in @(
         $testerPathIntegrity,
         $testerEvidence,
         $compilationReceiptHelper,
+        $executableMetadataHelper,
         $fakeTerminalSource,
         $fakeMetaEditorSource
     )) {
@@ -337,6 +339,7 @@ Assert-PowerShellParses -Path $compiler
 Assert-PowerShellParses -Path $testerPathIntegrity
 Assert-PowerShellParses -Path $testerEvidence
 Assert-PowerShellParses -Path $compilationReceiptHelper
+Assert-PowerShellParses -Path $executableMetadataHelper
 Assert-PowerShellParses -Path (Join-Path $skillRoot 'scripts\Test-Mql5Environment.ps1')
 foreach ($profileScript in @('Mql5ProjectProfile.ps1','New-Mql5ProjectProfile.ps1','Invoke-Mql5Project.ps1')) {
     Assert-PowerShellParses -Path (Join-Path $skillRoot ('scripts\'+$profileScript))

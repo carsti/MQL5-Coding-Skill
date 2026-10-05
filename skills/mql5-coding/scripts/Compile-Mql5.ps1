@@ -731,7 +731,8 @@ try {
     }
 
     $receipt.compiler = Get-CompilationFileRecord -Path $resolvedMetaEditor -Lease $metaEditorReadLease
-    $editorVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($resolvedMetaEditor)
+    . (Join-Path $PSScriptRoot 'WindowsExecutableMetadata.ps1')
+    $editorVersion = Get-Mql5ExecutableVersionInfo $resolvedMetaEditor
     $receipt.compiler.file_version = $editorVersion.FileVersion
     # MetaEditor stores its advertised build in 5.0.0.<build>.
     $receipt.compiler.build = $editorVersion.FilePrivatePart

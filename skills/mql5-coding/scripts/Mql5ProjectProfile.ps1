@@ -1,6 +1,7 @@
 #Requires -Version 5.1
 # Shared data-only profile validation. Execution remains in the existing wrappers.
 . (Join-Path $PSScriptRoot 'SkillRelease.ps1')
+. (Join-Path $PSScriptRoot 'WindowsExecutableMetadata.ps1')
 function Assert-Mql5ProfileObject($Object, [string[]]$Fields) {
     if ($Object -isnot [pscustomobject]) {throw 'Profile section must be a JSON object.'}
     $actual=@($Object.PSObject.Properties.Name)
@@ -81,10 +82,10 @@ function ConvertTo-Mql5ValidatedProfile($Data, [string]$ProfilePath) {
     $include=$null
     if ($null -ne $Data.include_path) {$include=Resolve-Mql5ProfilePath $Data.include_path $root 'Container'}
     $editor=Resolve-Mql5ProfilePath $Data.metaeditor_path $root 'Leaf'
-    if ([IO.Path]::GetFileName($editor) -inotmatch '^metaeditor(?:64)?\.exe$' -or (Get-Item -LiteralPath $editor).VersionInfo.FileMajorPart -ne 5) {throw 'Select an explicit MetaEditor 5 executable.'}
+    if ([IO.Path]::GetFileName($editor) -inotmatch '^metaeditor(?:64)?\.exe$' -or (Get-Mql5ExecutableVersionInfo $editor).FileMajorPart -ne 5) {throw 'Select an explicit MetaEditor 5 executable.'}
     foreach ($terminalName in @('terminal64.exe','terminal.exe')) {
         $sibling=Join-Path (Split-Path -Parent $editor) $terminalName
-        if ((Test-Path -LiteralPath $sibling -PathType Leaf) -and (Get-Item -LiteralPath $sibling).VersionInfo.FileMajorPart -ne 5) {throw 'The selected editor belongs to a non-MT5 terminal.'}
+        if ((Test-Path -LiteralPath $sibling -PathType Leaf) -and (Get-Mql5ExecutableVersionInfo $sibling).FileMajorPart -ne 5) {throw 'The selected editor belongs to a non-MT5 terminal.'}
     }
     Assert-Mql5ProfileObject $Data.compiler @('timeout_seconds','warnings_as_errors')
     Assert-Mql5ProfileInteger $Data.compiler.timeout_seconds 5 1800
@@ -96,7 +97,7 @@ function ConvertTo-Mql5ValidatedProfile($Data, [string]$ProfilePath) {
         $expertSource=Resolve-Mql5ProfilePath $t.entrypoint $root 'Leaf'
         if ($expertSource -notin $entrypoints) {throw 'Tester entrypoint must be one of the project entrypoints.'}
         $terminal=Resolve-Mql5ProfilePath $t.terminal_path $root 'Leaf'
-        if ([IO.Path]::GetFileName($terminal) -ine 'terminal64.exe' -or (Get-Item -LiteralPath $terminal).VersionInfo.FileMajorPart -ne 5) {throw 'Select an explicit MT5 terminal64.exe.'}
+        if ([IO.Path]::GetFileName($terminal) -ine 'terminal64.exe' -or (Get-Mql5ExecutableVersionInfo $terminal).FileMajorPart -ne 5) {throw 'Select an explicit MT5 terminal64.exe.'}
         $terminalData=Resolve-Mql5ProfilePath $t.terminal_data_path $root 'Container'
         if ($t.use_expert_defaults -isnot [bool]) {throw 'Tester input choice must be boolean.'}
         $preset=$null

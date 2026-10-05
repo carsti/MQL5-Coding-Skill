@@ -26,6 +26,8 @@ $selection = @{
 
 Do not guess paths, select an editor from PATH, or infer tester inputs. The creation command validates files and MT5 executable metadata and refuses to overwrite an existing profile. Compilation-only profiles set `tester` to `null`. `-WarningsAsErrors` and `-CompileTimeoutSeconds` save compiler policy (defaults: false and 120 seconds).
 
+The shared `WindowsExecutableMetadata.ps1` reads version resources through extended Windows paths for drive, UNC, and already-prefixed inputs. Profile selections and compiler receipts retain canonical paths. Missing or unreadable version resources fail validation; a successful compilation receipt records the actual compiler file version and build. Metadata support alone does not establish that an executable can run at that path.
+
 `IncludePath` saves the compiler's MQL5 root, with standard headers under its `Include` subdirectory. In the example, those headers belong under `D:\EA projects\Breakout\Include`. The toolkit's profile inventory derives that same directory automatically. In explicit inventory mode, `--include-root` instead names the header directory itself. Profile schema 1 and compiler delegation retain their existing interfaces.
 
 To save tester settings, add **all** of the following explicitly selected fields to `$selection` before creation:

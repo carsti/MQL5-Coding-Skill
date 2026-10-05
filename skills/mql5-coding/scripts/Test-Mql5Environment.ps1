@@ -217,7 +217,10 @@ function Find-Editors {
         foreach ($path in $paths) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {continue}
             $file=Get-Item -LiteralPath $path
-            if ($file.Name -notin @('metaeditor64.exe','metaeditor.exe') -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $file.VersionInfo.FileMajorPart -ne 5) {continue}
+            if ($file.Name -notin @('metaeditor64.exe','metaeditor.exe') -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)) {continue}
+            try { $editorVersion=Get-Mql5ExecutableVersionInfo $file.FullName }
+            catch { Add-Issue 'executable_metadata_unavailable' 'error' $_.Exception.Message; continue }
+            if ($editorVersion.FileMajorPart -ne 5) {continue}
             # MT4 also ships an editor with product major version 5. Check its
             # associated terminal first, then the explicit MetaEditor 5 label.
             $terminalFound=$false; $mt5=$false; $incompatibleTerminal=$false
@@ -225,14 +228,16 @@ function Find-Editors {
                 $terminal=Join-Path $file.DirectoryName $terminalName
                 if (Test-Path -LiteralPath $terminal -PathType Leaf) {
                     $terminalFound=$true
-                    if ((Get-Item -LiteralPath $terminal).VersionInfo.FileMajorPart -eq 5) {$mt5=$true}
+                    try { $terminalVersion=Get-Mql5ExecutableVersionInfo $terminal }
+                    catch { Add-Issue 'executable_metadata_unavailable' 'error' $_.Exception.Message; $incompatibleTerminal=$true; continue }
+                    if ($terminalVersion.FileMajorPart -eq 5) {$mt5=$true}
                     else {$incompatibleTerminal=$true}
                 }
             }
-            if (-not $terminalFound) {$mt5=$file.VersionInfo.FileDescription -match '^MetaEditor\s+5\b'}
+            if (-not $terminalFound) {$mt5=$editorVersion.FileDescription -match '^MetaEditor\s+5\b'}
             if (-not $mt5 -or $incompatibleTerminal) {continue}
             if (@($editors | Where-Object {Same-Path $_.path $file.FullName}).Count) {continue}
-            $editors+=@([ordered]@{path=$file.FullName;file_version=$file.VersionInfo.FileVersion;build=$file.VersionInfo.FilePrivatePart})
+            $editors+=@([ordered]@{path=$file.FullName;file_version=$editorVersion.FileVersion;build=$editorVersion.FilePrivatePart})
         }
     }
     return $editors
@@ -362,6 +367,7 @@ try {
             $report.mcp.stdio_available=$true
         } catch {Add-Issue ('mcp_'+$mcpPhase+'_failed') 'error' ('The MCP '+$mcpPhase.Replace('_',' ')+' check failed. See the selected package/source paths in this report.'); if ($mcpPhase -eq 'integrity') {$report.mcp.integrity='failed'}}
     }
+    . (Join-Path $PSScriptRoot 'WindowsExecutableMetadata.ps1')
     $editors=@(Find-Editors)
     $report.metaeditor.available=($editors.Count -gt 0)
     $report.metaeditor.candidates=$editors

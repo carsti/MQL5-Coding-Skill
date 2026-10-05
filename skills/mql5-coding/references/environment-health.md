@@ -14,6 +14,8 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $healthCommand -
 
 PowerShell 7 (`pwsh`) and Windows PowerShell 5.1 are supported. Use an existing workspace directory; the command does not change the folder saved for a Codex chat. No Python dependency is needed to run the command.
 
+Editor and associated-terminal metadata use the shared `WindowsExecutableMetadata.ps1` helper, including paths longer than 260 characters. Extended prefixes are used only for version-resource queries; reported paths remain canonical. Unreadable metadata is an explicit `executable_metadata_unavailable` error. This read-only discovery does not establish native execution support at a long path.
+
 Explicit skill, package, and source roots may be absolute drive roots such as `X:\`. The checker preserves that separator and inventories paths relative to the selected root, including when invoked from a subfolder on that drive. Root selection must not become the drive-relative `X:` or make root files disappear from the inventory.
 
 ## Checks and their limits

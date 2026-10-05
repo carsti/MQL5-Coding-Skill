@@ -20,7 +20,8 @@ FIXTURES = Path(__file__).parent/"fixtures/profiles"
 class ProfileTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="mql5-profile-tests-")
-        self.root = Path(self.temp.name)
+        # Canonical evidence paths can expand Windows TEMP aliases.
+        self.root = Path(self.temp.name).resolve()
 
     def tearDown(self):
         self.temp.cleanup()
