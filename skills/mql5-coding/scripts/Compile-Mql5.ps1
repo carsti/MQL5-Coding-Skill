@@ -25,6 +25,7 @@ $ErrorActionPreference = 'Stop'
 
 $nativeTypeLoadError = $null
 try {
+    . (Join-Path $PSScriptRoot 'WindowsExecutableMetadata.ps1')
     if (-not ('Mql5Coding.CompilerProcessJob' -as [type])) {
         Add-Type -Path (Join-Path $PSScriptRoot 'CompilerProcessJob.cs')
     }
@@ -52,6 +53,16 @@ $includeRootLease = $null
 $resolvedMetaEditor = $null
 $metaEditorParentLease = $null
 $metaEditorReadLease = $null
+$metaEditorSiblingLeases = New-Object 'Collections.Generic.List[object]'
+$pinMetaEditorSibling = {
+    param([string]$Path)
+    foreach ($lease in $metaEditorSiblingLeases) {
+        if ([string]$lease.FinalPath -ieq $Path) {return $lease.FinalPath}
+    }
+    $lease=[Mql5Coding.CompilerProcessJob]::OpenExecutableFileIdentityLease($Path)
+    $metaEditorSiblingLeases.Add($lease)
+    return $lease.FinalPath
+}
 $logPath = $null
 $logSnapshot = $null
 $artifactSnapshot = $null
@@ -171,7 +182,7 @@ function Resolve-ExistingFile {
 }
 
 function Get-MetaEditorFromCandidate {
-    param([AllowNull()][string]$Candidate)
+    param([AllowNull()][string]$Candidate, [switch]$RequireCompatible)
 
     if ([string]::IsNullOrWhiteSpace($Candidate)) {
         return $null
@@ -182,7 +193,8 @@ function Get-MetaEditorFromCandidate {
         foreach ($name in @('metaeditor64.exe', 'metaeditor.exe')) {
             $child = Join-Path $expanded $name
             if (Test-Path -LiteralPath $child -PathType Leaf) {
-                return (Get-Item -LiteralPath $child).FullName
+                try {return (Assert-Mql5MetaEditor $child).Path}
+                catch {if ($RequireCompatible) {throw}}
             }
         }
         return $null
@@ -191,7 +203,8 @@ function Get-MetaEditorFromCandidate {
     if (Test-Path -LiteralPath $expanded -PathType Leaf) {
         $item = Get-Item -LiteralPath $expanded
         if ($item.Name -in @('metaeditor64.exe', 'metaeditor.exe')) {
-            return $item.FullName
+            try {return (Assert-Mql5MetaEditor $item.FullName).Path}
+            catch {if ($RequireCompatible) {throw}}
         }
     }
 
@@ -202,7 +215,7 @@ function Resolve-MetaEditorExecutable {
     param([AllowNull()][string]$RequestedPath)
 
     if (-not [string]::IsNullOrWhiteSpace($RequestedPath)) {
-        $requested = Get-MetaEditorFromCandidate -Candidate $RequestedPath
+        $requested = Get-MetaEditorFromCandidate -Candidate $RequestedPath -RequireCompatible
         if ($null -eq $requested) {
             throw "MetaEditor was not found at the supplied path: $RequestedPath"
         }
@@ -731,8 +744,7 @@ try {
     }
 
     $receipt.compiler = Get-CompilationFileRecord -Path $resolvedMetaEditor -Lease $metaEditorReadLease
-    . (Join-Path $PSScriptRoot 'WindowsExecutableMetadata.ps1')
-    $editorVersion = Get-Mql5ExecutableVersionInfo $resolvedMetaEditor
+    $editorVersion = (Assert-Mql5MetaEditor $resolvedMetaEditor -PinSibling $pinMetaEditorSibling).VersionInfo
     $receipt.compiler.file_version = $editorVersion.FileVersion
     # MetaEditor stores its advertised build in 5.0.0.<build>.
     $receipt.compiler.build = $editorVersion.FilePrivatePart
@@ -906,6 +918,12 @@ try {
         Write-Output "MQL5_INCLUDE_ROOT=$resolvedInclude"
     }
 
+    # Discovery may precede output preparation and mutex waits. Repeat the same
+    # validation immediately before launch against the pinned canonical editor
+    # and hold every inspected sibling terminal until owned-process cleanup.
+    $editorVersion = (Assert-Mql5MetaEditor $resolvedMetaEditor -PinSibling $pinMetaEditorSibling).VersionInfo
+    $receipt.compiler.file_version = $editorVersion.FileVersion
+    $receipt.compiler.build = $editorVersion.FilePrivatePart
     $compileJobEmpty = $false
     try {
         $compileLaunch = [Mql5Coding.CompilerProcessJob]::Start(
@@ -1173,6 +1191,18 @@ finally {
         }
         $includeRootLease = $null
     }
+
+    foreach ($siblingLease in $metaEditorSiblingLeases) {
+        try {$siblingLease.Dispose()}
+        catch {
+            $exitCode = $ExitToolError
+            $status = 'tool_error'
+            if ([string]::IsNullOrWhiteSpace($errorMessage)) {
+                $errorMessage = "Could not release the sibling terminal executable lease: $($_.Exception.Message)"
+            }
+        }
+    }
+    $metaEditorSiblingLeases.Clear()
 
     if ($null -ne $metaEditorReadLease) {
         try {

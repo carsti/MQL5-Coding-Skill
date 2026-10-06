@@ -85,6 +85,8 @@ State the symptom, root cause, impact, and supporting evidence separately. Disti
 
 ## Compile with MetaEditor
 
+Compilation, profiles, and environment health share one editor-selection validator. Select `metaeditor64.exe` or `metaeditor.exe` with readable major-version-5 metadata. Every sibling terminal must also be major version 5; a standalone editor must explicitly identify itself as MetaEditor 5. An incompatible explicit selection fails with tooling exit code `2` before launch. Automatic discovery skips incompatible candidates in its existing order. Compilation repeats validation against the pinned canonical executable immediately before launch and holds inspected sibling-terminal leases until process cleanup.
+
 For a real `.mq5` compilation, resolve the installed skill under `CODEX_HOME` and invoke its bundled wrapper with an absolute source path:
 
 ```powershell

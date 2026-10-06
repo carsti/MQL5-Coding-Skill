@@ -2147,7 +2147,9 @@ try {
     }
 
     $terminal = Join-Path $testRoot 'install\terminal64.exe'
-    & $csharpCompiler /nologo /target:exe "/out:$terminal" $fakeTerminalSource
+    $terminalMetadata = Join-Path $testRoot 'terminal-metadata.cs'
+    [IO.File]::WriteAllText($terminalMetadata,'[assembly: System.Reflection.AssemblyFileVersion("5.0.0.1234")]')
+    & $csharpCompiler /nologo /target:exe "/out:$terminal" $fakeTerminalSource $terminalMetadata
     if ($LASTEXITCODE -ne 0) {
         throw "Synthetic terminal compilation failed with exit code $LASTEXITCODE."
     }

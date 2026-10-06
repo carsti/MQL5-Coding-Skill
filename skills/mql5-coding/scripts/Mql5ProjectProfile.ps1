@@ -82,11 +82,7 @@ function ConvertTo-Mql5ValidatedProfile($Data, [string]$ProfilePath) {
     $include=$null
     if ($null -ne $Data.include_path) {$include=Resolve-Mql5ProfilePath $Data.include_path $root 'Container'}
     $editor=Resolve-Mql5ProfilePath $Data.metaeditor_path $root 'Leaf'
-    if ([IO.Path]::GetFileName($editor) -inotmatch '^metaeditor(?:64)?\.exe$' -or (Get-Mql5ExecutableVersionInfo $editor).FileMajorPart -ne 5) {throw 'Select an explicit MetaEditor 5 executable.'}
-    foreach ($terminalName in @('terminal64.exe','terminal.exe')) {
-        $sibling=Join-Path (Split-Path -Parent $editor) $terminalName
-        if ((Test-Path -LiteralPath $sibling -PathType Leaf) -and (Get-Mql5ExecutableVersionInfo $sibling).FileMajorPart -ne 5) {throw 'The selected editor belongs to a non-MT5 terminal.'}
-    }
+    Assert-Mql5MetaEditor $editor | Out-Null
     Assert-Mql5ProfileObject $Data.compiler @('timeout_seconds','warnings_as_errors')
     Assert-Mql5ProfileInteger $Data.compiler.timeout_seconds 5 1800
     if ($Data.compiler.warnings_as_errors -isnot [bool]) {throw 'Compiler warning policy must be boolean.'}

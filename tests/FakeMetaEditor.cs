@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading;
 
 [assembly: System.Reflection.AssemblyFileVersion("5.0.0.1234")]
+[assembly: System.Reflection.AssemblyTitle("MetaEditor 5")]
 
 internal static class FakeMetaEditor
 {
@@ -49,6 +50,20 @@ internal static class FakeMetaEditor
         string argumentsPath = Environment.GetEnvironmentVariable("FAKE_METAEDITOR_ARGS_PATH");
         if (!String.IsNullOrWhiteSpace(argumentsPath))
             File.WriteAllLines(argumentsPath, args, new UTF8Encoding(false));
+
+        string siblingPath = Environment.GetEnvironmentVariable("FAKE_METAEDITOR_PINNED_TERMINAL_PATH");
+        string siblingTrace = Environment.GetEnvironmentVariable("FAKE_METAEDITOR_PINNED_TERMINAL_TRACE");
+        if (!String.IsNullOrWhiteSpace(siblingPath) && !String.IsNullOrWhiteSpace(siblingTrace))
+        {
+            bool writeBlocked = false, renameBlocked = false;
+            try { using (FileStream stream = File.Open(siblingPath, FileMode.Open, FileAccess.Write, FileShare.Read)) {} }
+            catch (IOException) { writeBlocked = true; }
+            catch (UnauthorizedAccessException) { writeBlocked = true; }
+            try { File.Move(siblingPath, siblingPath + ".moved"); File.Move(siblingPath + ".moved", siblingPath); }
+            catch (IOException) { renameBlocked = true; }
+            catch (UnauthorizedAccessException) { renameBlocked = true; }
+            File.WriteAllText(siblingTrace, "write_blocked=" + writeBlocked + ";rename_blocked=" + renameBlocked);
+        }
 
         string includeMovePath = Environment.GetEnvironmentVariable(
             "FAKE_METAEDITOR_INCLUDE_MOVE_PATH");

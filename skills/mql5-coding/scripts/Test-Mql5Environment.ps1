@@ -218,24 +218,13 @@ function Find-Editors {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {continue}
             $file=Get-Item -LiteralPath $path
             if ($file.Name -notin @('metaeditor64.exe','metaeditor.exe') -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)) {continue}
-            try { $editorVersion=Get-Mql5ExecutableVersionInfo $file.FullName }
-            catch { Add-Issue 'executable_metadata_unavailable' 'error' $_.Exception.Message; continue }
-            if ($editorVersion.FileMajorPart -ne 5) {continue}
-            # MT4 also ships an editor with product major version 5. Check its
-            # associated terminal first, then the explicit MetaEditor 5 label.
-            $terminalFound=$false; $mt5=$false; $incompatibleTerminal=$false
-            foreach ($terminalName in @('terminal64.exe','terminal.exe')) {
-                $terminal=Join-Path $file.DirectoryName $terminalName
-                if (Test-Path -LiteralPath $terminal -PathType Leaf) {
-                    $terminalFound=$true
-                    try { $terminalVersion=Get-Mql5ExecutableVersionInfo $terminal }
-                    catch { Add-Issue 'executable_metadata_unavailable' 'error' $_.Exception.Message; $incompatibleTerminal=$true; continue }
-                    if ($terminalVersion.FileMajorPart -eq 5) {$mt5=$true}
-                    else {$incompatibleTerminal=$true}
+            try {$editorVersion=(Assert-Mql5MetaEditor $file.FullName).VersionInfo}
+            catch {
+                if ($_.Exception.Message -match 'Windows executable metadata is unavailable') {
+                    Add-Issue 'executable_metadata_unavailable' 'error' $_.Exception.Message
                 }
+                continue
             }
-            if (-not $terminalFound) {$mt5=$editorVersion.FileDescription -match '^MetaEditor\s+5\b'}
-            if (-not $mt5 -or $incompatibleTerminal) {continue}
             if (@($editors | Where-Object {Same-Path $_.path $file.FullName}).Count) {continue}
             $editors+=@([ordered]@{path=$file.FullName;file_version=$editorVersion.FileVersion;build=$editorVersion.FilePrivatePart})
         }

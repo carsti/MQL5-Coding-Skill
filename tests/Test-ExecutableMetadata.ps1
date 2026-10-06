@@ -82,12 +82,14 @@ try {
         # These copies are queried only. Never execute a genuine editor here.
         $expected=Get-Mql5ExecutableVersionInfo $GenuineMetaEditorPath
         Check ($expected.FileMajorPart -eq 5 -and $expected.FilePrivatePart -gt 0) 'Select a genuine versioned MetaEditor 5 fixture.'
-        $genuineShort=Join-Path $testRoot 'genuine-metaeditor64.exe'
+        $genuineShortDirectory=Join-Path $testRoot 'genuine-short';[IO.Directory]::CreateDirectory($genuineShortDirectory) | Out-Null
+        $genuineShort=Join-Path $genuineShortDirectory 'metaeditor64.exe'
         $genuineLong=Join-Path (Long-Directory (Join-Path $testRoot 'genuine')) 'metaeditor64.exe'
         Copy-Executable $GenuineMetaEditorPath $genuineShort;Copy-Executable $GenuineMetaEditorPath $genuineLong
         foreach ($copy in @($genuineShort,$genuineLong,('\\?\'+$genuineLong))) {
             $info=Get-Mql5ExecutableVersionInfo $copy
             Check ($info.FileVersion -ceq $expected.FileVersion -and $info.FilePrivatePart -eq $expected.FilePrivatePart -and (Get-Mql5ReleaseHash $copy) -ceq (Get-Mql5ReleaseHash $GenuineMetaEditorPath)) 'Genuine MetaEditor metadata or bytes changed.'
+            Check ((Assert-Mql5MetaEditor $copy).VersionInfo.FileVersion -ceq $expected.FileVersion) 'The shared editor validator must accept genuine copied metadata without execution.'
         }
         Write-Output ('GENUINE_METAEDITOR='+$expected.FileVersion+' build='+$expected.FilePrivatePart)
     }
