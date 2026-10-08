@@ -1,6 +1,7 @@
 #Requires -Version 5.1
 
 # Internal path, process, staging, and artifact-integrity helpers for Invoke-Mt5TesterSmoke.ps1.
+. (Join-Path $PSScriptRoot 'WindowsExecutableMetadata.ps1')
 
 function ConvertTo-Hex {
     param([Parameter(Mandatory)][byte[]]$Bytes)
@@ -600,6 +601,7 @@ function Resolve-TerminalBinding {
         if ([IO.Path]::GetFileName($terminal) -ine 'terminal64.exe') {
             throw "TerminalPath must identify terminal64.exe: $terminal"
         }
+        Assert-Mql5Terminal $terminal | Out-Null
     }
 
     if (-not [string]::IsNullOrWhiteSpace($RequestedDataPath)) {
@@ -637,6 +639,10 @@ function Resolve-TerminalBinding {
                 if ($null -eq $candidateTerminalLease) {
                     continue
                 }
+                # Automatic discovery excludes non-MT5 images before deciding
+                # whether the remaining installation/data bindings are unique.
+                try {Assert-Mql5Terminal $candidateTerminal | Out-Null}
+                catch {continue}
                 $matchingTerminals.Add([pscustomobject]@{
                     data = $candidateData
                     terminal = $candidateTerminal
@@ -716,6 +722,8 @@ function Resolve-TerminalBinding {
         )) {
         $null = Open-NonReparseDirectoryChain -Path $requiredDirectory -Tracker $Tracker -LeasesByPath $LeasesByPath
     }
+
+    Assert-Mql5Terminal $terminal | Out-Null
 
     return [pscustomobject][ordered]@{
         terminal_path = [IO.Path]::GetFullPath($terminal)
@@ -819,6 +827,9 @@ function Open-TerminalImageReadLock {
         if ([long]$stream.Length -le 0) {
             throw "Terminal executable is empty: $Path"
         }
+        # Read sharing only pins the exact image against writes and replacement.
+        # Recheck metadata now; discovery's earlier read was point-in-time.
+        Assert-Mql5Terminal $Path | Out-Null
 
         $record = [pscustomobject][ordered]@{
             kind = 'terminal executable'

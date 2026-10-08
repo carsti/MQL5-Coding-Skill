@@ -84,8 +84,8 @@ function Assert-Mql5JsonString([string]$Token) {
         } elseif ($unit -ge 0xdc00 -and $unit -le 0xdfff) {throw 'JSON contains invalid Unicode text.'}
     }
 }
-function Read-Mql5JsonText([IO.Stream]$Stream) {
-    if ($Stream.Length -gt 1048576) {throw 'JSON metadata is too large.'}
+function Read-Mql5JsonText([IO.Stream]$Stream,[ValidateRange(1,16777216)][int]$MaximumBytes=1048576) {
+    if ($Stream.Length -gt $MaximumBytes) {throw 'JSON metadata is too large.'}
     $buffer=New-Object byte[] ([int]$Stream.Length)
     $read=0
     while ($read -lt $buffer.Length) {
@@ -105,14 +105,14 @@ function Read-Mql5JsonText([IO.Stream]$Stream) {
         return $text
     } finally {$reader.Dispose()}
 }
-function Read-Mql5ReleaseJson([string]$Path,[byte[]]$Bytes) {
+function Read-Mql5ReleaseJson([string]$Path,[byte[]]$Bytes,[ValidateRange(1,16777216)][int]$MaximumBytes=1048576) {
     if ($PSBoundParameters.ContainsKey('Bytes')) {
-        if ($null -eq $Bytes -or $Bytes.Length -gt 1048576) {throw 'Release metadata buffer is unavailable or too large.'}
+        if ($null -eq $Bytes -or $Bytes.Length -gt $MaximumBytes) {throw 'Release metadata buffer is unavailable or too large.'}
         $stream=[IO.MemoryStream]::new($Bytes,$false)
     } else {
         $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
     }
-    try {$text=Read-Mql5JsonText $stream} finally {$stream.Dispose()}
+    try {$text=Read-Mql5JsonText $stream -MaximumBytes $MaximumBytes} finally {$stream.Dispose()}
     # Refuse array roots before ConvertFrom-Json can unwrap a single element.
     if (-not $text.TrimStart().StartsWith('{')) {throw 'Release metadata must have a JSON object at its root.'}
     # Refuse duplicate, case-aliased and escaped JSON keys before ConvertFrom-Json.

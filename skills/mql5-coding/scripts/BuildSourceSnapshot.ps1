@@ -25,7 +25,7 @@ function Open-Mql5SnapshotJson([string]$Path,$Context) {
     $bytes=New-Object byte[] ([int]$stream.Length);$stream.Position=0;$offset=0
     while ($offset -lt $bytes.Length) {$got=$stream.Read($bytes,$offset,$bytes.Length-$offset);if ($got -eq 0){throw 'Incomplete snapshot evidence.'};$offset+=$got}
     $stream.Position=0
-    $value=Read-Mql5ReleaseJson -Path $Path -Bytes $bytes
+    $value=Read-Mql5ReleaseJson -Path $Path -Bytes $bytes -MaximumBytes 16777216
     if ($value -isnot [pscustomobject]) {throw 'Snapshot JSON requires an object root.'}
     return [pscustomobject]@{value=$value;source=@{path=$record.destination_path;sha256=$record.sha256;byte_length=$record.byte_length}}
 }
@@ -39,11 +39,12 @@ function Assert-Mql5SnapshotCommitment($Commitment,$Actual) {
 }
 function Assert-Mql5SourceInventory($Inventory,[string]$Entrypoint,$Context) {
     if (($Inventory.schema_version -isnot [int] -and $Inventory.schema_version -isnot [long]) -or $Inventory.schema_version -ne 1 -or
-        $Inventory.operation -cne 'includes inventory' -or $Inventory.status -cne 'completed' -or
+        $Inventory.operation -isnot [string] -or $Inventory.operation -cne 'includes inventory' -or
+        $Inventory.status -isnot [string] -or $Inventory.status -cne 'completed' -or
         $Inventory.files -isnot [array] -or $Inventory.files.Count -lt 1 -or $Inventory.files.Count -gt 10000 -or
         $Inventory.entrypoints -isnot [array] -or $Inventory.entrypoints.Count -ne 1 -or
         $Inventory.entrypoints[0] -isnot [string] -or -not $Inventory.entrypoints[0].Equals($Entrypoint,[StringComparison]::OrdinalIgnoreCase) -or
-        $Inventory.coverage -cnotin @('selected_entrypoints_scanned','uncertain')) {throw 'Expected a completed bounded include inventory for this entrypoint.'}
+        $Inventory.coverage -isnot [string] -or $Inventory.coverage -cnotin @('selected_entrypoints_scanned','uncertain')) {throw 'Expected a completed bounded include inventory for this entrypoint.'}
     $seen=@{};$sourceSeen=$false;$identities=@()
     foreach ($file in $Inventory.files) {
         if ($file.path -isnot [string] -or $seen.ContainsKey($file.path)) {throw 'Invalid or duplicate inventory source.'}
@@ -81,7 +82,14 @@ function Start-Mql5BuildSnapshot($Profile,[string]$Entrypoint,[string]$PythonPat
 function Complete-Mql5BuildSnapshot($Capture,[string]$ReceiptPath) {
     if ([string]::IsNullOrWhiteSpace($ReceiptPath)) {throw 'Compilation returned without its receipt.'}
     $receipt=Open-Mql5SnapshotJson $ReceiptPath $Capture.locks
-    if ($receipt.value.schema_version -ne 1 -or $receipt.value.status -cne 'success' -or $receipt.value.exit_code -ne 0 -or $receipt.value.syntax_only -or
+    if (($receipt.value.schema_version -isnot [int] -and $receipt.value.schema_version -isnot [long]) -or $receipt.value.schema_version -ne 1 -or
+        $receipt.value.kind -isnot [string] -or $receipt.value.kind -cne 'mql5_compilation_receipt' -or
+        $receipt.value.status -isnot [string] -or $receipt.value.status -cne 'success' -or
+        ($receipt.value.exit_code -isnot [int] -and $receipt.value.exit_code -isnot [long]) -or $receipt.value.exit_code -ne 0 -or
+        $receipt.value.syntax_only -isnot [bool] -or $receipt.value.syntax_only -or
+        $receipt.value.compiler -isnot [pscustomobject] -or $receipt.value.compiler.file_version -isnot [string] -or
+        [string]::IsNullOrWhiteSpace($receipt.value.compiler.file_version) -or
+        $receipt.value.source -isnot [pscustomobject] -or $receipt.value.source.path -isnot [string] -or
         $receipt.value.source.path -ine $Capture.entrypoint) {throw 'Snapshot requires an artifact-producing successful compilation.'}
     $source=@($Capture.before.value.files | Where-Object {$_.path -ieq $Capture.entrypoint})[0]
     Assert-Mql5SnapshotCommitment $receipt.value.source $source
@@ -112,7 +120,10 @@ function Assert-Mql5SnapshotIdentities($Recorded,$Current) {
     foreach ($file in $Current) {if (-not $seen.ContainsKey($file.path) -or $seen[$file.path] -cne $file.file_identity) {throw 'A known source was replaced after snapshot capture.'}}
 }
 function Assert-Mql5SnapshotComparison($Comparison,$Before,$After) {
-    if ($Comparison.schema_version -ne 1 -or $Comparison.operation -cne 'includes compare' -or $Comparison.status -cne 'completed' -or $Comparison.differences -isnot [array] -or $Comparison.differences.Count -ne 0 -or $Comparison.sources -isnot [array] -or $Comparison.sources.Count -ne 2) {throw 'Build sources were not stable across compilation.'}
+    if (($Comparison.schema_version -isnot [int] -and $Comparison.schema_version -isnot [long]) -or $Comparison.schema_version -ne 1 -or
+        $Comparison.operation -isnot [string] -or $Comparison.operation -cne 'includes compare' -or
+        $Comparison.status -isnot [string] -or $Comparison.status -cne 'completed' -or
+        $Comparison.differences -isnot [array] -or $Comparison.differences.Count -ne 0 -or $Comparison.sources -isnot [array] -or $Comparison.sources.Count -ne 2) {throw 'Build sources were not stable across compilation.'}
     Assert-Mql5SnapshotCommitment $Comparison.sources[0] $Before
     Assert-Mql5SnapshotCommitment $Comparison.sources[1] $After
 }
@@ -120,11 +131,21 @@ function Test-Mql5BuildSnapshot([string]$Path,[string]$ReceiptPath,[string]$Entr
     if ([string]::IsNullOrWhiteSpace($ReceiptPath)) {throw 'BuildSnapshotPath requires CompilationReceiptPath.'}
     $snapshot=Open-Mql5SnapshotJson $Path $Context;$value=$snapshot.value
     Assert-ToolkitFields $value @('schema_version','kind','status','entrypoint','compilation_receipt','before','after','comparison','known_source_identities','coverage','limitations')
-    if (($value.schema_version -isnot [int] -and $value.schema_version -isnot [long]) -or $value.schema_version -ne 1 -or $value.kind -cne 'mql5_build_source_snapshot' -or
-        $value.status -cne 'verified_known_sources' -or $value.entrypoint -isnot [string] -or -not $value.entrypoint.Equals($Entrypoint,[StringComparison]::OrdinalIgnoreCase)) {throw 'Invalid build snapshot identity or status.'}
+    if (($value.schema_version -isnot [int] -and $value.schema_version -isnot [long]) -or $value.schema_version -ne 1 -or
+        $value.kind -isnot [string] -or $value.kind -cne 'mql5_build_source_snapshot' -or
+        $value.status -isnot [string] -or $value.status -cne 'verified_known_sources' -or
+        $value.entrypoint -isnot [string] -or -not $value.entrypoint.Equals($Entrypoint,[StringComparison]::OrdinalIgnoreCase)) {throw 'Invalid build snapshot identity or status.'}
     $receipt=Open-Mql5SnapshotJson $ReceiptPath $Context
     Assert-Mql5SnapshotCommitment $value.compilation_receipt ([pscustomobject]$receipt.source)
-    if ($receipt.value.schema_version -ne 1 -or $receipt.value.status -cne 'success' -or $receipt.value.exit_code -ne 0 -or $receipt.value.syntax_only -or $receipt.value.source.path -ine $Entrypoint) {throw 'Snapshot requires the matching successful artifact-producing receipt.'}
+    if (($receipt.value.schema_version -isnot [int] -and $receipt.value.schema_version -isnot [long]) -or $receipt.value.schema_version -ne 1 -or
+        $receipt.value.kind -isnot [string] -or $receipt.value.kind -cne 'mql5_compilation_receipt' -or
+        $receipt.value.status -isnot [string] -or $receipt.value.status -cne 'success' -or
+        ($receipt.value.exit_code -isnot [int] -and $receipt.value.exit_code -isnot [long]) -or $receipt.value.exit_code -ne 0 -or
+        $receipt.value.syntax_only -isnot [bool] -or $receipt.value.syntax_only -or
+        $receipt.value.compiler -isnot [pscustomobject] -or $receipt.value.compiler.file_version -isnot [string] -or
+        [string]::IsNullOrWhiteSpace($receipt.value.compiler.file_version) -or
+        $receipt.value.source -isnot [pscustomobject] -or $receipt.value.source.path -isnot [string] -or
+        $receipt.value.source.path -ine $Entrypoint) {throw 'Snapshot requires the matching successful artifact-producing receipt.'}
     $inventories=@()
     foreach ($name in @('before','after')) {
         $evidence=Open-Mql5SnapshotJson $value.$name.path $Context
@@ -134,7 +155,8 @@ function Test-Mql5BuildSnapshot([string]$Path,[string]$ReceiptPath,[string]$Entr
         $inventories+=@($evidence.value)
     }
     Assert-ToolkitFields $value.coverage @('before','after')
-    if ($value.coverage.before -cne $inventories[0].coverage -or $value.coverage.after -cne $inventories[1].coverage -or $value.limitations -isnot [array] -or $value.limitations.Count -lt 1) {throw 'Snapshot coverage or limitations differ from recorded inventories.'}
+    if ($value.coverage.before -isnot [string] -or $value.coverage.after -isnot [string] -or
+        $value.coverage.before -cne $inventories[0].coverage -or $value.coverage.after -cne $inventories[1].coverage -or $value.limitations -isnot [array] -or $value.limitations.Count -lt 1) {throw 'Snapshot coverage or limitations differ from recorded inventories.'}
     $rootSource=@($inventories[0].files | Where-Object {$_.path -ieq $Entrypoint})[0]
     Assert-Mql5SnapshotCommitment $receipt.value.source $rootSource
     $comparison=Open-Mql5SnapshotJson $value.comparison.path $Context

@@ -20,6 +20,23 @@ function Get-Mql5ExecutableVersionInfo {
     }
 }
 
+function Assert-Mql5Terminal {
+    param([Parameter(Mandatory)][string]$Path)
+    # Selection and evidence retain ordinary canonical paths; only resource
+    # queries use the extended spelling in Get-Mql5ExecutableVersionInfo.
+    $canonicalPath=[IO.Path]::GetFullPath($Path)
+    if ($canonicalPath.StartsWith('\\?\UNC\',[StringComparison]::OrdinalIgnoreCase)) {$canonicalPath='\\'+$canonicalPath.Substring(8)}
+    elseif ($canonicalPath.StartsWith('\\?\',[StringComparison]::Ordinal)) {$canonicalPath=$canonicalPath.Substring(4)}
+    $terminal=Get-Item -LiteralPath $canonicalPath -ErrorAction Stop
+    if ($terminal.PSIsContainer -or $terminal.Name -ine 'terminal64.exe' -or
+        ($terminal.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw 'Select an ordinary MT5 terminal64.exe executable.'
+    }
+    $version=Get-Mql5ExecutableVersionInfo $terminal.FullName
+    if ($version.FileMajorPart -ne 5) {throw 'Select a terminal64.exe executable with major version 5.'}
+    return [pscustomobject]@{Path=$terminal.FullName;VersionInfo=$version}
+}
+
 function Assert-Mql5MetaEditor {
     param(
         [Parameter(Mandatory)][string]$Path,

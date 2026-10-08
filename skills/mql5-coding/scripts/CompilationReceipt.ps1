@@ -2,6 +2,7 @@
 
 # Receipt validation uses the runner's no-follow path leases and integrity locks.
 # These local hash commitments are evidence, not signatures or a trust sandbox.
+. (Join-Path $PSScriptRoot 'SkillRelease.ps1')
 function Test-Mql5CompilationReceipt {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -16,15 +17,18 @@ function Test-Mql5CompilationReceipt {
     if ($receiptRecord.byte_length -le 0 -or $receiptRecord.byte_length -gt 1048576) {
         throw 'Compilation receipt must contain between 1 byte and 1 MiB.'
     }
-    $reader = [IO.StreamReader]::new($Tracker[$Tracker.Count - 1].stream, [Text.Encoding]::UTF8, $true, 4096, $true)
+    $receiptStream = $Tracker[$Tracker.Count - 1].stream
     try {
-        $receiptText = $reader.ReadToEnd()
+        # Decode the exact locked bytes strictly, retaining established BOM
+        # support without adopting release-specific key or escape policies.
+        $receiptStream.Position = 0
+        $receiptText = Read-Mql5JsonText $receiptStream
         # The JSON root must remain an object. ConvertFrom-Json would otherwise
         # unwrap a single-element array and hide the unsupported receipt shape.
         if (-not $receiptText.TrimStart().StartsWith('{')) {throw 'Compilation receipt must have a JSON object at its root.'}
         $receipt = $receiptText | ConvertFrom-Json
     }
-    finally { $reader.Dispose(); $Tracker[$Tracker.Count - 1].stream.Position = 0 }
+    finally { $receiptStream.Position = 0 }
 
     if ($receipt.schema_version -ne 1 -or $receipt.kind -isnot [string] -or $receipt.kind -cne 'mql5_compilation_receipt' -or
         $receipt.run_id -isnot [string] -or $receipt.run_id -cnotmatch '\A[0-9a-f]{32}\z' -or
@@ -33,7 +37,9 @@ function Test-Mql5CompilationReceipt {
         $receipt.syntax_only -isnot [bool] -or $receipt.syntax_only -or
         $receipt.warnings_as_errors -isnot [bool] -or
         ($receipt.warnings_as_errors -and $receipt.warnings -ne 0) -or
-        $receipt.compiler -isnot [pscustomobject] -or $null -eq $receipt.expert -or $null -eq $receipt.log) {
+        $receipt.compiler -isnot [pscustomobject] -or
+        $receipt.compiler.file_version -isnot [string] -or [string]::IsNullOrWhiteSpace($receipt.compiler.file_version) -or
+        $null -eq $receipt.expert -or $null -eq $receipt.log) {
         throw 'Compilation receipt must describe a successful artifact-producing compilation.'
     }
     foreach ($number in @($receipt.schema_version, $receipt.exit_code, $receipt.errors, $receipt.warnings, $receipt.compiler.build)) {

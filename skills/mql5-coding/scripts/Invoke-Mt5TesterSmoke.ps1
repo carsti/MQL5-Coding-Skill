@@ -750,6 +750,7 @@ try {
             throw "BLOCKED: The bound MT5 terminal started during preflight (PID(s) $($pids -join ', ')); refusing to continue."
         }
 
+        Assert-Mql5Terminal $terminal | Out-Null
         $result.process.execution_attempted = $true
         $jobLaunch = [Mql5Coding.JobProcessLaunch]::CreateSuspended(
             $terminal,

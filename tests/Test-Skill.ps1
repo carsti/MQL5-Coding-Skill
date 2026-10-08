@@ -2247,10 +2247,21 @@ try {
         & $fsutilExecutable file setCaseSensitiveInfo $caseSensitiveRoot enable 2>&1
     )
     $caseSensitivityExitCode = $LASTEXITCODE
-    if ($caseSensitivityExitCode -ne 0) {
+    # Some Windows builds report a failed enable operation with exit code zero.
+    # Verify the actual directory setting before creating case-distinct paths.
+    $caseSensitivityQuery = @(
+        & $fsutilExecutable file queryCaseSensitiveInfo $caseSensitiveRoot 2>&1
+    )
+    $caseSensitivityQueryExitCode = $LASTEXITCODE
+    $caseSensitivityEnabled = (
+        $caseSensitivityQueryExitCode -eq 0 -and
+        ($caseSensitivityQuery -join ' ') -match '\bis enabled\.\s*$'
+    )
+    if ($caseSensitivityExitCode -ne 0 -or -not $caseSensitivityEnabled) {
         $caseSensitivityFailure = (
             'Could not enable the NTFS case-sensitive path-cache regression fixture. ' +
-            ($caseSensitivityOutput -join ' ')
+            ($caseSensitivityOutput -join ' ') + ' ' +
+            ($caseSensitivityQuery -join ' ')
         )
         if ([string]$env:GITHUB_ACTIONS -ceq 'true') {
             throw $caseSensitivityFailure

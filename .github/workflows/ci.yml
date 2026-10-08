@@ -87,6 +87,10 @@ jobs:
         shell: pwsh
         run: .\tests\Test-EditorSelection.ps1
 
+      - name: Test terminal selection with PowerShell 7
+        shell: pwsh
+        run: .\tests\Test-TerminalSelection.ps1
+
       - name: Test bounded health output with PowerShell 7
         shell: pwsh
         run: .\tests\Test-HealthProbe.ps1
@@ -106,6 +110,10 @@ jobs:
       - name: Test editor selection with Windows PowerShell 5.1
         shell: powershell
         run: .\tests\Test-EditorSelection.ps1
+
+      - name: Test terminal selection with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\Test-TerminalSelection.ps1
 
       - name: Test bounded health output with Windows PowerShell 5.1
         shell: powershell

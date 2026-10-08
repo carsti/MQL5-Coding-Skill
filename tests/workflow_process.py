@@ -50,6 +50,11 @@ def run_owned(command:list[str],cwd:Path,stdout:Path,stderr:Path,*,env:dict|None
                 if not k.QueryInformationJobObject(job,1,ctypes.byref(account),ctypes.sizeof(account),None): break
                 if account.active==0: clean=True;break
                 time.sleep(.05)
+            # A fast process (or a last descendant write) can finish between
+            # polls. Check retained output after cleanup as well as while it is
+            # running, so an oversized trace cannot become successful evidence.
+            if stdout.stat().st_size+stderr.stat().st_size>16777216:
+                status='output_limit';exit_code=None
     finally:
         k.TerminateJobObject(job,1)
         if process is not None and process.poll() is None: process.kill();process.wait(timeout=10)

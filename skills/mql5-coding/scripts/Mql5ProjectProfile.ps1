@@ -93,7 +93,7 @@ function ConvertTo-Mql5ValidatedProfile($Data, [string]$ProfilePath) {
         $expertSource=Resolve-Mql5ProfilePath $t.entrypoint $root 'Leaf'
         if ($expertSource -notin $entrypoints) {throw 'Tester entrypoint must be one of the project entrypoints.'}
         $terminal=Resolve-Mql5ProfilePath $t.terminal_path $root 'Leaf'
-        if ([IO.Path]::GetFileName($terminal) -ine 'terminal64.exe' -or (Get-Mql5ExecutableVersionInfo $terminal).FileMajorPart -ne 5) {throw 'Select an explicit MT5 terminal64.exe.'}
+        Assert-Mql5Terminal $terminal | Out-Null
         $terminalData=Resolve-Mql5ProfilePath $t.terminal_data_path $root 'Container'
         if ($t.use_expert_defaults -isnot [bool]) {throw 'Tester input choice must be boolean.'}
         $preset=$null
