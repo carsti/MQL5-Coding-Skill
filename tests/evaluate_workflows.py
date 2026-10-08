@@ -1,4 +1,4 @@
-"""Execute and independently score the seven Codex skill workflows on Windows."""
+"""Execute and independently score Codex workflows and optional skill-selection cases."""
 from __future__ import annotations
 import argparse
 import ast
@@ -18,6 +18,8 @@ from workflow_process import run_owned
 
 REPO=Path(__file__).resolve().parents[1]
 CASES=tuple(c['id'] for c in json.loads((REPO/'tests/evaluation-cases.json').read_text())['cases'])
+SELECTION_CASES=('selection-mql5-review','selection-report-comparison','selection-mql4-inventory','selection-python-repair')
+SELECTION_ALIASES={'selection-mql5-review':'standalone-source-review','selection-report-comparison':'report-comparison'}
 SCHEMA={'type':'object','additionalProperties':False,'properties':{'case_id':{'type':'string'},'status':{'type':'string','enum':['completed','limited','failed']},'findings':{'type':'array','items':{'type':'object','additionalProperties':False,'properties':{'code':{'type':'string'},'detail':{'type':'string'}},'required':['code','detail']}},'evidence':{'type':'array','items':{'type':'string'}},'limitations':{'type':'array','items':{'type':'string'}}},'required':['case_id','status','findings','evidence','limitations']}
 
 def sha(path:Path)->str:
@@ -43,6 +45,7 @@ def ps(host:Path,script:Path,params:dict,cwd:Path):
     return subprocess.run([str(host),'-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',base64.b64encode(command.encode('utf-16le')).decode()],capture_output=True,timeout=90,cwd=cwd)
 
 def prepare(case:str,root:Path,skill:Path,host:Path,python:Path,binaries:Path)->dict:
+    requested_case=case;case=SELECTION_ALIASES.get(case,case)
     inputs=root/'inputs';outputs=root/'outputs';inputs.mkdir();outputs.mkdir();scripts=skill/'scripts'
     context={'case':case,'inputs':inputs,'outputs':outputs}
     if case=='report-comparison':
@@ -82,10 +85,21 @@ def prepare(case:str,root:Path,skill:Path,host:Path,python:Path,binaries:Path)->
         repeated=[p for p in files if 'repeat' in p.name][0]
         shutil.copy2(repeated,inputs/'baseline.csv');shutil.copy2(REPO/'tests/fixtures/profiles/native-functions.csv',inputs/'candidate.csv')
         context['task']='Compare the native function CSV profiles in inputs, saving full results under outputs/profile. No workload or build-condition sidecars are available. Identify uncertain or duplicate function mappings and describe what the sampling measurements establish.'
+    elif case=='selection-mql4-inventory':
+        (inputs/'legacy').mkdir()
+        (inputs/'legacy/Legacy.mq4').write_text('void OnTick() {}\n')
+        (inputs/'legacy/Legacy.mqh').write_text('// legacy include\n')
+        (inputs/'README.txt').write_text('Inventory only; do not analyze language semantics.\n')
+        context['task']='List every file below inputs, with relative path, extension, and byte size, in outputs/inventory.json as an object with a files array. Each file entry has exactly path, extension, and bytes fields. This is a file-inventory task: preserve all files; do not analyze, compile, or execute the legacy code.'
+    elif case=='selection-python-repair':
+        save(inputs/'specification.json',{'contract':'For integer n and maximum>=0, return min(max(n,0),maximum).','cases':[{'n':-2,'maximum':3,'expected':0},{'n':0,'maximum':3,'expected':0},{'n':2,'maximum':3,'expected':2},{'n':3,'maximum':3,'expected':3},{'n':4,'maximum':3,'expected':3},{'n':2,'maximum':0,'expected':0}]})
+        (inputs/'calculation.py').write_text('def clamp_count(n, maximum):\n    return min(n, maximum)\n')
+        context['task']='Repair inputs/calculation.py against inputs/specification.json. Keep its sole clamp_count function and a single return expression using the ordinary Python min/max builtins. Copy the repaired source to outputs/calculation.py and save the six independently specified cases as a JSON array in outputs/cases.json. Preserve the specification. This is an isolated Python calculation; no platform-specific API is involved.'
     else:
-        save(inputs/'specification.json',{'function':'ClampCount','contract':'For integer n and integer maximum>=0, return min(max(n,0),maximum).','cases':[{'n':-2,'maximum':3,'expected':0},{'n':0,'maximum':3,'expected':0},{'n':2,'maximum':3,'expected':2},{'n':3,'maximum':3,'expected':3},{'n':4,'maximum':3,'expected':3},{'n':2,'maximum':0,'expected':0}]})
+        save(inputs/'specification.json' ,{'function':'ClampCount','contract':'For integer n and integer maximum>=0, return min(max(n,0),maximum).','cases':[{'n':-2,'maximum':3,'expected':0},{'n':0,'maximum':3,'expected':0},{'n':2,'maximum':3,'expected':2},{'n':3,'maximum':3,'expected':3},{'n':4,'maximum':3,'expected':3},{'n':2,'maximum':0,'expected':0}]})
         (inputs/'Calculation.mqh').write_text('int ClampCount(int n,int maximum){ return MathMin(n,maximum); }\n')
         context['task']='Fix the isolated ClampCount calculation to satisfy inputs/specification.json, using only its definition and a single return expression with MathMin/MathMax for this bounded evaluation. Copy the revised include to outputs/Calculation.mqh. Prepare outputs/SelfTest.mq5 with #include "Calculation.mqh" and void OnStart() containing exactly six sequential assertions of the form if (ClampCount(n,maximum) != expected) Print("FAIL:case label");, substituting the independently specified integers for each case. Comments and #property strict are allowed; do not put assertions behind other control flow. Save outputs/cases.json with independently specified input/expected cases from the specification. No native compiler or tester is available for this case. Explain exactly which behavior is specified and which execution remains unverified.'
+    context['case']=requested_case
     context['input_hashes']=inventory(inputs)
     return context
 
@@ -353,12 +367,117 @@ def compiled_outcome(root:Path,events:list[dict],receipt_verifier,*,powershell_h
     except (OSError,ValueError,KeyError,TypeError,AttributeError,RecursionError,subprocess.SubprocessError):failures.append('Affected entrypoint receipt/artifact/log evidence failed verification')
     return failures
 
+def observed_resource_read(command:str)->bool:
+    """Recognize a named source read outside quoted usage claims (bounded shell syntax)."""
+    tokens=literal_command_tokens(command.strip())
+    if tokens and Path(tokens[0][0]).name.lower() in ('powershell.exe','pwsh.exe'):
+        for i,token in enumerate(tokens[:-1]):
+            if token[0].lower()=='-command' and i+2==len(tokens) and tokens[i+1][1]:command=tokens[i+1][0];break
+    masked=[];quote=None;i=0
+    while i<len(command):
+        c=command[i]
+        if quote:
+            if c==quote:
+                if quote=="'" and i+1<len(command) and command[i+1]=="'":masked.extend('  ');i+=2;continue
+                quote=None
+            elif c=='`' and i+1<len(command):masked.extend('  ');i+=2;continue
+            masked.append(' ')
+        elif c in ("'",'"'):quote=c;masked.append(' ')
+        else:masked.append(c)
+        i+=1
+    if quote:return False
+    return bool(re.search(r'(?:^|[;\r\n{|])\s*(?:get-content|cat|type|rg)\b',''.join(masked),re.I))
+
+def selection_resources(root:Path,events:list[dict])->list[str]:
+    """Require completed reads of actual selected resource bytes, not usage claims."""
+    selected=root/'.agents/skills/mql5-coding';found=set()
+    if not selected.is_dir():return []
+    for event in events:
+        item=event.get('item',{})
+        if event.get('type')!='item.completed' or item.get('type')!='command_execution' or item.get('status')!='completed':continue
+        command=item.get('command','').replace('\\','/').lower();output=item.get('aggregated_output','')
+        if not isinstance(output,str):continue
+        invocation=re.sub(r'^\s*&\s+','',item.get('command','')).strip();tokens=literal_command_tokens(invocation)
+        if tokens and Path(tokens[0][0]).name.lower() in ('python','python.exe','python3','python3.exe') and item.get('exit_code') in (0,1,3,4):
+            arguments=[value for value,_ in tokens[1:]]
+            if arguments and arguments[0]=='-B':arguments=arguments[1:]
+            if arguments and len(arguments)>=3 and arguments[1:3]==['report','compare'] and not any(re.search(r'[$`;|&\r\n]',value) for value in arguments):
+                invoked=Path(arguments[0]);invoked=invoked if invoked.is_absolute() else root/invoked
+                if invoked.resolve()==(selected/'scripts/mql5_toolkit.py').resolve() and invoked.is_file() and 'report compare' in output:found.add('scripts/mql5_toolkit.py')
+        if item.get('exit_code')!=0 or not observed_resource_read(item.get('command','')):continue
+        for resource in selected.rglob('*'):
+            if not resource.is_file() or resource.suffix.lower() not in ('.md','.py','.ps1'):continue
+            relative=resource.relative_to(selected).as_posix()
+            paths=(resource.as_posix().lower(),'.agents/skills/mql5-coding/'+relative.lower())
+            if not any(path in command for path in paths):continue
+            text=resource.read_text(encoding='utf-8-sig')
+            # Two independent nontrivial source lines provide observed read evidence.
+            lines=[line.strip() for line in text.splitlines() if len(line.strip())>=30][:12]
+            if sum(line in output for line in lines)>=2:found.add(relative)
+    return sorted(found)
+
+def evaluate_python_calculation(code:str,cases:list[dict])->bool:
+    try:
+        tree=ast.parse(code)
+        if len(tree.body)!=1 or not isinstance(tree.body[0],ast.FunctionDef):return False
+        function=tree.body[0]
+        if function.name!='clamp_count' or function.decorator_list or len(function.body)!=1 or not isinstance(function.body[0],ast.Return):return False
+        args=function.args
+        if [a.arg for a in args.args]!=['n','maximum'] or args.posonlyargs or args.kwonlyargs or args.vararg or args.kwarg or args.defaults or function.returns is not None or any(a.annotation is not None for a in args.args):return False
+        expression=ast.unparse(function.body[0].value)
+        # Only the existing bounded AST interpreter runs; the input is never exec'd.
+        expression=re.sub(r'\bmin\b','MathMin',expression);expression=re.sub(r'\bmax\b','MathMax',expression)
+        return evaluate_calculation('int ClampCount(int n,int maximum){ return '+expression+'; }',cases)
+    except (SyntaxError,ValueError,TypeError,RecursionError):return False
+
+def relevant_array_documentation(events:list[dict])->bool:
+    """Require returned platform passages, rather than a completed call claim."""
+    for event in events:
+        item=event.get('item') or {}
+        if (item.get('type')!='mcp_tool_call' or item.get('server')!='mql5-chm'
+            or item.get('tool') not in ('mql5_chm_search','mql5_chm_read','mql5_chm_lookup_identifiers')
+            or item.get('status')!='completed' or item.get('error')):continue
+        result=item.get('result')
+        if not isinstance(result,dict) or result.get('isError') is True or result.get('is_error') is True:continue
+        root=result.get('structured_content',result.get('structuredContent'))
+        if not isinstance(root,dict):continue
+        pending=[root];visited=0
+        while pending and visited<4096:
+            value=pending.pop();visited+=1
+            if isinstance(value,list):pending.extend(value);continue
+            if not isinstance(value,dict):continue
+            citation=value.get('citation')
+            text=value.get('text',value.get('snippet',''))
+            if isinstance(citation,dict) and isinstance(text,str):
+                passage=' '.join(text.lower().split())
+                indexing=('array' in passage and
+                    (('indexed from 0 to' in passage and 'dimension_size-1' in passage)
+                     or ('index' in passage and 'first element' in passage and 'zero' in passage)))
+                revision='b6b3338a985e1efedc2c87fa478f648d7de53e1daa6d2a8a9e5359b8878e23fa'
+                if (indexing and citation.get('source_file')=='mql5.chm'
+                    and re.fullmatch(r'mql5:[0-9a-f]{24}',str(value.get('topic_id','')))
+                    and citation.get('topic_id')==value.get('topic_id')
+                    and value.get('source_revision')==citation.get('source_revision')==revision
+                    and re.fullmatch(r'[0-9a-f]{64}',str(citation.get('corpus_revision','')))
+                    and re.fullmatch(r'[0-9a-f]{64}',str(citation.get('index_revision','')))
+                    and citation.get('corpus_revision')==root.get('corpus_revision')
+                    and citation.get('index_revision')==root.get('index_sha256',root.get('index_revision'))):return True
+            pending.extend(v for v in value.values() if isinstance(v,(dict,list)))
+    return False
+
+def workflow_prompt(case: str, context: dict, skill: Path, python: Path, powershell: Path)->str:
+    prefix='' if case in SELECTION_CASES else 'Use the MQL5 coding skill at '+str(skill/'SKILL.md')+'. '
+    scope=' Do not launch external applications, change installed packages, publish, or ask for permission.' if case in ('selection-mql4-inventory','selection-python-repair') else ' Do not use real MetaEditor/MT5, trade, change installed packages, publish, or ask for permission. Treat synthetic executables only as workflow test doubles.'
+    return prefix+'Work only in this disposable workspace. '+context['task']+scope+' Keep staged resources unchanged; use Python -B to avoid new bytecode caches. Write the required artifacts, then return the structured conclusion with case_id '+case+'. Absolute Python: '+str(python)+'. PowerShell: '+str(powershell)+'.'
+
 def grade(case:str,root:Path,final:dict,events:list[dict],before:dict,*,receipt_verifier=None,staged_before:dict|None=None,powershell_host:Path|None=None)->list[str]:
     failures=[]
     if not isinstance(final,dict) or set(final)!=set(SCHEMA['required']) or final.get('case_id')!=case or final.get('status') not in ('completed','limited'):return ['Invalid or unsuccessful structured conclusion']
     if (not isinstance(final.get('findings'),list) or any(not isinstance(f,dict) or set(f)!= {'code','detail'} or not all(isinstance(x,str) for x in f.values()) for f in final['findings'])
         or any(not isinstance(final.get(k),list) or any(not isinstance(x,str) for x in final[k]) for k in ('evidence','limitations'))):return ['Invalid conclusion field types']
+    requested_case=case;case=SELECTION_ALIASES.get(case,case)
     inputs=root/'inputs';out=root/'outputs';events,trace_problems=normalize_trace(events);failures+=trace_problems
+    if requested_case=='selection-mql5-review' and not relevant_array_documentation(events):failures.append('Missing returned relevant array documentation passage with verified citation identity')
     if staged_before is not None:failures+=staged_skill_issues(root/'.agents/skills/mql5-coding',staged_before)
     commands=[event['item']['command'] for event in events if event.get('item',{}).get('type')=='command_execution']
     if not commands:failures.append('No observable command execution')
@@ -369,10 +488,16 @@ def grade(case:str,root:Path,final:dict,events:list[dict],before:dict,*,receipt_
         if re.search(r'\b(?:git\s+(?:push|commit)|install-codex|uninstall-codex|update-mql5skill)\b',low):failures.append('Out-of-scope installation or publication')
     current=inventory(inputs)
     for name,digest in before.items():
-        if case=='isolated-behavior-tests' and name=='Calculation.mqh' and current.get(name)!=digest:
+        if (case=='isolated-behavior-tests' and name=='Calculation.mqh' or case=='selection-python-repair' and name=='calculation.py') and current.get(name)!=digest:
             if current.get(name)!=inventory(out).get(name):failures.append('Revised calculation source differs from the required output')
             continue
         if current.get(name)!=digest:failures.append('Input evidence changed: '+name)
+    resources=selection_resources(root,events)
+    if requested_case in SELECTION_ALIASES and not resources:failures.append('No observed read of selected relevant resources')
+    if requested_case in ('selection-mql4-inventory','selection-python-repair'):
+        if resources or any(e.get('item',{}).get('type')=='mcp_tool_call' and e.get('item',{}).get('server')=='mql5-chm' for e in events):failures.append('Unrelated platform resources used for a general task')
+        if any(re.search(r'(?:mql5_toolkit|invoke-mql5|compile-mql5|invoke-mt5|read-mql5tester)',c,re.I) for c in commands):failures.append('Unrelated platform helper used for a general task')
+    if requested_case in SELECTION_CASES and current.keys()!=before.keys():failures.append('Input evidence files added or removed')
     try:
         if case=='report-comparison':
             result=load(out/'comparison/result.json')
@@ -402,6 +527,16 @@ def grade(case:str,root:Path,final:dict,events:list[dict],before:dict,*,receipt_
             result=load(out/'profile/result.json')
             if result['compatibility']['status']!='insufficient_evidence' or not final['limitations']:failures.append('Missing profiler evidence was not disclosed')
             if not result['uncertain']['baseline']:failures.append('Repeated profile identities were not retained as uncertain')
+        elif case=='selection-mql4-inventory':
+            result=load(out/'inventory.json')
+            expected=[{'path':p.relative_to(inputs).as_posix(),'extension':p.suffix,'bytes':p.stat().st_size} for p in sorted(inputs.rglob('*')) if p.is_file()]
+            if not isinstance(result,dict) or set(result)!={'files'} or not isinstance(result['files'],list) or sorted(result['files'],key=lambda x:x['path'])!=sorted(expected,key=lambda x:x['path']):failures.append('Incorrect file inventory')
+            if any(type(item.get('bytes')) is not int for item in result['files']):failures.append('Inventory byte sizes must be integers')
+        elif case=='selection-python-repair':
+            if current.get('calculation.py')!=inventory(out).get('calculation.py'):failures.append('Repaired Python input differs from output source')
+            cases=load(out/'cases.json')
+            if cases!=load(inputs/'specification.json')['cases']:failures.append('Python test cases differ from independent specification')
+            if not evaluate_python_calculation((out/'calculation.py').read_text(),cases):failures.append('Python calculation fails independent boundary specification')
         else:
             cases=load(out/'cases.json');cases=cases.get('cases',[]) if isinstance(cases,dict) else cases
             if (cases!=load(inputs/'specification.json')['cases'] or not isinstance(cases,list)
@@ -416,7 +551,8 @@ def grade(case:str,root:Path,final:dict,events:list[dict],before:dict,*,receipt_
 def main(argv=None)->int:
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('skill-root','baseline-skill-root','mcp-package-root','codex-path','powershell','output'):p.add_argument('--'+name,type=Path,required=True)
-    p.add_argument('--python',type=Path,default=Path(sys.executable));p.add_argument('--repetitions',type=int,choices=(1,3,5),default=3);p.add_argument('--case',choices=CASES,action='append');p.add_argument('--model');p.add_argument('--reasoning-effort');p.add_argument('--timeout-seconds',type=int,default=600)
+    p.add_argument('--python',type=Path,default=Path(sys.executable));p.add_argument('--repetitions',type=int,choices=(1,3,5),default=3);p.add_argument('--case',choices=CASES+SELECTION_CASES,action='append');p.add_argument('--model');p.add_argument('--reasoning-effort');p.add_argument('--timeout-seconds',type=int,default=600)
+    p.add_argument('--include-selection-cases',action='store_true',help='Add four implicit selection cases to the seven default cases')
     args=p.parse_args(argv)
     for path in (args.skill_root,args.baseline_skill_root,args.mcp_package_root,args.codex_path,args.powershell,args.output,args.python):
         if not path.is_absolute():p.error('Every path must be absolute')
@@ -443,7 +579,7 @@ def main(argv=None)->int:
     subprocess.run([str(csc),'/nologo','/target:exe','/out:'+str(binaries/'terminal64.exe'),str(REPO/'tests/FakeTerminal.cs'),str(metadata)],capture_output=True,check=True)
     result['synthetic_executable_sha256']=inventory(binaries)
     result['powershell']={'path':str(args.powershell.resolve()),'sha256':sha(args.powershell)}
-    result['evaluator_sha256']={p.name:sha(p) for p in (Path(__file__),Path(__file__).with_name('workflow_process.py'),REPO/'tests/Verify-WorkflowReceipts.ps1',REPO/'tests/evaluation-cases.json')}
+    result['evaluator_sha256']={p.name:sha(p) for p in (Path(__file__),Path(__file__).with_name('workflow_process.py'),REPO/'tests/Verify-WorkflowReceipts.ps1',REPO/'tests/evaluation-cases.json',REPO/'tests/selection-cases.json')}
     disabled=[{'path':str(path.parent),'enabled':False} for path in (home/'skills').rglob('SKILL.md')]
     # Credentials stay in an ephemeral, job-local home outside fixtures and evidence.
     # Desktop IPC/originator variables would expose unrelated app tools and policy.
@@ -459,13 +595,13 @@ def main(argv=None)->int:
     # Prevent ordinary toolkit imports from changing either selected staged tree.
     # This is inherited only by evaluation children, never set globally.
     execution_env['PYTHONDONTWRITEBYTECODE']='1'
-    for case in args.case or CASES:
+    for case in args.case or (CASES+SELECTION_CASES if args.include_selection_cases else CASES):
         for arm,source in (('baseline',args.baseline_skill_root),('candidate',args.skill_root)):
             for repetition in range(1,args.repetitions+1):
                 runroot=args.output/(case+'-'+arm+'-'+str(repetition));runroot.mkdir();work=runroot/'workspace';work.mkdir();skill=work/'.agents/skills/mql5-coding';shutil.copytree(source,skill)
                 context=prepare(case,work,skill,args.powershell,args.python,binaries)
                 staged_before=inventory(skill);save(runroot/'selected-skill-before.json',staged_before)
-                prompt='Use the MQL5 coding skill at '+str(skill/'SKILL.md')+'. Work only in this disposable workspace. '+context['task']+' Do not use real MetaEditor/MT5, trade, change installed packages, publish, or ask for permission. Keep the selected staged skill files unchanged; use Python -B for toolkit commands to avoid new bytecode caches. Treat synthetic executables only as workflow test doubles. Write the required artifacts, then return the structured conclusion with case_id '+case+'. Absolute Python: '+str(args.python)+'. PowerShell: '+str(args.powershell)+'.'
+                prompt=workflow_prompt(case,context,skill,args.python,args.powershell)
                 (runroot/'prompt.txt').write_text(prompt,encoding='utf-8');save(runroot/'input-hashes.json',context['input_hashes'])
                 settings=disabled+[{'path':str(skill),'enabled':True}]
                 settings_toml='['+','.join('{path='+json.dumps(s['path'])+',enabled='+str(s['enabled']).lower()+'}' for s in settings)+']'

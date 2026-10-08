@@ -31,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        case: [report-comparison, deleted-header-impact, journal-grouping, standalone-source-review, scenario-validation, profile-without-conditions, isolated-behavior-tests]
+        case: [report-comparison, deleted-header-impact, journal-grouping, standalone-source-review, scenario-validation, profile-without-conditions, isolated-behavior-tests, selection-mql5-review, selection-report-comparison, selection-mql4-inventory, selection-python-repair]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -100,7 +100,7 @@ jobs:
         env:
           EVALUATION_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          npm install --prefix cli --no-audit --no-fund @openai/codex@0.161.0
+          npm install --prefix cli --no-audit --no-fund @openai/codex@0.144.1
           if ($LASTEXITCODE -ne 0) { throw 'Reviewed CLI installation failed.' }
           $auth = Join-Path $env:USERPROFILE ('mql5-evaluation-auth-'+[guid]::NewGuid().ToString('N'))
           New-Item -ItemType Directory -Path $auth | Out-Null

@@ -59,6 +59,12 @@ jobs:
         shell: pwsh
         run: python -B -m unittest discover -s tests -p test_workflow_evaluator.py -v
 
+      - name: Test implicit selection and native harness without native execution
+        shell: pwsh
+        run: |
+          python -B -m unittest discover -s tests -p test_selection_workflows.py -v
+          python -B -m unittest discover -s tests -p test_native_integration.py -v
+
       - name: Test source snapshots with both PowerShell hosts
         shell: pwsh
         run: |

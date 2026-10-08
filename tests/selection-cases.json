@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "selection-mql5-review",
+      "selection": "relevant",
+      "input_preservation": true,
+      "evidence": "Observed completed resource reads and independently graded artifacts; usage claims alone are insufficient."
+    },
+    {
+      "id": "selection-report-comparison",
+      "selection": "relevant",
+      "input_preservation": true,
+      "evidence": "Observed completed resource reads and independently graded artifacts; usage claims alone are insufficient."
+    },
+    {
+      "id": "selection-mql4-inventory",
+      "selection": "unrelated",
+      "input_preservation": true,
+      "evidence": "Observed completed resource reads and independently graded artifacts; usage claims alone are insufficient."
+    },
+    {
+      "id": "selection-python-repair",
+      "selection": "unrelated",
+      "input_preservation": true,
+      "evidence": "Observed completed resource reads and independently graded artifacts; usage claims alone are insufficient."
+    }
+  ]
+}
