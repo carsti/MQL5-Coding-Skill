@@ -120,7 +120,8 @@ function Open-NonReparseDirectoryChain {
     param(
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)]$Tracker,
-        [Parameter(Mandatory)][hashtable]$LeasesByPath
+        [Parameter(Mandatory)][hashtable]$LeasesByPath,
+        [switch]$AllowChildWrites
     )
 
     if (-not (Test-IsAbsoluteLocalDrivePath -Path $Path)) {
@@ -168,7 +169,7 @@ function Open-NonReparseDirectoryChain {
         $lease = $null
         try {
             $lease = [Mql5Coding.JobProcessLaunch]::OpenDirectoryComponentLease(
-                $candidate
+                $candidate, [bool]$AllowChildWrites
             )
             Assert-StableFixedLocalVolumePath -Path $candidate
             [Mql5Coding.JobProcessLaunch]::VerifyPathEntryLeaseVolume(
@@ -193,7 +194,8 @@ function Open-NonReparseFileLeaf {
     param(
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)]$Tracker,
-        [Parameter(Mandatory)][hashtable]$LeasesByPath
+        [Parameter(Mandatory)][hashtable]$LeasesByPath,
+        [switch]$AllowDirectoryWrites
     )
 
     if (-not (Test-IsAbsoluteLocalDrivePath -Path $Path)) {
@@ -202,7 +204,7 @@ function Open-NonReparseFileLeaf {
     $full = [IO.Path]::GetFullPath($Path)
     Assert-StableFixedLocalVolumePath -Path $full
     $parent = [IO.Path]::GetDirectoryName($full)
-    $null = Open-NonReparseDirectoryChain -Path $parent -Tracker $Tracker -LeasesByPath $LeasesByPath
+    $null = Open-NonReparseDirectoryChain -Path $parent -Tracker $Tracker -LeasesByPath $LeasesByPath -AllowChildWrites:$AllowDirectoryWrites
 
     $key = $full
     if ($LeasesByPath.ContainsKey($key)) {
@@ -1773,11 +1775,12 @@ function Open-VerifiedArtifactReadLock {
         [Parameter(Mandatory)][string]$Kind,
         [Parameter(Mandatory)]$Tracker,
         [Parameter(Mandatory)]$PathEntryLeases,
-        [Parameter(Mandatory)][hashtable]$LeasesByPath
+        [Parameter(Mandatory)][hashtable]$LeasesByPath,
+        [switch]$AllowDirectoryWrites
     )
 
     $full = [IO.Path]::GetFullPath($Path)
-    $lease = Open-NonReparseFileLeaf -Path $full -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath
+    $lease = Open-NonReparseFileLeaf -Path $full -Tracker $PathEntryLeases -LeasesByPath $LeasesByPath -AllowDirectoryWrites:$AllowDirectoryWrites
     $stream = [IO.File]::Open(
         $full,
         [IO.FileMode]::Open,

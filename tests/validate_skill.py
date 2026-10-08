@@ -28,6 +28,8 @@ EXPECTED_SKILL_FILES = {
     "scripts/Test-Mql5Environment.ps1",
     "scripts/Compile-Mql5.ps1",
     "scripts/CompilationReceipt.ps1",
+    "scripts/BuildSourceSnapshot.ps1",
+    "references/source-snapshots.md",
     "scripts/WindowsExecutableMetadata.ps1",
     "scripts/CompilerProcessJob.cs",
     "scripts/Invoke-Mt5TesterSmoke.ps1",

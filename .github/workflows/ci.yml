@@ -55,6 +55,18 @@ jobs:
         shell: pwsh
         run: python -B -m unittest discover -s tests -p test_toolkit*.py -v
 
+      - name: Test workflow evaluator without credentials
+        shell: pwsh
+        run: python -B -m unittest discover -s tests -p test_workflow_evaluator.py -v
+
+      - name: Test source snapshots with both PowerShell hosts
+        shell: pwsh
+        run: |
+          ./tests/Test-SourceSnapshots.ps1 -PythonPath (Get-Command python).Source
+          $env:PSModulePath="$env:USERPROFILE\Documents\WindowsPowerShell\Modules;$env:ProgramFiles\WindowsPowerShell\Modules;$env:WINDIR\System32\WindowsPowerShell\v1.0\Modules"
+          powershell.exe -NoProfile -File ./tests/Test-SourceSnapshots.ps1 -PythonPath (Get-Command python).Source
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell source snapshots failed.' }
+
       - name: Test toolkit controllers with PowerShell 7
         shell: pwsh
         run: .\tests\Test-Toolkit.ps1 -PythonPath (Get-Command python).Source

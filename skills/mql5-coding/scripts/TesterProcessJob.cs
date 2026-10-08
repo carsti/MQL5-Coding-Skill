@@ -973,6 +973,13 @@ namespace Mql5Coding
             return OpenNonReparsePathEntry(path, true, ShareRead);
         }
 
+        // Build snapshots protect directory identity while permitting compiler
+        // receipt/artifact publication into the directory. No delete sharing.
+        public static PathEntryLease OpenDirectoryComponentLease(string path, bool allowChildWrites)
+        {
+            return OpenNonReparsePathEntry(path, true, allowChildWrites ? ShareReadWrite : ShareRead);
+        }
+
         public static PathEntryLease OpenFileLeafLease(string path)
         {
             return OpenNonReparsePathEntry(path, false, ShareReadWrite);

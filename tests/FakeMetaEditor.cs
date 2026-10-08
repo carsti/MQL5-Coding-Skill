@@ -47,6 +47,18 @@ internal static class FakeMetaEditor
         string logPath = Path.ChangeExtension(sourcePath, ".log");
         string artifactPath = Path.ChangeExtension(sourcePath, ".ex5");
         string mode = Environment.GetEnvironmentVariable("FAKE_METAEDITOR_MODE") ?? "success";
+        if (Environment.GetEnvironmentVariable("FAKE_METAEDITOR_SNAPSHOT_FAIL_PUBLICATION") == "1")
+        {
+            foreach (string capture in Directory.GetDirectories(Path.GetDirectoryName(sourcePath), ".mql5-source-snapshot-*"))
+                if (!Directory.Exists(Path.Combine(capture, "after"))) Directory.CreateDirectory(Path.Combine(capture, "after"));
+        }
+        string knownHeader = Environment.GetEnvironmentVariable("FAKE_METAEDITOR_SNAPSHOT_HEADER");
+        string headerTrace = Environment.GetEnvironmentVariable("FAKE_METAEDITOR_SNAPSHOT_TRACE");
+        if (!String.IsNullOrWhiteSpace(knownHeader) && !String.IsNullOrWhiteSpace(headerTrace))
+        {
+            try { File.AppendAllText(knownHeader, "// mutation"); File.WriteAllText(headerTrace, "changed"); }
+            catch (IOException) { File.WriteAllText(headerTrace, "blocked"); }
+        }
         string argumentsPath = Environment.GetEnvironmentVariable("FAKE_METAEDITOR_ARGS_PATH");
         if (!String.IsNullOrWhiteSpace(argumentsPath))
             File.WriteAllLines(argumentsPath, args, new UTF8Encoding(false));

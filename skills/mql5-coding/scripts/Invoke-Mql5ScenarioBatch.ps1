@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory)][string]$OutputDirectory,
     [ValidateSet('Validate','Execute')][string]$Action='Validate',
     [string]$PythonPath,
+    [switch]$CaptureSourceSnapshot,
     [string]$CancellationFile
 )
 Set-StrictMode -Version Latest
@@ -24,7 +25,7 @@ function Invoke-BatchProfile([string[]]$Arguments,[int]$Seconds,[bool]$SuppressL
         if ($Arguments[$part] -cnotmatch '^-[A-Za-z][A-Za-z0-9]*$') {throw 'Invalid delegated parameter name.'}
         $command+=' '+$Arguments[$part]+" '"+$Arguments[$part+1].Replace("'","''")+"'"
     }
-    if ($SuppressLogOutput) {$command+=' -SuppressLogOutput'}
+    if ($SuppressLogOutput) {$command+=' -SuppressLogOutput';if ($CaptureSourceSnapshot) {$command+=' -CaptureSourceSnapshot -PythonPath '+"'"+$python.Replace("'","''")+"'"}}
     $command+='; exit $LASTEXITCODE'
     $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     return Invoke-ToolkitProcess $hostExe @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded) $output $Seconds
@@ -142,7 +143,8 @@ try {
             Save-BatchCheckpoint
             Assert-BatchSelection $item
             $start=[DateTime]::UtcNow
-            $compiled=Invoke-BatchProfile @('-ProfilePath',$item.profile_path,'-Action','Compile','-Entrypoint',$item.profile.tester.entrypoint) ($item.profile.compiler.timeout_seconds+30) $true
+            $snapshotAllowance=if ($CaptureSourceSnapshot) {360} else {0}
+            $compiled=Invoke-BatchProfile @('-ProfilePath',$item.profile_path,'-Action','Compile','-Entrypoint',$item.profile.tester.entrypoint) ($item.profile.compiler.timeout_seconds+30+$snapshotAllowance) $true
             $current.compile=@{exit_code=$compiled.exit_code;runner_status=$compiled.status;receipt_path=$null}
             $current.cleanup_verified=$compiled.cleanup_verified
             if (-not $compiled.cleanup_verified) {
@@ -150,6 +152,16 @@ try {
             }
             if ($compiled.exit_code -ne 0 -or $compiled.status -ne 'completed') {
                 $current.status=if ($compiled.exit_code -eq 3 -or $compiled.status -eq 'timed_out') {'timed_out'} else {'failed'}
+                if ($CaptureSourceSnapshot -and $compiled.stdout -match '(?m)^MQL5_BUILD_VERIFICATION=failed\r?$') {
+                    $kept=[regex]::Matches($compiled.stdout,'(?m)^MQL5_COMPILE_RECEIPT=(.+)\r?$')
+                    if ($kept.Count -eq 1) {
+                        $keptPath=Resolve-ToolkitPath $kept[0].Groups[1].Value.Trim() $base
+                        $keptReceipt=Read-Mql5ReleaseJson $keptPath
+                        if ($keptReceipt.status -ceq 'success' -and $keptReceipt.exit_code -eq 0 -and $keptReceipt.source.path -ieq $item.profile.tester.entrypoint -and (Get-Item -LiteralPath $keptPath).LastWriteTimeUtc -ge $start.AddSeconds(-2)) {
+                            $current.compile.receipt_path=$keptPath;$current.reason='build_verification_failed';Save-BatchCheckpoint;continue
+                        }
+                    }
+                }
                 $current.reason='compilation_failed';$abort=-not $compiled.cleanup_verified;Save-BatchCheckpoint;continue
             }
             $receipts=[regex]::Matches($compiled.stdout,'(?m)^MQL5_COMPILE_RECEIPT=(.+)\r?$')
@@ -160,6 +172,11 @@ try {
             $current.compile.receipt_path=$receiptPath
             Assert-BatchSelection $item
             $arguments=@('-ProfilePath',$item.profile_path,'-Action','TesterSmoke','-CompilationReceiptPath',$receiptPath,'-OutputDirectory',(Join-Path $scenarioRoot 'tester'))
+            if ($CaptureSourceSnapshot) {
+                $snapshotMatches=[regex]::Matches($compiled.stdout,'(?m)^MQL5_BUILD_SNAPSHOT=(.+)\r?$')
+                if ($snapshotMatches.Count -ne 1) {throw 'Snapshot-enabled compilation did not emit exactly one build snapshot.'}
+                $arguments+=@('-BuildSnapshotPath',$snapshotMatches[0].Groups[1].Value.TrimEnd("`r"))
+            }
             if ($item.expected_marker_file) {$arguments+=@('-ExpectedLogMarkerFile',$item.expected_marker_file)}
             $tested=Invoke-BatchProfile $arguments ($item.profile.tester.timeout_seconds+60)
             $runPath=Join-Path $scenarioRoot 'tester\smoke-result.json';$run=$null

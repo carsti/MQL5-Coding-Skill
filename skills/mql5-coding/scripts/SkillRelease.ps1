@@ -5,7 +5,7 @@ function Get-Mql5SkillReleaseFiles {
         'references/environment-health.md','references/project-profiles.md','references/releases.md',
         'scripts/Mql5ProjectProfile.ps1','scripts/New-Mql5ProjectProfile.ps1','scripts/Invoke-Mql5Project.ps1',
         'scripts/Test-Mql5Environment.ps1','scripts/Compile-Mql5.ps1','scripts/CompilationReceipt.ps1',
-        'scripts/WindowsExecutableMetadata.ps1',
+        'scripts/WindowsExecutableMetadata.ps1','scripts/BuildSourceSnapshot.ps1','references/source-snapshots.md',
         'scripts/CompilerProcessJob.cs','scripts/Invoke-Mt5TesterSmoke.ps1','scripts/TesterEvidence.ps1',
         'scripts/TesterPathIntegrity.ps1','scripts/TesterProcessJob.cs','scripts/SkillRelease.ps1',
         'scripts/Update-Mql5Skill.ps1','version.json',

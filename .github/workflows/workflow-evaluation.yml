@@ -1,0 +1,138 @@
+name: Complete Codex workflow evaluation
+on:
+  workflow_dispatch:
+    inputs:
+      mcp_commit:
+        description: Reviewed full candidate MCP commit SHA
+        required: true
+        type: string
+      mcp_validation_run:
+        description: Successful release-validation run retaining that commit's portable package
+        required: true
+        type: string
+      model:
+        description: Identical model for both arms; no fallback
+        default: gpt-6-astra
+        required: true
+        type: string
+      reasoning_effort:
+        description: Identical effort for both arms
+        default: xhigh
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  evaluate:
+    name: Evaluate ${{ matrix.case }}
+    runs-on: windows-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        case: [report-comparison, deleted-header-impact, journal-grouping, standalone-source-review, scenario-validation, profile-without-conditions, isolated-behavior-tests]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: candidate
+          persist-credentials: false
+      - name: Check whether live evaluation credentials are configured
+        id: credentials
+        shell: pwsh
+        env:
+          EVALUATION_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:EVALUATION_KEY)) {
+            'available=false' >> $env:GITHUB_OUTPUT
+            New-Item -ItemType Directory -Path evaluation | Out-Null
+            '{"schema_version":1,"status":"unavailable","reason":"Configure OPENAI_API_KEY for manually dispatched live evaluation. The required local gate remains separate."}' | Set-Content evaluation/unavailable.json
+            'Live evaluation unavailable: configure OPENAI_API_KEY.' >> $env:GITHUB_STEP_SUMMARY
+          } else { 'available=true' >> $env:GITHUB_OUTPUT }
+      - name: Check out the frozen baseline
+        if: steps.credentials.outputs.available == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: c9748fd537a00a46a6cf11920f29f37a2f8e1fa4
+          path: baseline
+          persist-credentials: false
+      - name: Check out the reviewed MCP source
+        if: steps.credentials.outputs.available == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ github.repository_owner }}/MQL5-CHM-MCP
+          ref: ${{ inputs.mcp_commit }}
+          path: mcp
+          ssh-key: ${{ secrets.MQL5_PEER_READ_KEY }}
+          persist-credentials: false
+      - name: Use Node 24.17.0
+        if: steps.credentials.outputs.available == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.17.0
+          package-manager-cache: false
+      - name: Use Python 3.12
+        if: steps.credentials.outputs.available == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Verify and restore the reviewed candidate package
+        if: steps.credentials.outputs.available == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.MQL5_PEER_ACTIONS_TOKEN || github.token }}
+          EXPECTED_COMMIT: ${{ inputs.mcp_commit }}
+          VALIDATION_RUN: ${{ inputs.mcp_validation_run }}
+          PEER_REPOSITORY: ${{ github.repository_owner }}/MQL5-CHM-MCP
+        run: |
+          if ($env:EXPECTED_COMMIT -cnotmatch '^[0-9a-f]{40}$' -or $env:VALIDATION_RUN -cnotmatch '^[1-9][0-9]*$') { throw 'Invalid reviewed MCP identity.' }
+          $run = gh run view $env:VALIDATION_RUN --repo $env:PEER_REPOSITORY --json headSha,conclusion,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.headSha -cne $env:EXPECTED_COMMIT -or $run.conclusion -cne 'success' -or $run.workflowName -cne 'Release validation') { throw 'Candidate package run is not the reviewed successful release validation.' }
+          gh run download $env:VALIDATION_RUN --repo $env:PEER_REPOSITORY --name ('mql5-chm-mcp-release-'+$env:EXPECTED_COMMIT) --dir downloads
+          if ($LASTEXITCODE -ne 0) { throw 'Reviewed CI package unavailable. For private counterpart artifacts, configure MQL5_PEER_ACTIONS_TOKEN with read-only Actions access; no published-package fallback.' }
+          . ./mcp/scripts/Common.ps1
+          Assert-PortableZipSidecar -ZipPath ./downloads/mql5-chm-mcp-windows-x64.zip -ManifestPath ./downloads/mql5-chm-mcp-windows-x64.zip.manifest.json -ExpectedFile mql5-chm-mcp-windows-x64.zip | Out-Null
+          Expand-Archive ./downloads/mql5-chm-mcp-windows-x64.zip ./portable
+          Assert-PackageChecksums -ProjectRoot ./portable/mql5-chm-mcp-windows-x64 | Out-Null
+      - name: Prepare a job-local CLI credential store
+        if: steps.credentials.outputs.available == 'true'
+        shell: pwsh
+        env:
+          EVALUATION_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          npm install --prefix cli --no-audit --no-fund @openai/codex@0.161.0
+          if ($LASTEXITCODE -ne 0) { throw 'Reviewed CLI installation failed.' }
+          $auth = Join-Path $env:USERPROFILE ('mql5-evaluation-auth-'+[guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $auth | Out-Null
+          "CODEX_HOME=$auth" >> $env:GITHUB_ENV
+          $env:CODEX_HOME=$auth
+          $env:EVALUATION_KEY | & ./cli/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe login --with-api-key
+          if ($LASTEXITCODE -ne 0) { throw 'CLI authentication unavailable.' }
+      - name: Execute both versions three times for this case
+        if: steps.credentials.outputs.available == 'true'
+        shell: pwsh
+        env:
+          EVALUATION_MODEL: ${{ inputs.model }}
+          EVALUATION_EFFORT: ${{ inputs.reasoning_effort }}
+          EVALUATION_CASE: ${{ matrix.case }}
+        run: |
+          python -B candidate/tests/evaluate_workflows.py --skill-root "$PWD/candidate/skills/mql5-coding" --baseline-skill-root "$PWD/baseline/skills/mql5-coding" --mcp-package-root "$PWD/portable/mql5-chm-mcp-windows-x64" --codex-path "$PWD/cli/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe" --powershell (Get-Command pwsh).Source --output "$PWD/evaluation" --model $env:EVALUATION_MODEL --reasoning-effort $env:EVALUATION_EFFORT --case $env:EVALUATION_CASE
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate evaluation failed; retain every trace, without retry.' }
+      - name: Remove job-local credentials
+        if: always() && steps.credentials.outputs.available == 'true'
+        shell: pwsh
+        run: |
+          if ($env:CODEX_HOME) {
+            $root=[IO.Path]::GetFullPath($env:CODEX_HOME)
+            $parent=[IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd('\')+'\'
+            if (-not $root.StartsWith($parent,[StringComparison]::OrdinalIgnoreCase) -or -not (Split-Path -Leaf $root).StartsWith('mql5-evaluation-auth-')) { throw 'Unexpected credential cleanup path.' }
+            Remove-Item -LiteralPath $root -Recurse -Force
+          }
+      - name: Retain evaluation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workflow-evaluation-${{ matrix.case }}-${{ github.sha }}
+          path: evaluation
+          if-no-files-found: error
+          retention-days: 7

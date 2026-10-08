@@ -117,6 +117,8 @@ Retain the path emitted as `MQL5_COMPILE_RECEIPT=<absolute-json-path>`. Each com
 
 For a tester run following source compilation, pass that exact receipt to `-CompilationReceiptPath`. The runner verifies and locks the receipt, root source, EX5, and retained log automatically; no manual hash extraction is needed. Receipts record the include-root path but do not fingerprint included `.mqh` files, presets, or runtime dependencies. They are local evidence, not signed attestations or proof of strategy correctness.
 
+For shared-include projects where build-source provenance matters, select the optional [source-snapshot workflow](references/source-snapshots.md). It links known include hashes to the receipt and can block testing when those recorded files changed. Preserve uncertainty about conditional, unresolved, and unsupported dependencies.
+
 When installation into MT5 matters, distinguish the project `.ex5` from the artifact in the exact terminal `MQL5\Experts` location. Verify the installed artifact rather than assuming MetaEditor updated the terminal copy.
 
 ## Analyze tester or trading data

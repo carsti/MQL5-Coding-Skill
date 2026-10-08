@@ -6,6 +6,9 @@ param(
     [string]$Entrypoint,
     [switch]$SyntaxOnly,
     [switch]$SuppressLogOutput,
+    [switch]$CaptureSourceSnapshot,
+    [string]$PythonPath,
+    [string]$BuildSnapshotPath,
     [string]$CompilationReceiptPath,
     [string]$ExpectedExpertSha256,
     [string]$OutputDirectory,
@@ -50,7 +53,10 @@ function Invoke-Mql5ProfileTool([string]$Tool, [hashtable]$Parameters) {
     try {
         [void]$process.Start()
         $errors=$process.StandardError.ReadToEndAsync()
-        while ($null -ne ($line=$process.StandardOutput.ReadLine())) {Write-Output $line}
+        while ($null -ne ($line=$process.StandardOutput.ReadLine())) {
+            if ($line.StartsWith('MQL5_COMPILE_RECEIPT=')) {$script:profileReceiptPath=$line.Substring('MQL5_COMPILE_RECEIPT='.Length)}
+            Write-Output $line
+        }
         $process.WaitForExit()
         [Console]::Error.Write($errors.GetAwaiter().GetResult())
         $script:profileToolExit=$process.ExitCode
@@ -66,7 +72,10 @@ try {
         exit 0
     }
     if ($Action -eq 'Compile') {
-        if ($PSBoundParameters.ContainsKey('OutputDirectory') -or $PSBoundParameters.ContainsKey('CompilationReceiptPath') -or $PSBoundParameters.ContainsKey('ExpectedExpertSha256') -or $PSBoundParameters.ContainsKey('ExpectedLogMarker') -or $PSBoundParameters.ContainsKey('ExpectedLogMarkerFile') -or $AcknowledgeSavedAccountRisk) {throw 'Tester parameters cannot be used for compilation.'}
+        if ($PSBoundParameters.ContainsKey('OutputDirectory') -or $PSBoundParameters.ContainsKey('CompilationReceiptPath') -or $PSBoundParameters.ContainsKey('BuildSnapshotPath') -or $PSBoundParameters.ContainsKey('ExpectedExpertSha256') -or $PSBoundParameters.ContainsKey('ExpectedLogMarker') -or $PSBoundParameters.ContainsKey('ExpectedLogMarkerFile') -or $AcknowledgeSavedAccountRisk) {throw 'Tester parameters cannot be used for compilation.'}
+        if ($PSBoundParameters.ContainsKey('PythonPath') -and -not $CaptureSourceSnapshot) {throw 'PythonPath applies to selected source snapshot capture.'}
+        if ($CaptureSourceSnapshot -and $SyntaxOnly) {throw 'Source snapshots require an artifact-producing compilation.'}
+        if ($CaptureSourceSnapshot) {. (Join-Path $PSScriptRoot 'BuildSourceSnapshot.ps1')}
         $selected=@($profile.entrypoints)
         if ($PSBoundParameters.ContainsKey('Entrypoint')) {
             $path=Resolve-Mql5ProfilePath $Entrypoint $profile.project_root 'Leaf'
@@ -76,12 +85,23 @@ try {
         foreach ($source in $selected) {
             $parameters=@{SourcePath=$source;MetaEditorPath=$profile.metaeditor_path;TimeoutSeconds=$profile.compiler.timeout_seconds;WarningsAsErrors=$profile.compiler.warnings_as_errors;SyntaxOnly=[bool]$SyntaxOnly;SuppressLogOutput=[bool]$SuppressLogOutput}
             if ($null -ne $profile.include_path) {$parameters.IncludePath=$profile.include_path}
-            Invoke-Mql5ProfileTool 'Compile-Mql5.ps1' $parameters
-            if ($script:profileToolExit -ne 0) {exit $script:profileToolExit}
+            $capture=$null;$script:profileReceiptPath=$null
+            try {
+                if ($CaptureSourceSnapshot) {$capture=Start-Mql5BuildSnapshot $profile $source $PythonPath}
+                Invoke-Mql5ProfileTool 'Compile-Mql5.ps1' $parameters
+                if ($script:profileToolExit -ne 0) {exit $script:profileToolExit}
+                if ($null -ne $capture) {
+                    try {$snapshot=Complete-Mql5BuildSnapshot $capture $script:profileReceiptPath}
+                    catch {Write-Output 'MQL5_BUILD_VERIFICATION=failed';throw}
+                    Write-Output ('MQL5_BUILD_SNAPSHOT='+$snapshot)
+                    if ($capture.before.value.coverage -ceq 'uncertain') {Write-Output 'Source snapshot coverage is uncertain; inspect retained include inventories.'}
+                }
+            } finally {if ($null -ne $capture) {Close-Mql5SnapshotLocks $capture.locks}}
         }
         exit 0
     }
     if ($PSBoundParameters.ContainsKey('SuppressLogOutput')) {throw 'SuppressLogOutput applies only to compilation.'}
+    if ($PSBoundParameters.ContainsKey('CaptureSourceSnapshot') -or $PSBoundParameters.ContainsKey('PythonPath')) {throw 'Snapshot capture parameters apply only to compilation.'}
     if ($SyntaxOnly -or $PSBoundParameters.ContainsKey('Entrypoint')) {throw 'Tester action uses the saved tester entrypoint.'}
     if ($null -eq $profile.tester) {throw 'This profile has no tester configuration.'}
     if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {throw 'Select a new output directory for this tester run.'}
@@ -90,11 +110,12 @@ try {
     $parameters=@{ExpertPath=[IO.Path]::ChangeExtension($t.entrypoint,'.ex5');TerminalPath=$t.terminal_path;TerminalDataPath=$t.terminal_data_path;UseExpertDefaults=$t.use_expert_defaults;OutputDirectory=[IO.Path]::GetFullPath($OutputDirectory);TimeoutSeconds=$t.timeout_seconds;Execute=($Action -eq 'TesterSmoke');PreflightOnly=($Action -eq 'TesterPreflight');AcknowledgeSavedAccountRisk=[bool]$AcknowledgeSavedAccountRisk}
     foreach ($mapping in @(@('symbol','Symbol'),@('period','Period'),@('from_date','FromDate'),@('to_date','ToDate'),@('model','Model'),@('deposit','Deposit'),@('currency','Currency'),@('leverage','Leverage'),@('execution_mode','ExecutionMode'))) {$parameters[$mapping[1]]=$t.settings.($mapping[0])}
     if ($null -ne $t.set_path) {$parameters.SetPath=$t.set_path}
-    foreach ($key in @('CompilationReceiptPath','ExpectedExpertSha256','ExpectedLogMarker','ExpectedLogMarkerFile')) {if ($PSBoundParameters.ContainsKey($key)) {$parameters[$key]=$PSBoundParameters[$key]}}
+    foreach ($key in @('CompilationReceiptPath','BuildSnapshotPath','ExpectedExpertSha256','ExpectedLogMarker','ExpectedLogMarkerFile')) {if ($PSBoundParameters.ContainsKey($key)) {$parameters[$key]=$PSBoundParameters[$key]}}
     Invoke-Mql5ProfileTool 'Invoke-Mt5TesterSmoke.ps1' $parameters
     if ($script:profileToolExit -eq 0 -and -not (Test-Path -LiteralPath (Join-Path $parameters.OutputDirectory 'smoke-result.json') -PathType Leaf)) {throw 'Tester wrapper returned without its result JSON.'}
     exit $script:profileToolExit
 } catch {
+    if ($CaptureSourceSnapshot -or $PSBoundParameters.ContainsKey('BuildSnapshotPath')) {Write-Error -Message 'Build snapshot verification failed: check the selected Python, retained inventories, receipt commitments, and known-source stability. Any emitted compiler receipt retains the actual compiler result.' -ErrorAction Continue}
     Write-Error -Message 'Project invocation failed: validate the profile, selected action, and per-run evidence/output path.' -ErrorAction Continue
     exit 2
 }

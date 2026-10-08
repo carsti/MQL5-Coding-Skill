@@ -4,6 +4,7 @@ param(
     $ExpertPath,
     $ExpectedExpertSha256,
     $CompilationReceiptPath,
+    $BuildSnapshotPath,
     $Symbol,
     $Period,
     $FromDate,
@@ -50,6 +51,7 @@ try {
     . (Join-Path $PSScriptRoot 'TesterPathIntegrity.ps1')
     . (Join-Path $PSScriptRoot 'TesterEvidence.ps1')
     . (Join-Path $PSScriptRoot 'CompilationReceipt.ps1')
+    if (-not [string]::IsNullOrWhiteSpace($BuildSnapshotPath)) {. (Join-Path $PSScriptRoot 'BuildSourceSnapshot.ps1')}
 }
 catch {
     $helperLoadMessage = 'Tester helper scripts could not be loaded.'
@@ -354,6 +356,13 @@ try {
         $result.inputs.compilation_receipt = Test-Mql5CompilationReceipt -Path $CompilationReceiptPath -ExpertPath $expert -ExpectedExpertHash $expectedExpertHash -Tracker $stagingReadLocks -PathEntryLeases $pathEntryLeases -LeasesByPath $leasedPathEntries
         $expectedExpertHash = [string]$result.inputs.compilation_receipt.expert_sha256
         $result.inputs.expected_expert_sha256 = $expectedExpertHash
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($BuildSnapshotPath)) {
+        $snapshotContext=[pscustomobject]@{locks=$stagingReadLocks;leases=$pathEntryLeases;by_path=$leasedPathEntries}
+        $snapshotVerification=Test-Mql5BuildSnapshot $BuildSnapshotPath $CompilationReceiptPath ([IO.Path]::ChangeExtension($expert,'.mq5')) $snapshotContext
+        Write-Output ('MQL5_BUILD_SNAPSHOT='+[IO.Path]::GetFullPath($BuildSnapshotPath))
+        if ($snapshotVerification.coverage.before -ceq 'uncertain' -or $snapshotVerification.coverage.after -ceq 'uncertain') {Write-Output 'Source snapshot verifies known files; include coverage remains uncertain.'}
     }
 
     $preset = $null
