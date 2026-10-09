@@ -13,8 +13,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: skill-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Preserve running main/tag evidence; manual package checks have independent groups.
+  group: skill-ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   compatibility:
@@ -51,6 +52,10 @@ jobs:
         shell: pwsh
         run: python -B .\tests\test_mcp_contract.py
 
+      - name: Test CI cancellation policy and command failure propagation
+        shell: pwsh
+        run: python -B -m unittest discover -s tests -p test_ci_workflows.py -v
+
       - name: Test native toolkit fixtures and analysis
         shell: pwsh
         run: python -B -m unittest discover -s tests -p test_toolkit*.py -v
@@ -63,7 +68,9 @@ jobs:
         shell: pwsh
         run: |
           python -B -m unittest discover -s tests -p test_selection_workflows.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'Implicit skill selection tests failed.' }
           python -B -m unittest discover -s tests -p test_native_integration.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'Native integration harness tests failed.' }
 
       - name: Test source snapshots with both PowerShell hosts
         shell: pwsh

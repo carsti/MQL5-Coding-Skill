@@ -12,6 +12,8 @@ For shared modules, select [optional build-source snapshots](skills/mql5-coding/
 
 Compatibility CI checks both counterpart `main` (or explicit `peer_ref`) and the exact approved commit in `.github/approved-peer.json`. The initial approved MCP is 1.3.6 at `2648888a8a903368080034595e71e2f984c974dd`. The record is independent of the containing skill commit, and packaging waits for both checks.
 
+CI preserves running main/tag validations and gives each manually dispatched package check an independent concurrency group. New pull-request validations can supersede older runs for the same pull request. The combined selection/native-harness step checks each command's exit code immediately, so a later successful suite cannot hide an earlier failure. These policies have executable regressions in `tests/test_ci_workflows.py`, including failure propagation under PowerShell 7 and 5.1.
+
 ## Requirements
 
 - Windows with PowerShell 7 or Windows PowerShell 5.1.
