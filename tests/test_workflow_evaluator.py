@@ -1,11 +1,14 @@
 """Independent scorer and bounded process tests; no model credentials required."""
 import json
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 from evaluate_workflows import REPO, SCHEMA, compiled_outcome, evaluate_assertions, evaluate_calculation, forbidden_workflow_actions, grade, inventory, normalize_trace, prepare, ps, read_trace, save, staged_skill_issues, supplied_compile_command, terminal_launch_attempt, trace_summary, verify_workflow_receipts
@@ -424,6 +427,47 @@ class WorkflowReceipts(unittest.TestCase):
 
 @unittest.skipUnless(os.name=='nt','Windows job object execution')
 class Process(unittest.TestCase):
+    def test_cleanup_waits_for_inherited_output_handles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);releases=[];original_open=Path.open
+            @contextmanager
+            def delayed_output_close(path,*args,**kwargs):
+                with original_open(path,*args,**kwargs) as stream:
+                    retained=os.dup(stream.fileno()) if path==root/'stderr' and args==('xb',) else None
+                    try:yield stream
+                    finally:
+                        if retained is not None:
+                            release=threading.Thread(target=lambda: (time.sleep(.3),os.close(retained)))
+                            releases.append(release);release.start()
+            try:
+                with patch.object(Path,'open',delayed_output_close):
+                    measurement=run_owned([sys.executable,'-I','-B','-c','pass'],root,root/'trace',root/'stderr',seconds=5)
+                self.assertTrue(measurement['cleanup_verified'])
+                # Kernel cleanup may release inherited files after job accounting
+                # reaches zero. Verified cleanup must make evidence movable now.
+                (root/'stderr').rename(root/'released-stderr')
+            finally:
+                for release in releases:release.join(timeout=5)
+
+    def test_cleanup_remains_unverified_if_output_handle_cannot_be_released(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);retained=[];original_open=Path.open
+            @contextmanager
+            def retained_output(path,*args,**kwargs):
+                with original_open(path,*args,**kwargs) as stream:
+                    if path==root/'stderr' and args==('xb',):retained.append(os.dup(stream.fileno()))
+                    yield stream
+            try:
+                with patch.object(Path,'open',retained_output):
+                    measurement=run_owned([sys.executable,'-I','-B','-c','pass'],root,root/'trace',root/'stderr',seconds=5)
+                self.assertFalse(measurement['cleanup_verified'])
+                self.assertEqual(measurement['status'],'completed')
+                self.assertEqual(measurement['exit_code'],0)
+                # Failed two-file probes must release their first acquired handle.
+                (root/'trace').rename(root/'released-trace')
+            finally:
+                for handle in retained:os.close(handle)
+
     def test_completed_output_burst_cannot_bypass_limit(self):
         for stream in ('stdout','stderr'):
             with self.subTest(stream=stream), tempfile.TemporaryDirectory() as tmp:

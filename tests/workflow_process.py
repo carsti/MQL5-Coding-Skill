@@ -16,6 +16,32 @@ class ExtendedLimits(ctypes.Structure):
 class Accounting(ctypes.Structure):
     _fields_=[(name,ctypes.c_longlong) for name in ('user','kernel','period_user','period_kernel')]+[(name,W.DWORD) for name in ('faults','total','active','terminated')]
 
+def _outputs_released(kernel,paths)->bool:
+    """Require exclusive read handles after our output streams have closed."""
+    kernel.CreateFileW.argtypes=[W.LPCWSTR,W.DWORD,W.DWORD,ctypes.c_void_p,W.DWORD,W.DWORD,W.HANDLE]
+    kernel.CreateFileW.restype=W.HANDLE
+    handles=[]
+    try:
+        for path in paths:
+            name=os.path.abspath(path)
+            if not name.startswith('\\\\?\\'):
+                name='\\\\?\\UNC\\'+name[2:] if name.startswith('\\\\') else '\\\\?\\'+name
+            handle=kernel.CreateFileW(name,0x80000000,0,None,3,0x80,None)
+            if not handle or handle==W.HANDLE(-1).value:return False
+            handles.append(handle)
+        return True
+    finally:
+        for handle in handles:kernel.CloseHandle(handle)
+
+def _wait_for_cleanup(kernel,job,paths,seconds=5)->bool:
+    deadline=time.monotonic()+seconds
+    while time.monotonic()<deadline:
+        account=Accounting()
+        if not kernel.QueryInformationJobObject(job,1,ctypes.byref(account),ctypes.sizeof(account),None):return False
+        if account.active==0 and _outputs_released(kernel,paths):return True
+        time.sleep(.05)
+    return False
+
 def run_owned(command:list[str],cwd:Path,stdout:Path,stderr:Path,*,env:dict|None=None,seconds:int=600)->dict:
     if os.name!='nt': raise RuntimeError('Workflow execution requires the supported Windows job-object runner')
     k=ctypes.WinDLL('kernel32',use_last_error=True)
@@ -44,17 +70,13 @@ def run_owned(command:list[str],cwd:Path,stdout:Path,stderr:Path,*,env:dict|None
             if status=='completed': exit_code=process.wait()
             k.TerminateJobObject(job,1)
             process.wait(timeout=10)
-            deadline=time.monotonic()+5
-            while time.monotonic()<deadline:
-                account=Accounting()
-                if not k.QueryInformationJobObject(job,1,ctypes.byref(account),ctypes.sizeof(account),None): break
-                if account.active==0: clean=True;break
-                time.sleep(.05)
-            # A fast process (or a last descendant write) can finish between
-            # polls. Check retained output after cleanup as well as while it is
-            # running, so an oversized trace cannot become successful evidence.
-            if stdout.stat().st_size+stderr.stat().st_size>16777216:
-                status='output_limit';exit_code=None
+        # Empty job accounting can precede release of inherited output handles.
+        # Close our own streams before checking that retained evidence is free.
+        clean=_wait_for_cleanup(k,job,(stdout,stderr))
+        # Check final output after cleanup as well as while running, so a last
+        # descendant write cannot turn an oversized trace into successful evidence.
+        if stdout.stat().st_size+stderr.stat().st_size>16777216:
+            status='output_limit';exit_code=None
     finally:
         k.TerminateJobObject(job,1)
         if process is not None and process.poll() is None: process.kill();process.wait(timeout=10)

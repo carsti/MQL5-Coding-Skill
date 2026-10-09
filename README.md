@@ -14,6 +14,8 @@ Compatibility CI checks both counterpart `main` (or explicit `peer_ref`) and the
 
 CI preserves running main/tag validations and gives each manually dispatched package check an independent concurrency group. New pull-request validations can supersede older runs for the same pull request. The combined selection/native-harness step checks each command's exit code immediately, so a later successful suite cannot hide an earlier failure. These policies have executable regressions in `tests/test_ci_workflows.py`, including failure propagation under PowerShell 7 and 5.1.
 
+The development workflow evaluator verifies both empty job accounting and released output-file handles before reporting process cleanup. It waits within the existing bounded cleanup deadline; an output file that remains held produces unverified cleanup and prevents continuation. This also keeps retained traces available for immediate inspection or movement after a timed-out child exits.
+
 ## Requirements
 
 - Windows with PowerShell 7 or Windows PowerShell 5.1.
