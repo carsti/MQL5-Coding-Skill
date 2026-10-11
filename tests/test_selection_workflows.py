@@ -65,6 +65,42 @@ class Selection(unittest.TestCase):
   save(self.root/'outputs/cases.json',json.loads((self.root/'inputs/specification.json').read_text())['cases']);return c
  def test_python_repair_has_independent_correct_values(self):
   c=self.repair();self.assertEqual(grade(c['case'],self.root,self.final(c['case']),[self.event('Get-Content inputs/calculation.py')],c['input_hashes']),[])
+ def test_python_cases_preserve_independent_integer_types(self):
+  c=self.repair();expected=json.loads((self.root/'outputs/cases.json').read_text())
+  for index,case in enumerate(expected):
+   for key,integer in case.items():
+    replacements=[float(integer)]
+    if integer in (0,1):replacements.append(bool(integer))
+    for replacement in replacements:
+     with self.subTest(case_index=index,key=key,replacement_type=type(replacement).__name__):
+      mutant=json.loads(json.dumps(expected));mutant[index][key]=replacement
+      self.assertEqual(mutant,expected);self.assertIsNot(type(mutant[index][key]),int)
+      save(self.root/'outputs/cases.json',mutant)
+      self.assertIn('Python test cases differ from independent specification',grade(c['case'],self.root,self.final(c['case']),[self.event('Get-Content inputs/calculation.py')],c['input_hashes']))
+ def test_python_cases_reject_invalid_shapes_and_fields(self):
+  c=self.repair();expected=json.loads((self.root/'outputs/cases.json').read_text())
+  for mutant in (None,{},[],{'cases':expected},[None]*6,[dict(case,extra=0) for case in expected]):
+   with self.subTest(mutant=mutant):
+    save(self.root/'outputs/cases.json',mutant)
+    self.assertTrue(grade(c['case'],self.root,self.final(c['case']),[self.event('Get-Content inputs/calculation.py')],c['input_hashes']))
+ def test_python_builtin_calls_preserve_python_literal_forms(self):
+  cases=[{'n':-2,'maximum':3,'expected':0},{'n':2,'maximum':3,'expected':2},{'n':5,'maximum':3,'expected':3}]
+  for zero in ('0','0_0','0o0','0b0'):
+   with self.subTest(zero=zero):
+    self.assertTrue(evaluate_python_calculation('def clamp_count(n, maximum):\n    return max('+zero+', min(n, maximum))\n',cases))
+ def test_python_repair_rejects_undefined_mql5_callable_names(self):
+  c=self.repair();cases=json.loads((self.root/'outputs/cases.json').read_text())
+  for expression in ('MathMin(MathMax(n,0),maximum)','max(0,MathMin(n,maximum))','MathMax(0,min(n,maximum))'):
+   with self.subTest(expression=expression):
+    code='def clamp_count(n, maximum):\n    return '+expression+'\n'
+    self.assertFalse(evaluate_python_calculation(code,cases))
+ def test_python_workflow_rejects_matching_artifacts_with_undefined_calls(self):
+  c=self.repair()
+  for expression in ('MathMin(MathMax(n,0),maximum)','max(0,MathMin(n,maximum))','MathMax(0,min(n,maximum))'):
+   with self.subTest(expression=expression):
+    code='def clamp_count(n, maximum):\n    return '+expression+'\n'
+    (self.root/'inputs/calculation.py').write_text(code);(self.root/'outputs/calculation.py').write_text(code)
+    self.assertIn('Python calculation fails independent boundary specification',grade(c['case'],self.root,self.final(c['case']),[self.event('Get-Content inputs/calculation.py')],c['input_hashes']))
  def test_python_output_must_match_repaired_input(self):
   c=self.repair();(self.root/'inputs/calculation.py').write_text('def clamp_count(n, maximum):\n    return min(n, maximum)\n')
   self.assertTrue(grade(c['case'],self.root,self.final(c['case']),[self.event('Get-Content inputs/calculation.py')],c['input_hashes']))
@@ -92,8 +128,47 @@ class Selection(unittest.TestCase):
   event=self.documented();content=event['item']['result']['structured_content'];content['snippet']=content.pop('text')
   event['item']['tool']='mql5_chm_search';event['item']['result']['structured_content']={'corpus_revision':'a'*64,'index_sha256':'b'*64,'results':[content]}
   self.assertTrue(relevant_array_documentation([event]))
+ def check_typed_source_review(self,case):
+  c=self.context(case);valid={'code':'ARRAY_OUT_OF_BOUNDS','line':5,'trigger':'i reaches 3','consequence':'Access beyond three elements'}
+  events=[self.event('Get-Content inputs/Review.mq5'),self.documented(),self.event('Get-Content '+str(self.skill/'SKILL.md'),(self.skill/'SKILL.md').read_text())]
+  save(self.root/'outputs/review.json',{'issues':[valid]});self.assertEqual(grade(case,self.root,self.final(case),events,c['input_hashes']),[])
+  variants=[{key:value for key,value in valid.items() if key!='code'},{**valid,'code':''},{**valid,'line':5.0}]
+  for field in ('code','trigger','consequence'):
+   variants.extend({**valid,field:value} for value in (True,7,['text'],{'text':'text'},'   '))
+  for variant in variants:
+   with self.subTest(case=case,variant=variant):
+    save(self.root/'outputs/review.json',{'issues':[variant]})
+    self.assertIn('Concrete source defect was not located/explained',grade(case,self.root,self.final(case),events,c['input_hashes']))
+ def test_explicit_review_requires_complete_typed_artifact(self):self.check_typed_source_review('standalone-source-review')
+ def test_implicit_review_requires_complete_typed_artifact(self):self.check_typed_source_review('selection-mql5-review')
+ def test_review_containers_accept_complete_artifacts(self):
+  case='selection-mql5-review';c=self.context(case);valid={'code':'ARRAY_OUT_OF_BOUNDS','line':5,'trigger':'i reaches 3','consequence':'Access beyond three elements'}
+  events=[self.event('Get-Content inputs/Review.mq5'),self.documented(),self.event('Get-Content '+str(self.skill/'SKILL.md'),(self.skill/'SKILL.md').read_text())]
+  for result in ([valid],valid,{'issues':[valid]},{'findings':[valid]}):
+   with self.subTest(result=result):
+    save(self.root/'outputs/review.json',result);self.assertEqual(grade(case,self.root,self.final(case),events,c['input_hashes']),[])
+ def test_explicit_review_requires_returned_matching_documentation(self):
+  case='standalone-source-review';c=self.context(case)
+  save(self.root/'outputs/review.json',{'issues':[{'code':'ARRAY_OUT_OF_BOUNDS','line':5,'trigger':'i reaches 3','consequence':'Access beyond three elements'}]})
+  source=[self.event('Get-Content inputs/Review.mq5')];good=self.documented()
+  self.assertEqual(grade(case,self.root,self.final(case),source+[good],c['input_hashes']),[])
+  variants=[]
+  missing=json.loads(json.dumps(good));missing['item'].pop('result');variants.append(missing)
+  error=json.loads(json.dumps(good));error['item']['result']['isError']=True;variants.append(error)
+  unrelated=json.loads(json.dumps(good));unrelated['item']['result']['structured_content']['text']='Unrelated broker account profits';variants.append(unrelated)
+  source_mismatch=json.loads(json.dumps(good));source_mismatch['item']['result']['structured_content']['source_revision']='f'*64;variants.append(source_mismatch)
+  citation=json.loads(json.dumps(good));citation['item']['result']['structured_content']['citation']['index_revision']='c'*64;variants.append(citation)
+  for event in variants:
+   with self.subTest(event=event):
+    self.assertIn('Missing returned relevant array documentation passage with verified citation identity',grade(case,self.root,self.final(case),source+[event],c['input_hashes']))
+ def test_review_rejects_malformed_rows_alongside_complete_issue(self):
+  case='standalone-source-review';c=self.context(case);valid={'code':'ARRAY_OUT_OF_BOUNDS','line':5,'trigger':'i reaches 3','consequence':'Access beyond three elements'}
+  events=[self.event('Get-Content inputs/Review.mq5'),self.documented()]
+  for invalid in (None,{},'claim',{'code':'X','line':-1,'trigger':'text','consequence':'text'}):
+   with self.subTest(invalid=invalid):
+    save(self.root/'outputs/review.json',{'issues':[valid,invalid]});self.assertTrue(grade(case,self.root,self.final(case),events,c['input_hashes']))
  def test_positive_review_requires_source_issue_docs_and_resource_read(self):
-  c=self.context('selection-mql5-review');save(self.root/'outputs/review.json',{'issues':[{'line':5,'trigger':'i reaches 3','consequence':'Access beyond three elements'}]})
+  c=self.context('selection-mql5-review');save(self.root/'outputs/review.json',{'issues':[{'code':'ARRAY_OUT_OF_BOUNDS','line':5,'trigger':'i reaches 3','consequence':'Access beyond three elements'}]})
   events=[self.event('Get-Content inputs/Review.mq5'),self.documented()]
   final=self.final(c['case']);self.assertIn('No observed read of selected relevant resources',grade(c['case'],self.root,final,events,c['input_hashes']))
   events.append(self.event('Get-Content '+str(self.skill/'SKILL.md'),(self.skill/'SKILL.md').read_text()))

@@ -318,7 +318,12 @@ def evaluate_calculation(code:str,cases:list[dict])->bool:
     except SyntaxError:return False
     def value(node,n,maximum):
         if isinstance(node,ast.Expression):return value(node.body,n,maximum)
-        if isinstance(node,ast.Constant) and type(node.value) is int:return node.value
+        if isinstance(node,ast.Constant) and type(node.value) is int:
+            # Python's AST erases spelling differences. Admit only the bounded
+            # decimal/hexadecimal subset, not Python underscores or 0o/0b forms.
+            spelling=ast.get_source_segment(expression,node) or ''
+            if not re.fullmatch(r'(?:[0-9]+|0[xX][0-9A-Fa-f]+)',spelling):raise ValueError('Unsupported integer literal spelling')
+            return node.value
         if isinstance(node,ast.Name) and node.id in ('n','maximum'):return {'n':n,'maximum':maximum}[node.id]
         if isinstance(node,ast.UnaryOp) and isinstance(node.op,ast.USub):return -value(node.operand,n,maximum)
         if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id in ('MathMin','MathMax') and len(node.args)==2 and not node.keywords:
@@ -424,7 +429,11 @@ def evaluate_python_calculation(code:str,cases:list[dict])->bool:
         if function.name!='clamp_count' or function.decorator_list or len(function.body)!=1 or not isinstance(function.body[0],ast.Return):return False
         args=function.args
         if [a.arg for a in args.args]!=['n','maximum'] or args.posonlyargs or args.kwonlyargs or args.vararg or args.kwarg or args.defaults or function.returns is not None or any(a.annotation is not None for a in args.args):return False
-        expression=ast.unparse(function.body[0].value)
+        expression_node=function.body[0].value
+        # Validate Python call names before adapting the expression to the
+        # shared MQL5 interpreter; native names are undefined in this module.
+        if any(isinstance(node,ast.Call) and (not isinstance(node.func,ast.Name) or node.func.id not in ('min','max')) for node in ast.walk(expression_node)):return False
+        expression=ast.unparse(expression_node)
         # Only the existing bounded AST interpreter runs; the input is never exec'd.
         expression=re.sub(r'\bmin\b','MathMin',expression);expression=re.sub(r'\bmax\b','MathMax',expression)
         return evaluate_calculation('int ClampCount(int n,int maximum){ return '+expression+'; }',cases)
@@ -477,7 +486,7 @@ def grade(case:str,root:Path,final:dict,events:list[dict],before:dict,*,receipt_
         or any(not isinstance(final.get(k),list) or any(not isinstance(x,str) for x in final[k]) for k in ('evidence','limitations'))):return ['Invalid conclusion field types']
     requested_case=case;case=SELECTION_ALIASES.get(case,case)
     inputs=root/'inputs';out=root/'outputs';events,trace_problems=normalize_trace(events);failures+=trace_problems
-    if requested_case=='selection-mql5-review' and not relevant_array_documentation(events):failures.append('Missing returned relevant array documentation passage with verified citation identity')
+    if case=='standalone-source-review' and not relevant_array_documentation(events):failures.append('Missing returned relevant array documentation passage with verified citation identity')
     if staged_before is not None:failures+=staged_skill_issues(root/'.agents/skills/mql5-coding',staged_before)
     commands=[event['item']['command'] for event in events if event.get('item',{}).get('type')=='command_execution']
     if not commands:failures.append('No observable command execution')
@@ -516,7 +525,10 @@ def grade(case:str,root:Path,final:dict,events:list[dict],before:dict,*,receipt_
         elif case=='standalone-source-review':
             result=load(out/'review.json')
             issues=result if isinstance(result,list) else result.get('issues',result.get('findings',[result]))
-            if not any(i.get('line')==5 and i.get('trigger') and i.get('consequence') for i in issues):failures.append('Concrete source defect was not located/explained')
+            if (not isinstance(issues,list)
+                or any(not isinstance(i,dict) or type(i.get('line')) is not int or i['line']<1
+                    or any(not isinstance(i.get(key),str) or not i[key].strip() for key in ('code','trigger','consequence')) for i in issues)
+                or not any(i['line']==5 for i in issues)):failures.append('Concrete source defect was not located/explained')
             if any('mql5_toolkit.py' in c or 'Compile-Mql5' in c for c in commands):failures.append('Unrelated processing in read-only source review')
             if not any((e.get('item') or {}).get('type')=='mcp_tool_call' and (e.get('item') or {}).get('server')=='mql5-chm' and (e.get('item') or {}).get('tool') in ('mql5_chm_search','mql5_chm_read','mql5_chm_lookup_identifiers') and (e.get('item') or {}).get('status')=='completed' and not (e.get('item') or {}).get('error') for e in events):failures.append('Missing successful platform documentation evidence')
         elif case=='scenario-validation':
@@ -535,7 +547,8 @@ def grade(case:str,root:Path,final:dict,events:list[dict],before:dict,*,receipt_
         elif case=='selection-python-repair':
             if current.get('calculation.py')!=inventory(out).get('calculation.py'):failures.append('Repaired Python input differs from output source')
             cases=load(out/'cases.json')
-            if cases!=load(inputs/'specification.json')['cases']:failures.append('Python test cases differ from independent specification')
+            if (cases!=load(inputs/'specification.json')['cases'] or not isinstance(cases,list)
+                or any(not isinstance(c,dict) or set(c)!= {'n','maximum','expected'} or any(type(c[k]) is not int for k in c) for c in cases)):failures.append('Python test cases differ from independent specification')
             if not evaluate_python_calculation((out/'calculation.py').read_text(),cases):failures.append('Python calculation fails independent boundary specification')
         else:
             cases=load(out/'cases.json');cases=cases.get('cases',[]) if isinstance(cases,dict) else cases
@@ -622,6 +635,9 @@ def main(argv=None)->int:
                 if measurement['status']!='completed' or measurement['exit_code']!=0 or not measurement['cleanup_verified']:errors.append('CLI execution incomplete, failed, or cleanup unverified')
                 usage=trace['usage'];commands=trace['commands'];command_text=[c['command'] for c in commands]
                 item={'case':case,'arm':arm,'repetition':repetition,'status':'passed' if not errors else 'failed','issues':errors,'selected_skill':{'before_sha256':sha(runroot/'selected-skill-before.json'),'after_sha256':sha(runroot/'selected-skill-after.json'),'issues':staged_skill_issues(skill,staged_before,staged_after)},'measurement':{**measurement,'commands':len(commands),'repeated_identical_commands':len(command_text)-len(set(command_text)),'runner_retries':0,'agent_retries':None,'retry_count_reason':'Semantic agent retries are not a stable trace metric; repeated identical completed commands are recorded separately','token_usage':usage,'token_usage_reason':None if usage else 'Usage unavailable in the emitted CLI trace','artifact_bytes':sum(p.stat().st_size for p in work.rglob('*') if p.is_file())},'trace':str(runroot/'trace.jsonl'),'trace_sha256':sha(runroot/'trace.jsonl'),'started_unix_seconds':started}
+                if case in ('standalone-source-review','selection-mql5-review'):
+                    item['grading_scope']={'automatic':'Required typed artifact fields, known defect line and returned matching documentation/resource evidence.',
+                                           'prose_semantics':'not_independently_graded; review the explanation before claiming source-review correctness'}
                 result['runs'].append(item);save(runroot/'score.json',item);save(args.output/'progress.json',result);print(case+' '+arm+' '+str(repetition)+': '+item['status'],flush=True)
                 if not measurement['cleanup_verified']:result['status']='aborted';save(args.output/'evaluation.json',result);return 2
     for source,previous in originals.items():

@@ -22,6 +22,11 @@ class Scoring(unittest.TestCase):
         self.events=[{'type':'item.completed','item':{'type':'command_execution','command':'Invoke-Mql5ScenarioBatch.ps1 -Action Validate'}}]
         (self.root/'outputs/validation').mkdir();save(self.root/'outputs/validation/result.json',{'status':'validated','action':'Validate'})
     def tearDown(self):self.temp.cleanup()
+    def documented(self):
+        source='b6b3338a985e1efedc2c87fa478f648d7de53e1daa6d2a8a9e5359b8878e23fa';topic='mql5:02ce7771459932284a2d93ac'
+        citation={'source_file':'mql5.chm','topic_id':topic,'source_revision':source,'corpus_revision':'a'*64,'index_revision':'b'*64}
+        content={'topic_id':topic,'source_revision':source,'corpus_revision':'a'*64,'index_sha256':'b'*64,'citation':citation,'text':'Arrays: Each dimension is indexed from 0 to dimension_size-1.'}
+        return {'type':'item.completed','item':{'type':'mcp_tool_call','server':'mql5-chm','tool':'mql5_chm_read','status':'completed','result':{'structured_content':content}}}
     def test_correct_artifact(self):self.assertEqual(grade('scenario-validation',self.root,self.final,self.events,{}),[])
     def test_claim_does_not_replace_evidence(self):
         (self.root/'outputs/validation/result.json').unlink();self.assertTrue(grade('scenario-validation',self.root,self.final,self.events,{}))
@@ -243,8 +248,8 @@ class Scoring(unittest.TestCase):
             with self.subTest(command=command):self.assertFalse(supplied_compile_command(self.root,command))
     def test_source_review_requires_location_and_documentation(self):
         final={**self.final,'case_id':'standalone-source-review'}
-        save(self.root/'outputs/review.json',{'issues':[{'line':5,'trigger':'Loop reaches 3','consequence':'Index exceeds 0..2'}]})
-        documented=[{'item':{'type':'command_execution','command':'Get-Content inputs/Review.mq5'}},{'item':{'type':'mcp_tool_call','server':'mql5-chm','tool':'mql5_chm_read','status':'completed'}}]
+        save(self.root/'outputs/review.json',{'issues':[{'code':'ARRAY_OUT_OF_BOUNDS','line':5,'trigger':'Loop reaches 3','consequence':'Index exceeds 0..2'}]})
+        documented=[{'item':{'type':'command_execution','command':'Get-Content inputs/Review.mq5'}},self.documented()]
         self.assertEqual(grade('standalone-source-review',self.root,final,documented,{}),[])
         self.assertTrue(grade('standalone-source-review',self.root,final,[],{}))
         save(self.root/'outputs/review.json',{'issues':[None]})
@@ -258,7 +263,7 @@ class Scoring(unittest.TestCase):
         self.assertTrue(grade('report-comparison',self.root,final,[],{}))
     def test_source_review_findings_container_preserves_requirements(self):
         final={**self.final,'case_id':'standalone-source-review'}
-        documented=[{'item':{'type':'command_execution','command':'Get-Content inputs/Review.mq5'}},{'item':{'type':'mcp_tool_call','server':'mql5-chm','tool':'mql5_chm_read','status':'completed'}}]
+        documented=[{'item':{'type':'command_execution','command':'Get-Content inputs/Review.mq5'}},self.documented()]
         finding={'code':'ARRAY_OUT_OF_BOUNDS','line':5,'trigger':'Fourth loop iteration accesses samples[3]','consequence':'Array bounds error stops the program'}
         save(self.root/'outputs/review.json',{'findings':[finding]})
         self.assertEqual(grade('standalone-source-review',self.root,final,documented,{}),[])
@@ -290,6 +295,43 @@ class Scoring(unittest.TestCase):
 
 def assertion_source(cases):
     return '#include "Calculation.mqh"\nvoid OnStart()\n{\n'+'\n'.join('if(ClampCount('+str(c['n'])+','+str(c['maximum'])+')!='+str(c['expected'])+') Print("FAIL:case '+str(i)+'");' for i,c in enumerate(cases))+'\n}\n'
+
+class CalculationLiterals(unittest.TestCase):
+    def setUp(self):
+        self.cases=[{'n':n,'maximum':3,'expected':max(0,min(n,3))} for n in (-2,0,2,3,4)]+[{'n':2,'maximum':0,'expected':0}]
+    def source(self,literal):
+        return 'int ClampCount(int n,int maximum){return MathMin(MathMax(n,'+literal+'),maximum);}'
+    def test_python_only_spellings_cannot_pass_mql5_preparation(self):
+        # MetaEditor 6252 rejects these spelling families; native compilation
+        # evidence is retained separately from this dependency-free grader test.
+        for literal in ('0_0','0_00','0o0','0o_0','0b0','0b_0','0x_0','0x0_0'):
+            with self.subTest(literal=literal):self.assertFalse(evaluate_calculation(self.source(literal),self.cases))
+    def test_decimal_and_hexadecimal_control_spellings_remain_supported(self):
+        for literal in ('0','00','000','0x0','0X0','-0'):
+            with self.subTest(literal=literal):self.assertTrue(evaluate_calculation(self.source(literal),self.cases))
+        self.assertTrue(evaluate_calculation('int ClampCount(int n,int maximum){return MathMin(MathMax(n,0),MathMin(maximum,0Xa));}',self.cases))
+    def test_supported_literals_do_not_bypass_independent_expected_values(self):
+        self.assertFalse(evaluate_calculation(self.source('0x1'),self.cases))
+        self.assertFalse(evaluate_calculation(self.source('1'),self.cases))
+    def test_completed_preparation_artifacts_cannot_hide_python_literals(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);inputs=root/'inputs';outputs=root/'outputs';inputs.mkdir();outputs.mkdir()
+            save(inputs/'specification.json',{'cases':self.cases});save(outputs/'cases.json',self.cases)
+            (outputs/'SelfTest.mq5').write_text(assertion_source(self.cases))
+            final={'case_id':'isolated-behavior-tests','status':'limited','findings':[],'evidence':[],'limitations':['No native execution']}
+            for literal in ('0_0','0o0','0b0'):
+                code=self.source(literal);(inputs/'Calculation.mqh').write_text(code);(outputs/'Calculation.mqh').write_text(code)
+                with self.subTest(literal=literal):
+                    self.assertIn('Calculation expression fails the independent boundary specification',grade('isolated-behavior-tests',root,final,[],inventory(inputs)))
+    def test_comments_are_processed_before_literal_spelling_checks(self):
+        source='int ClampCount(int n,int maximum){return MathMin(MathMax(n,/* Python 0_0 is irrelevant here */0),maximum);}'
+        self.assertTrue(evaluate_calculation(source,self.cases))
+    def test_python_selection_keeps_its_own_valid_integer_syntax(self):
+        from evaluate_workflows import evaluate_python_calculation
+        for literal in ('0_0','0o0','0b0','0x_0'):
+            with self.subTest(literal=literal):
+                code='def clamp_count(n,maximum):\n    return min(max(n,'+literal+'),maximum)\n'
+                self.assertTrue(evaluate_python_calculation(code,self.cases))
 
 class Assertions(unittest.TestCase):
     def setUp(self):

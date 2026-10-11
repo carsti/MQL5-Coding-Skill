@@ -53,6 +53,63 @@ class DelegateFailures(unittest.TestCase):
   before=dict(os.environ);env=native.host_env(Path('C:/Windows/powershell.exe'))
   self.assertEqual(dict(os.environ),before);self.assertIn('WindowsPowerShell',env['PSModulePath']);self.assertNotIn('PowerShell/7',env['PSModulePath'])
 
+@unittest.skipUnless(os.name=='nt','Windows path and reparse semantics')
+class OrdinaryPaths(unittest.TestCase):
+ def test_ordinary_normal_path_is_preserved(self):
+  with tempfile.TemporaryDirectory(prefix='m5-native-path-',dir='C:/') as temporary:
+   root=Path(temporary)
+   self.assertEqual(native.ordinary(root),root)
+   self.assertEqual(native.ordinary(root/'fresh'),root/'fresh')
+ def test_parent_selector_is_normalized_before_identity_derivation(self):
+  with tempfile.TemporaryDirectory(prefix='m5-native-path-',dir='C:/') as temporary:
+   base=Path(temporary);(base/'selector').mkdir()
+   selected=base/'selector'/'..'/'fresh'
+   self.assertEqual(native.ordinary(selected),base/'fresh')
+ def test_missing_ordinary_ancestry_remains_supported(self):
+  with tempfile.TemporaryDirectory(prefix='m5-native-path-',dir='C:/') as temporary:
+   selected=Path(temporary)/'missing-parent'/'fresh'
+   self.assertEqual(native.ordinary(selected),selected)
+ def test_dangling_reparse_ancestor_is_rejected_before_normalization(self):
+  with tempfile.TemporaryDirectory(prefix='m5-native-path-',dir='C:/') as temporary:
+   base=Path(temporary);target=base/'target';target.mkdir();junction=base/'junction'
+   command=[str(Path(os.environ['SystemRoot'])/'System32/cmd.exe'),'/d','/c','mklink','/J',str(junction),str(target)]
+   process=native.run_owned(command,base,base/'junction.stdout',base/'junction.stderr',seconds=30)
+   self.assertEqual(process['exit_code'],0);self.assertTrue(process['cleanup_verified'])
+   # Both paths are task-owned. The junction remains observable after its
+   # target is removed, even though exists() is false for the junction.
+   self.assertTrue(target.resolve().is_relative_to(base.resolve()));target.rmdir()
+   self.assertFalse(junction.exists());self.assertTrue(junction.lstat().st_file_attributes & 0x400)
+   self.assertRaises(native.GateFailure,native.ordinary,junction/'..'/'fresh')
+ def test_normalization_does_not_hide_original_reparse_ancestor(self):
+  with tempfile.TemporaryDirectory(prefix='m5-native-path-',dir='C:/') as temporary:
+   base=Path(temporary);unsafe=base/'reparse-ancestor';unsafe.mkdir()
+   original=Path.lstat;inspected=[]
+   def metadata(path,*args,**kwargs):
+    inspected.append(path)
+    if path==unsafe:return SimpleNamespace(st_file_attributes=0x400)
+    return original(path,*args,**kwargs)
+   # Only the filesystem attribute is simulated. The original selector,
+   # ancestry traversal, normalization and refusal remain production logic.
+   with patch.object(Path,'lstat',metadata):
+    self.assertRaises(native.GateFailure,native.ordinary,unsafe/'..'/'fresh')
+   self.assertIn(unsafe,inspected)
+ def test_terminal_data_identity_uses_canonical_installation_path(self):
+  with tempfile.TemporaryDirectory(prefix='m5-native-path-',dir='C:/') as temporary:
+   base=Path(temporary);platform=base/'platform';platform.mkdir();(base/'selector').mkdir()
+   for name in ('MetaEditor64.exe','terminal64.exe','metatester64.exe'):(platform/name).write_bytes(b'Not executable: copied identity fixture')
+   cache=base/'cache';history=cache/'bases/MetaQuotes-Demo/history/EURUSD';history.mkdir(parents=True)
+   (history/'2025.hcc').write_bytes(b'Non-native history identity fixture')
+   application_data=base/'application-data';application_data.mkdir()
+   canonical_root=base/'run';canonical_install=canonical_root/'terminal'
+   expected=hashlib.md5(str(canonical_install).upper().encode('utf-16le')).hexdigest().upper()
+   with patch.dict(os.environ,{'APPDATA':str(application_data)}):
+    root,install,data,project,copied=native.prepare_terminal(platform,cache,base/'selector'/'..'/'run',SKILL)
+   self.assertEqual(root,canonical_root);self.assertEqual(install,canonical_install)
+   self.assertEqual(data,application_data/'MetaQuotes/Terminal'/expected)
+   self.assertEqual(project,canonical_root/'project');self.assertEqual(len(copied),6)
+   self.assertEqual((data/'origin.txt').read_text(encoding='utf-16'),str(canonical_install))
+   self.assertEqual(list((application_data/'MetaQuotes/Terminal').iterdir()),[data])
+
 @unittest.skipUnless(os.name=='nt','Windows test doubles')
 class SyntheticOrchestration(unittest.TestCase):
  def test_complete_chain_both_hosts(self):

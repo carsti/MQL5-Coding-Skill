@@ -24,9 +24,13 @@ def load(path):
 def save(path,value):Path(path).write_text(json.dumps(value,indent=2)+'\n',encoding='utf-8')
 def ordinary(path):
  path=Path(path).absolute()
+ # Inspect the original ancestry before normalization can hide a component
+ # behind "..". Derive later installation identities from the normalized path.
  for entry in (path,*path.parents):
-  if entry.exists() and entry.lstat().st_file_attributes & 0x400:raise GateFailure('Reparse inputs are unsupported')
- return path
+  try:metadata=entry.lstat()
+  except FileNotFoundError:continue
+  if metadata.st_file_attributes & 0x400:raise GateFailure('Reparse inputs are unsupported')
+ return Path(os.path.abspath(path))
 
 def verify_fixture(skill):
  source=Path(skill)/'assets/Mql5ToolkitSelfTest.mq5';header=Path(skill)/'assets/Mql5Assertions.mqh'
