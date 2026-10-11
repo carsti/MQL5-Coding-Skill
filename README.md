@@ -16,6 +16,8 @@ CI preserves running main/tag validations and gives each manually dispatched pac
 
 The development workflow evaluator verifies both empty job accounting and released output-file handles before reporting process cleanup. It waits within the existing bounded cleanup deadline; an output file that remains held produces unverified cleanup and prevents continuation. This also keeps retained traces available for immediate inspection or movement after a timed-out child exits.
 
+Workflow evaluation uses stable Codex CLI 0.162.1 with a separate live setup preflight before scored tasks. `--preflight-only` verifies model acceptance, structured output, sandbox file operations and the reviewed MCP identities. Actual CLI discovery must show exactly the selected staged skill enabled before preflight and each task, including exclusion of unrelated user and bundled skills. Shared setup failures stop the batch without fallback. The development native harness also accepts an optional private `--demo-auth-file` for a newly provisioned MetaQuotes-Demo account. It verifies the connected account with a nontrading script outside Strategy Tester, keeps temporary authentication outside retained artifacts and requires verified cleanup. See [evaluation setup](tests/WORKFLOW-EVALUATION.md) and [native integration](tests/NATIVE-INTEGRATION.md).
+
 ## Requirements
 
 - Windows with PowerShell 7 or Windows PowerShell 5.1.

@@ -135,7 +135,7 @@ class TestCommandFailures(unittest.TestCase):
         self.hosts = [Path(os.environ["ProgramFiles"]) / "PowerShell/7/pwsh.exe",
                       Path(os.environ["WINDIR"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"]
 
-    def run_block(self, host, selection_exit, native_exit):
+    def run_block(self, host, selection_exit, native_exit, demo_exit=0):
         with tempfile.TemporaryDirectory(prefix="mql5-ci-exits-") as temporary:
             root = Path(temporary)
             witness = root / "calls.jsonl"
@@ -144,7 +144,7 @@ class TestCommandFailures(unittest.TestCase):
                 "import json,pathlib,sys\n"
                 f"witness=pathlib.Path({str(witness)!r})\n"
                 "with witness.open('a',encoding='utf-8') as stream: stream.write(json.dumps(sys.argv[1:])+'\\n')\n"
-                f"raise SystemExit({selection_exit} if 'test_selection_workflows.py' in sys.argv else {native_exit})\n",
+                f"raise SystemExit({selection_exit} if 'test_selection_workflows.py' in sys.argv else {demo_exit} if 'test_native_demo.py' in sys.argv else {native_exit})\n",
                 encoding="utf-8")
             quote = lambda path: "'" + str(path).replace("'", "''") + "'"
             script = root / "step.ps1"
@@ -186,7 +186,14 @@ class TestCommandFailures(unittest.TestCase):
             with self.subTest(host=host.name):
                 result, calls = self.run_block(host, 0, 0)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertEqual(len(calls), 2)
+                self.assertEqual(len(calls), 3)
+
+    def test_failed_demo_tests_fail_the_step(self):
+        for host in self.hosts:
+            with self.subTest(host=host.name):
+                result, calls = self.run_block(host, 0, 0, 6)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(len(calls), 3)
 
 
 if __name__ == "__main__":

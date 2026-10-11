@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "codex_version": "0.162.1",
+  "source_trace_sha256": "5fe602a007b6c9623f5fd8ebf64353137c67120c571682dade6085bbe4a35f27",
+  "command": "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -NoProfile -Command \"& 'C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe' -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'C:\\\\fixture\\\\workspace\\\\.agents\\\\skills\\\\mql5-coding\\\\scripts\\\\Invoke-Mql5Project.ps1' -ProfilePath \\\"C:\\\\fixture\\\\workspace\\\\inputs\\\\project\\\\profile.json\\\" -Action Compile 2>&1 | Tee-Object -FilePath 'outputs\\\\impact\\\\compile-console.txt'\n\"'$taskCompileExit = $LASTEXITCODE\nSet-Content -LiteralPath '\"'outputs\\\\impact\\\\compile-exit-code.txt' -Value \"'$taskCompileExit -Encoding utf8\nGet-Content -LiteralPath '\"'outputs\\\\impact\\\\compile-console.txt' | Where-Object { \"'$_ -like '\"'MQL5_COMPILE_RECEIPT=*' } | Set-Content -LiteralPath 'outputs\\\\impact\\\\compile-receipts.txt' -Encoding utf8\nexit \"'$taskCompileExit'",
+  "expected_compile_calls": 1,
+  "provenance": "Observed CLI display; reviewed wrapper invocation and independently verified source/EX5/log receipts. Machine-specific workspace path replaced."
+}

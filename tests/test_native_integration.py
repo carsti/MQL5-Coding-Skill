@@ -1,7 +1,7 @@
 """Native evidence grading and synthetic helper orchestration, never native proof."""
 from pathlib import Path
 from types import SimpleNamespace
-import hashlib, os, shutil, subprocess, sys, tempfile, unittest
+import hashlib, json, os, shutil, subprocess, sys, tempfile, unittest
 from unittest.mock import patch
 import native_integration as native
 REPO=Path(__file__).resolve().parents[1];SKILL=REPO/'skills/mql5-coding'
@@ -33,6 +33,15 @@ class NativeEvidence(unittest.TestCase):
    for value in ({'state':'finite','value':'1'},{'state':'missing','value':None},{'state':'undefined','value':None}):self.report['metrics'][name]=value;self.assertRaises(native.GateFailure,self.verify)
    self.report['metrics'][name]={'state':'finite','value':'0'}
  def test_marker_redaction(self):self.journal['groups'].append({'message':self.nonce,'count':1});self.assertRaises(native.GateFailure,self.verify)
+ def test_input_nonce_redaction_preserves_evidence_and_marker_gate(self):
+  self.journal['segments']=[{'sha256':hashlib.sha256(b'journal fixture').hexdigest(),'source_offset':2,'byte_length':42}]
+  self.journal['groups'].append({'message':'TestNonce='+self.nonce,'representative_excerpt':'TestNonce='+self.nonce,'count':1})
+  original=json.loads(json.dumps(self.journal));redacted,count=native.redact_fixture_nonce(self.journal,self.nonce)
+  self.assertEqual(self.journal,original);self.assertEqual(count,2);self.assertEqual(redacted['segments'],original['segments'])
+  self.assertEqual(redacted['groups'][-1]['count'],1);self.assertIn('<TEST_NONCE>',redacted['groups'][-1]['message'])
+  self.journal=redacted;self.verify()
+  self.journal['groups'].append({'message':'MQL5_CODING_PASS:'+self.nonce+':toolkit-selftest','count':1})
+  self.journal,_=native.redact_fixture_nonce(self.journal,self.nonce);self.assertRaises(native.GateFailure,self.verify)
  def test_existing_root_rejected(self):
   with tempfile.TemporaryDirectory() as temp:
    p=Path(temp);self.assertRaises(native.GateFailure,native.prepare_terminal,p,p,p,SKILL)
@@ -119,7 +128,7 @@ class SyntheticOrchestration(unittest.TestCase):
    subprocess.run([str(compiler),'/nologo','/out:'+str(binaries/'MetaEditor64.exe'),str(REPO/'tests/FakeMetaEditor.cs')],capture_output=True,check=True)
    source=(REPO/'tests/FakeTerminal.cs').read_text().replace('string marker = Environment.GetEnvironmentVariable("FAKE_MT5_MARKER") ?? "";', '''string preset = File.ReadAllText(Path.Combine(dataPath,"MQL5","Profiles","Tester",config["ExpertParameters"]),Encoding.Unicode);
         string nonce = System.Text.RegularExpressions.Regex.Match(preset,@"TestNonce=([0-9a-f]{32})").Groups[1].Value;
-        string marker = "MQL5_CODING_PASS:"+nonce+":toolkit-selftest";''').replace('ApplicationLine(config, marker),','ApplicationLine(config, "MQL5_TEST_COUNTS:checked=11,failed=0"),\n                ApplicationLine(config, marker),')
+        string marker = "MQL5_CODING_PASS:"+nonce+":toolkit-selftest";''').replace('ApplicationLine(config, marker),','ApplicationLine(config, "TestNonce="+nonce),\n                ApplicationLine(config, "MQL5_TEST_COUNTS:checked=11,failed=0"),\n                ApplicationLine(config, marker),')
    source=source.replace('string configPath = ConfigPath(args);','File.AppendAllText(Environment.GetEnvironmentVariable("FAKE_NATIVE_LAUNCH_WITNESS"),"launched\\n"); string configPath = ConfigPath(args);')
    terminal=base/'terminal.cs';terminal.write_text(source);subprocess.run([str(compiler),'/nologo','/out:'+str(binaries/'terminal64.exe'),str(terminal),str(metadata)],capture_output=True,check=True)
    for host in (Path(os.environ['ProgramFiles'])/'PowerShell/7/pwsh.exe',Path(os.environ['WINDIR'])/'System32/WindowsPowerShell/v1.0/powershell.exe'):

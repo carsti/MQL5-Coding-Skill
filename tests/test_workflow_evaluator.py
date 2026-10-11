@@ -11,8 +11,87 @@ import threading
 import time
 import unittest
 from unittest.mock import patch
-from evaluate_workflows import REPO, SCHEMA, compiled_outcome, evaluate_assertions, evaluate_calculation, forbidden_workflow_actions, grade, inventory, normalize_trace, prepare, ps, read_trace, save, staged_skill_issues, supplied_compile_command, terminal_launch_attempt, trace_summary, verify_workflow_receipts
+from evaluate_workflows import REPO, SCHEMA, compiled_outcome, evaluate_assertions, evaluate_calculation, forbidden_workflow_actions, grade, grade_preflight, shared_setup_failure, codex_command, inventory, normalize_trace, prepare, ps, read_trace, save, staged_skill_issues, supplied_compile_command, terminal_launch_attempt, trace_summary, verify_workflow_receipts
 from workflow_process import run_owned
+
+class SetupPreflight(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
+        (self.root/'inputs').mkdir();(self.root/'outputs').mkdir()
+        self.probe='independent-probe';(self.root/'inputs/preflight.txt').write_text(self.probe,encoding='utf-8');save(self.root/'outputs/preflight.json',{'probe':self.probe})
+        self.final={'case_id':'setup-preflight','status':'completed','findings':[],'evidence':['outputs/preflight.json'],'limitations':[]}
+        self.expected={'corpus_revision':'a'*64,'index_sha256':'b'*64}
+        self.events=[{'type':'item.completed','item':{'type':'mcp_tool_call','server':'mql5-chm','tool':'mql5_chm_status','status':'completed','result':{'structured_content':dict(self.expected)}}}]
+        self.measurement={'status':'completed','exit_code':0,'cleanup_verified':True,'console_bytes':100}
+    def tearDown(self):self.temp.cleanup()
+    def grade(self):return grade_preflight(self.root,self.final,self.events,self.measurement,self.probe,self.expected)
+    def test_completed_live_contract(self):self.assertEqual(self.grade(),[])
+    def test_status_claim_without_returned_evidence_fails(self):self.events=[];self.assertTrue(self.grade())
+    def test_malformed_structured_conclusions_fail(self):
+        original=dict(self.final)
+        for value in (None,[],{'case_id':'setup-preflight','status':'completed'},dict(original,findings=[{'code':1,'detail':'wrong type'}]),dict(original,evidence='not-array'),dict(original,extra=True)):
+            with self.subTest(value=value):self.final=value;self.assertTrue(self.grade())
+        self.final=original
+
+    def test_preflight_launch_failure_is_retained(self):
+        from types import SimpleNamespace
+        from evaluate_workflows import run_preflight
+        skill=self.root/'source-skill';skill.mkdir();(skill/'SKILL.md').write_text('Selected fixture')
+        output=self.root/'evaluation';output.mkdir();save(output/'response.schema.json',SCHEMA)
+        args=SimpleNamespace(skill_root=skill,output=output,codex_path=Path('C:/missing.exe'),mcp_package_root=Path('C:/mcp'),python=Path(sys.executable),timeout_seconds=60)
+        result={'mcp':{'corpus_revision':'a'*64,'index_revision':'b'*64},'codex_version':'codex-cli 0.162.1','codex_sha256':'c'*64}
+        with patch('evaluate_workflows.run_owned',side_effect=OSError('synthetic startup failure')):
+            self.assertFalse(run_preflight(args,result,[],{},'gpt-6-astra','xhigh'))
+        proof=json.loads((output/'preflight/result.json').read_text())
+        self.assertEqual(proof['status'],'failed');self.assertFalse(proof['measurement']['cleanup_verified']);self.assertIsNone(proof['trace_sha256'])
+    def test_wrong_corpus_and_error_responses_fail(self):
+        result=self.events[0]['item']['result']
+        for key in self.expected:
+            with self.subTest(key=key):
+                result['structured_content'][key]='c'*64;self.assertTrue(self.grade());result['structured_content'][key]=self.expected[key]
+        result['isError']=True;self.assertTrue(self.grade())
+    def test_text_status_and_malformed_roots(self):
+        result=self.events[0]['item']['result'];result.pop('structured_content')
+        result['content']=[{'type':'text','text':json.dumps(self.expected)}];self.assertEqual(self.grade(),[])
+        for bad in ('[]','null','broken'):
+            with self.subTest(bad=bad):result['content'][0]['text']=bad;self.assertTrue(self.grade())
+    def test_sandbox_output_and_input_are_required(self):
+        save(self.root/'outputs/preflight.json',{'probe':'wrong'});self.assertTrue(self.grade());save(self.root/'outputs/preflight.json',{'probe':self.probe})
+        (self.root/'inputs/preflight.txt').write_text('changed');self.assertTrue(self.grade())
+    def test_final_model_errors_and_execution_limits(self):
+        for key,value in [('status','timed_out'),('cleanup_verified',False),('exit_code',1),('console_bytes',16777217)]:
+            with self.subTest(key=key):
+                original=self.measurement[key];self.measurement[key]=value;self.assertTrue(self.grade());self.measurement[key]=original
+        self.events.append({'type':'error','message':'model requires a newer version of Codex'});self.assertTrue(self.grade());self.assertIsNotNone(shared_setup_failure(self.events,self.measurement))
+    def test_shared_failures_abort_but_scored_failures_do_not(self):
+        self.assertIsNone(shared_setup_failure(self.events,self.measurement))
+        self.measurement['cleanup_verified']=False;self.assertIsNotNone(shared_setup_failure([],self.measurement))
+        self.measurement['cleanup_verified']=True
+        for text in ('The model requires a newer version of Codex','invalid API key','authentication failed','sandbox unavailable','MCP startup failed'):
+            with self.subTest(text=text):self.assertIsNotNone(shared_setup_failure([{'type':'error','message':text}],self.measurement))
+        events=[{'type':'item.completed','item':{'type':'command_execution','command':'Get-Content x','status':'completed','exit_code':1,'aggregated_output':'task fixture not found'}}]
+        self.assertIsNone(shared_setup_failure(events,self.measurement))
+    def test_named_platform_launch_fails_preflight(self):
+        self.events.append({'type':'item.completed','item':{'type':'command_execution','command':'Invoke-Mt5TesterSmoke.ps1 -Execute','status':'completed','exit_code':0}});self.assertTrue(self.grade())
+    def test_usage_limits_abort_after_task_commands(self):
+        command={'type':'item.completed','item':{'type':'command_execution','command':'Get-Content inputs/Review.mq5','status':'completed','exit_code':0,'aggregated_output':'fixture source'}}
+        for error in (
+            {'type':'error','message':'You\u2019ve hit your usage limit. Try again later.'},
+            {'type':'turn.failed','error':{'message':'Rate limit exceeded'}},
+            {'type':'error','code':'insufficient_quota','message':'Quota exceeded'},
+            {'type':'item.completed','item':{'type':'error','message':'Insufficient credits'}},
+        ):
+            with self.subTest(error=error):
+                self.assertIsNotNone(shared_setup_failure([command,error],self.measurement))
+    def test_usage_words_in_task_output_are_not_setup_errors(self):
+        command={'type':'item.completed','item':{'type':'command_execution','command':'Get-Content inputs/messages.txt','status':'completed','exit_code':0,'aggregated_output':'usage limit; rate_limit_exceeded; insufficient_quota'}}
+        self.assertIsNone(shared_setup_failure([command],self.measurement))
+    def test_shared_command_preserves_isolation_and_model(self):
+        from types import SimpleNamespace
+        args=SimpleNamespace(codex_path=Path('C:/codex.exe'),mcp_package_root=Path('C:/portable'))
+        command=codex_command(args,self.root,self.root/'skill',[],self.root/'schema.json',self.root/'final.json','probe','gpt-6-astra','xhigh')
+        self.assertEqual(command[command.index('--model')+1],'gpt-6-astra');self.assertEqual(command[command.index('--sandbox')+1],'workspace-write')
+        for flag in ('--json','--ignore-user-config','--ignore-rules','--ephemeral','--output-schema'):self.assertIn(flag,command)
 
 class Scoring(unittest.TestCase):
     def setUp(self):

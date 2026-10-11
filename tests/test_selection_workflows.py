@@ -48,6 +48,16 @@ class Selection(unittest.TestCase):
   save(self.root/'outputs/inventory.json',{'files':files});return context
  def test_general_inventory_passes_without_platform_resources(self):
   c=self.make_inventory();self.assertEqual(grade(c['case'],self.root,self.final(c['case']),[self.event('Get-ChildItem inputs -Recurse')],c['input_hashes']),[])
+ def test_inventory_prompt_defines_relative_path_base(self):
+  c=self.make_inventory()
+  text=workflow_prompt(c['case'],c,self.skill,Path('C:/python.exe'),Path('C:/pwsh.exe'))
+  self.assertIn('Paths must be relative to the inputs directory, without the inputs/ prefix',text)
+  self.assertIn('legacy/Legacy.mq4',text)
+ def test_workspace_relative_inventory_remains_rejected(self):
+  c=self.make_inventory();result=json.loads((self.root/'outputs/inventory.json').read_text())
+  for item in result['files']:item['path']='inputs/'+item['path']
+  save(self.root/'outputs/inventory.json',result)
+  self.assertIn('Incorrect file inventory',grade(c['case'],self.root,self.final(c['case']),[self.event('Get-ChildItem inputs')],c['input_hashes']))
  def test_inventory_claim_does_not_replace_bytes(self):
   c=self.make_inventory();save(self.root/'outputs/inventory.json',{'files':[]});self.assertIn('Incorrect file inventory',grade(c['case'],self.root,self.final(c['case']),[self.event('Get-ChildItem inputs')],c['input_hashes']))
  def test_general_task_rejects_documentation_calls(self):

@@ -62,7 +62,7 @@ jobs:
 
       - name: Test workflow evaluator without credentials
         shell: pwsh
-        run: python -B -m unittest discover -s tests -p test_workflow_evaluator.py -v
+        run: python -B -m unittest discover -s tests -p "test_workflow*.py" -v
 
       - name: Test implicit selection and native harness without native execution
         shell: pwsh
@@ -71,6 +71,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Implicit skill selection tests failed.' }
           python -B -m unittest discover -s tests -p test_native_integration.py -v
           if ($LASTEXITCODE -ne 0) { throw 'Native integration harness tests failed.' }
+          python -B -m unittest discover -s tests -p test_native_demo.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'Dedicated-demo harness tests failed.' }
 
       - name: Test source snapshots with both PowerShell hosts
         shell: pwsh

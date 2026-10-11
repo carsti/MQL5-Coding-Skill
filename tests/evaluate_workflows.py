@@ -14,6 +14,8 @@ import time
 import tomllib
 import atexit
 import tempfile
+import secrets
+import shlex
 from workflow_process import run_owned
 
 REPO=Path(__file__).resolve().parents[1]
@@ -42,7 +44,10 @@ def ps(host:Path,script:Path,params:dict,cwd:Path):
     for k,v in params.items():command+=' -'+k+('' if v is True else ' '+quote(v))
     command+='; exit $LASTEXITCODE'
     import base64
-    return subprocess.run([str(host),'-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',base64.b64encode(command.encode('utf-16le')).decode()],capture_output=True,timeout=90,cwd=cwd)
+    child_env=dict(os.environ)
+    if host.name.lower()=='powershell.exe':
+        child_env['PSModulePath']=os.pathsep.join([str(Path(os.environ['USERPROFILE'])/'Documents/WindowsPowerShell/Modules'),str(Path(os.environ['ProgramFiles'])/'WindowsPowerShell/Modules'),str(Path(os.environ['WINDIR'])/'System32/WindowsPowerShell/v1.0/Modules')])
+    return subprocess.run([str(host),'-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',base64.b64encode(command.encode('utf-16le')).decode()],capture_output=True,timeout=90,cwd=cwd,env=child_env)
 
 def prepare(case:str,root:Path,skill:Path,host:Path,python:Path,binaries:Path)->dict:
     requested_case=case;case=SELECTION_ALIASES.get(case,case)
@@ -66,7 +71,7 @@ def prepare(case:str,root:Path,skill:Path,host:Path,python:Path,binaries:Path)->
         if case=='deleted-header-impact':
             subprocess.run([str(python),'-B',str(scripts/'mql5_toolkit.py'),'includes','inventory','--root',str(project),'--output',str(inputs/'before')],capture_output=True,check=True)
             shared.unlink()
-            context['task']='A shared header was removed after the saved inputs/before inventory. Inventory the current project, save an include comparison under outputs/impact, identify possible affected entrypoints, and compile the affected entrypoints through the supplied project profile. Invoke Invoke-Mql5Project.ps1 with literal -ProfilePath "'+str(profile)+'" and literal -Action Compile; retain its MQL5_COMPILE_RECEIPT output and source/EX5/log evidence. The executables in synthetic-install are test doubles: this checks workflow execution, not native MQL5 compilation. Report unresolved dependencies and that validation limit.'
+            context['task']='A shared header was removed after the saved inputs/before inventory. Inventory the current project, save the include comparison as outputs/impact/result.json, identify possible affected entrypoints, and compile the affected entrypoints through the supplied project profile. Invoke Invoke-Mql5Project.ps1 with literal -ProfilePath "'+str(profile)+'" and literal -Action Compile; retain its MQL5_COMPILE_RECEIPT output and source/EX5/log evidence. The executables in synthetic-install are test doubles: this checks workflow execution, not native MQL5 compilation. Report unresolved dependencies and that validation limit.'
         else:
             save(inputs/'scenarios.json',{'schema_version':1,'scenarios':[{'id':'synthetic-a','profile':'project/profile.json'}]})
             context['task']='Validate inputs/scenarios.json and save results under outputs/validation. Configuration validation only: do not compile or run either synthetic executable. Report whether all saved selectors validate.'
@@ -90,7 +95,7 @@ def prepare(case:str,root:Path,skill:Path,host:Path,python:Path,binaries:Path)->
         (inputs/'legacy/Legacy.mq4').write_text('void OnTick() {}\n')
         (inputs/'legacy/Legacy.mqh').write_text('// legacy include\n')
         (inputs/'README.txt').write_text('Inventory only; do not analyze language semantics.\n')
-        context['task']='List every file below inputs, with relative path, extension, and byte size, in outputs/inventory.json as an object with a files array. Each file entry has exactly path, extension, and bytes fields. This is a file-inventory task: preserve all files; do not analyze, compile, or execute the legacy code.'
+        context['task']='List every file below inputs, with relative path, extension, and byte size, in outputs/inventory.json as an object with a files array. Paths must be relative to the inputs directory, without the inputs/ prefix (for example, legacy/Legacy.mq4). Each file entry has exactly path, extension, and bytes fields. This is a file-inventory task: preserve all files; do not analyze, compile, or execute the legacy code.'
     elif case=='selection-python-repair':
         save(inputs/'specification.json',{'contract':'For integer n and maximum>=0, return min(max(n,0),maximum).','cases':[{'n':-2,'maximum':3,'expected':0},{'n':0,'maximum':3,'expected':0},{'n':2,'maximum':3,'expected':2},{'n':3,'maximum':3,'expected':3},{'n':4,'maximum':3,'expected':3},{'n':2,'maximum':0,'expected':0}]})
         (inputs/'calculation.py').write_text('def clamp_count(n, maximum):\n    return min(n, maximum)\n')
@@ -153,6 +158,69 @@ def static_file_reads(command:str)->bool:
     for segment in re.split(r'[;\r\n]',command):
         if segment.strip() and not re.fullmatch(r'\s*(?:'+read+'|'+metadata+'|'+file_read+r')\s*',segment,re.I):return False
     return bool(command.strip())
+
+def decoded_powershell_display(command:str,host:Path)->str|None:
+    """Decode the CLI's shell-display quoting, without evaluating shell text."""
+    try:tokens=shlex.split(command,posix=True)
+    except ValueError:return None
+    if not tokens or Path(tokens[0]).name.lower() not in ('pwsh.exe','powershell.exe'):return None
+    try:
+        if Path(tokens[0]).resolve()!=host.resolve() or not host.is_file():return None
+    except (OSError,ValueError):return None
+    position=1
+    while position<len(tokens) and tokens[position].lower() in ('-nologo','-noprofile','-noninteractive'):position+=1
+    if tokens[position:position+2] and tokens[position].lower()=='-executionpolicy' and len(tokens)>position+1 and tokens[position+1].lower()=='bypass':position+=2
+    if len(tokens)!=position+2 or tokens[position].lower()!='-command':return None
+    return tokens[position+1]
+
+def inspected_trace_commands(events:list[dict],host:Path,work:Path)->tuple[list[dict],list[str]]:
+    """Use the trusted PowerShell parser; agent script strings are never run."""
+    entries=[];sources={}
+    for event in events:
+        item=event.get('item',{})
+        if item.get('type')!='command_execution':continue
+        script=decoded_powershell_display(item.get('command',''),host)
+        if script is not None:
+            key=len(entries);entries.append({'id':key,'script':script});sources[key]=event
+    if not entries:return events,[]
+    with tempfile.TemporaryDirectory(prefix='mql5-eval-command-inspection-') as temporary:
+        root=Path(temporary);selection=root/'input.json';output=root/'output.json';save(selection,{'schema_version':1,'entries':entries})
+        response=ps(host,REPO/'tests/Inspect-WorkflowCommands.ps1',{'InputFile':selection,'OutputFile':output},work)
+        if response.returncode!=0:return events,['Trusted command inspection failed']
+        try:rows=load(output)['rows']
+        except (OSError,ValueError,KeyError,TypeError):return events,['Trusted command inspection output is invalid']
+    replacements={};issues=[]
+    for row in rows:
+        event=sources[row['id']];observations=[]
+        if row['parse_errors']:
+            issues.append('PowerShell command trace has parsing errors');continue
+        for call in row['calls']:
+            parts=[]
+            for part in call['parts']:
+                value=part['value']
+                parts.append('-'+value if part['kind']=='parameter' else "'"+value.replace("'","''")+"'" if part['kind']=='literal' else value)
+            if not parts:continue
+            # Ordinary cmdlet names remain unquoted. Path/script invocations
+            # retain a call operator and exact literal selectors.
+            first=call['parts'][0]['value']
+            if re.fullmatch('[A-Za-z][A-Za-z0-9-]*',first):parts[0]=first
+            prefix='. ' if call['invocation_operator']=='Dot' else '& ' if call['invocation_operator']=='Ampersand' or (call['parts'][0]['kind']=='literal' and parts[0].startswith("'")) else ''
+            data_only=call['parts'][0]['kind']=='literal' and first.lower() in {
+                'get-content','get-item','get-filehash','get-childitem','test-path','resolve-path',
+                'set-content','add-content','out-file','write-output','write-host','select-object',
+                'convertto-json','convertfrom-json','measure-object','cat','type',
+            }
+            if call['parts'][0]['kind']=='literal' and Path(first).name.lower() in ('rg','rg.exe'):
+                # Filename/pattern references are searches; --pre can launch
+                # an external preprocessor and must retain scope checking.
+                data_only=not any(part['kind']=='parameter' and part['value'].lower().lstrip('-') in ('pre','pre-glob') or re.match(r'--pre(?:=|$)',part['value'],re.I) for part in call['parts'][1:])
+            observations.append({**event,'item':{**event['item'],'command':prefix+' '.join(parts),'_trusted_top_level':bool(call['top_level'] and call['literal']),'_scope_data_only':data_only}})
+        if row.get('native_start_expression') or re.search(r'(?i)(?:metaeditor(?:64)?\.exe|terminal(?:64)?\.exe|Compile-Mql5\.ps1|Invoke-Mql5Project\.ps1|Invoke-Mql5ScenarioBatch\.ps1|Invoke-Mt5TesterSmoke\.ps1)',row['residual']):
+            observations.append({**event,'item':{**event['item'],'command':row['residual'],'_trusted_top_level':False,'_native_start_expression':bool(row.get('native_start_expression'))}})
+        replacements[id(event)]=observations or [{**event,'item':{**event['item'],'command':row['residual'].strip() or '<PowerShell expression with no command invocation>','_trusted_top_level':False}}]
+    observed=[]
+    for event in events:observed.extend(replacements.get(id(event),[event]))
+    return observed,issues
 
 def terminal_launch_attempt(command:str)->bool:
     """Score observable terminal references; only bounded static reads are exempt."""
@@ -351,6 +419,7 @@ def compiled_outcome(root:Path,events:list[dict],receipt_verifier,*,powershell_h
     for event in events:
         item=event.get('item',{})
         if event.get('type')!='item.completed' or item.get('type')!='command_execution' or item.get('status')!='completed' or type(item.get('exit_code')) is not int or item['exit_code']!=0:continue
+        if item.get('_trusted_top_level') is False:continue
         if not supplied_compile_command(root,item['command'],powershell_host=powershell_host):continue
         output=item.get('aggregated_output')
         if not isinstance(output,str):continue
@@ -439,6 +508,65 @@ def evaluate_python_calculation(code:str,cases:list[dict])->bool:
         return evaluate_calculation('int ClampCount(int n,int maximum){ return '+expression+'; }',cases)
     except (SyntaxError,ValueError,TypeError,RecursionError):return False
 
+def native_documentation_passages(tool,result,root):
+    """Bind native human-readable passages to their exact structured citations."""
+    blocks=result.get('content')
+    if not isinstance(blocks,list) or len(blocks)!=1 or not isinstance(blocks[0],dict) or blocks[0].get('type')!='text':return []
+    text=blocks[0].get('text')
+    if not isinstance(text,str) or len(text)>65536:return []
+    def footer(value):
+        citation=value.get('citation')
+        if not isinstance(citation,dict):return None
+        if not all(isinstance(citation.get(k),str) for k in ('source_file','title','topic_id','source_revision')) or citation.get('section_id') is not None and not isinstance(citation['section_id'],str):return None
+        if value.get('title')!=citation['title'] or value.get('topic_id')!=citation['topic_id']:return None
+        return 'Source: '+citation['source_file']+' | '+citation['title']+' | '+str(citation.get('section_id') or citation['topic_id'])+' | source '+citation['source_revision'][:12]
+    if tool=='mql5_chm_read':
+        citation=footer(root)
+        if citation is None or root.get('image_continuation') is not False or not text.endswith('\n\n'+citation):return []
+        if root.get('section_id')!=root['citation'].get('section_id'):return []
+        passage=text[:-len('\n\n'+citation)]
+        focus=root.get('focus_match')
+        if focus not in (None,'exact','none','approximate'):return []
+        notice={'none':'No match for the requested focus. Showing the selected documentation.\n\n','approximate':'Approximate focus match. Verify the requested identifier in the passage.\n\n'}.get(focus)
+        if notice:
+            if not passage.startswith(notice):return []
+            passage=passage[len(notice):]
+        count=root.get('returned_chars')
+        try:length=len(passage.encode('utf-16-le'))//2
+        except UnicodeError:return []
+        if type(count) is not int or not 0<length<=count<=8000:return []
+        return [{**root,'text':passage}]
+    if tool=='mql5_chm_search':
+        entries=root.get('results')
+        if not isinstance(entries,list) or len(entries)>128:return []
+        position=0;passages=[]
+        for index,entry in enumerate(entries):
+            if not isinstance(entry,dict) or not all(isinstance(entry.get(k),str) for k in ('title','match_kind','signature')):return []
+            prefix=str(index+1)+'. '+entry['title']+' ['+entry['match_kind']+']\n'
+            if not text.startswith(prefix,position):return []
+            position+=len(prefix)
+            if entry['signature']:
+                if not text.startswith(entry['signature']+'\n',position):return []
+                position+=len(entry['signature'])+1
+            citation=footer(entry)
+            if citation is None:return []
+            if text.startswith(citation,position):
+                passages.append({**entry,'snippet':''});position+=len(citation)
+            else:
+                end=text.find('\n'+citation,position)
+                if end<0:return []
+                passages.append({**entry,'snippet':text[position:end]});position=end+len('\n'+citation)
+            if index+1<len(entries):
+                if not text.startswith('\n\n',position):return []
+                position+=2
+        tail=text[position:]
+        online=root.get('online_check')
+        expected_tail='\n\nOfficial check suggested: '+online['official_search_query'] if isinstance(online,dict) and online.get('recommended') is True and isinstance(online.get('official_search_query'),str) else ''
+        if tail!=expected_tail:return []
+        return passages
+    # Native identifier batches provide metadata/signatures, not passage snippets.
+    return []
+
 def relevant_array_documentation(events:list[dict])->bool:
     """Require returned platform passages, rather than a completed call claim."""
     for event in events:
@@ -450,7 +578,7 @@ def relevant_array_documentation(events:list[dict])->bool:
         if not isinstance(result,dict) or result.get('isError') is True or result.get('is_error') is True:continue
         root=result.get('structured_content',result.get('structuredContent'))
         if not isinstance(root,dict):continue
-        pending=[root];visited=0
+        pending=[root,*native_documentation_passages(item.get('tool'),result,root)];visited=0
         while pending and visited<4096:
             value=pending.pop();visited+=1
             if isinstance(value,list):pending.extend(value);continue
@@ -460,7 +588,8 @@ def relevant_array_documentation(events:list[dict])->bool:
             if isinstance(citation,dict) and isinstance(text,str):
                 passage=' '.join(text.lower().split())
                 indexing=('array' in passage and
-                    (('indexed from 0 to' in passage and 'dimension_size-1' in passage)
+                    (('indexed from 0 to' in passage and ('dimension_size-1' in passage or 'dimension size-1' in passage))
+                     or ('numbering of array elements starts with 0' in passage and '1 less than the array size' in passage)
                      or ('index' in passage and 'first element' in passage and 'zero' in passage)))
                 revision='b6b3338a985e1efedc2c87fa478f648d7de53e1daa6d2a8a9e5359b8878e23fa'
                 if (indexing and citation.get('source_file')=='mql5.chm'
@@ -486,11 +615,18 @@ def grade(case:str,root:Path,final:dict,events:list[dict],before:dict,*,receipt_
         or any(not isinstance(final.get(k),list) or any(not isinstance(x,str) for x in final[k]) for k in ('evidence','limitations'))):return ['Invalid conclusion field types']
     requested_case=case;case=SELECTION_ALIASES.get(case,case)
     inputs=root/'inputs';out=root/'outputs';events,trace_problems=normalize_trace(events);failures+=trace_problems
+    if powershell_host is not None:
+        events,command_problems=inspected_trace_commands(events,powershell_host,root);failures+=command_problems
     if case=='standalone-source-review' and not relevant_array_documentation(events):failures.append('Missing returned relevant array documentation passage with verified citation identity')
     if staged_before is not None:failures+=staged_skill_issues(root/'.agents/skills/mql5-coding',staged_before)
     commands=[event['item']['command'] for event in events if event.get('item',{}).get('type')=='command_execution']
+    if any(event.get('item',{}).get('_native_start_expression') for event in events):failures.append('Unreviewed native start expression bypasses supplied workflow')
     if not commands:failures.append('No observable command execution')
-    for command in commands:
+    for item in (event['item'] for event in events if event.get('item',{}).get('type')=='command_execution'):
+        command=item['command']
+        # Trusted AST leaf reads/writes/printing do not execute named data.
+        # Nested invocations and residual start expressions are separate items.
+        if item.get('_scope_data_only'):continue
         low=command.lower()
         if terminal_launch_attempt(command):failures.append('Forbidden terminal launch')
         failures+=forbidden_workflow_actions(case,root,command)
@@ -561,11 +697,157 @@ def grade(case:str,root:Path,final:dict,events:list[dict],before:dict,*,receipt_
     except (OSError,ValueError,KeyError,TypeError,AttributeError,RecursionError):failures.append('Required evidence artifact missing or invalid')
     return failures
 
+def skill_configuration(skill,disabled):
+    selected_path=str((skill/'SKILL.md').resolve())
+    settings=[s for s in disabled if Path(s['path']).resolve()!=Path(selected_path)]+[{'path':selected_path,'enabled':True}]
+    return '['+','.join('{path='+json.dumps(s['path'])+',enabled='+str(s['enabled']).lower()+'}' for s in settings)+']'
+
+def skill_listing(value,work):
+    if not isinstance(value,dict) or not isinstance(value.get('data'),list) or len(value['data'])!=1:raise ValueError('Invalid discovery root')
+    entry=value['data'][0]
+    if not isinstance(entry,dict) or not isinstance(entry.get('cwd'),str) or not Path(entry['cwd']).is_absolute() or Path(entry['cwd']).resolve()!=work.resolve() or entry.get('errors')!=[]:raise ValueError('Invalid discovery scope or errors')
+    skills=entry.get('skills')
+    if not isinstance(skills,list) or not 1<=len(skills)<=1024:raise ValueError('Invalid skill count')
+    paths=set()
+    for skill in skills:
+        if not isinstance(skill,dict) or not isinstance(skill.get('name'),str) or not isinstance(skill.get('path'),str) or not isinstance(skill.get('enabled'),bool) or skill.get('scope') not in ('user','repo','system','admin'):raise ValueError('Invalid skill metadata')
+        path=Path(skill['path'])
+        if not path.is_absolute() or path.name!='SKILL.md' or path.resolve() in paths:raise ValueError('Invalid or duplicate skill path')
+        paths.add(path.resolve())
+    return skills
+
+def resolve_skill_isolation(args,work,skill,root,execution_env,deadline=None):
+    """Query actual repo/user/admin/bundled discovery, then verify one enabled skill."""
+    root.mkdir()
+    proof={'schema_version':1,'operation':'codex_skill_isolation','status':'failed','issues':[],'probes':[]}
+    disabled=[]
+    try:
+        for label,settings in (('discovered',None),('isolated','pending')):
+            stdout=root/(label+'.json');stderr=root/(label+'.stderr.txt')
+            cli=[str(args.codex_path)]
+            if settings is not None:cli+=['-c','skills.config='+skill_configuration(skill,disabled)]
+            cli+=['app-server','--listen','stdio://']
+            command=[str(args.python),str(REPO/'tests/workflow_skill_discovery.py'),str(work),*cli]
+            seconds=40
+            if deadline is not None:
+                remaining=deadline-time.monotonic()
+                if remaining<=0:raise RuntimeError('Discovery setup deadline exhausted')
+                seconds=max(1,min(seconds,int(remaining)))
+            measurement=run_owned(command,work,stdout,stderr,env=execution_env,seconds=seconds)
+            proof['probes'].append({'kind':label,'measurement':measurement,'response_sha256':sha(stdout) if stdout.is_file() else None})
+            if measurement['status']!='completed' or measurement['exit_code']!=0 or not measurement['cleanup_verified'] or measurement['console_bytes']>4194304:raise RuntimeError('Discovery execution or cleanup failed')
+            listing=skill_listing(load(stdout),work)
+            if settings is None:
+                disabled=[{'path':str(Path(s['path']).resolve()),'enabled':False} for s in listing if Path(s['path']).resolve()!=(skill/'SKILL.md').resolve()]
+                proof['disabled']=disabled
+            else:
+                enabled=[s for s in listing if s['enabled']]
+                if len(enabled)!=1 or enabled[0]['name']!='mql5-coding' or Path(enabled[0]['path']).resolve()!=(skill/'SKILL.md').resolve():raise RuntimeError('Unexpected enabled skill')
+                proof['enabled']=[{'name':s['name'],'path':s['path'],'scope':s['scope']} for s in enabled]
+        proof['status']='passed'
+    except (OSError,RuntimeError,ValueError,TypeError,KeyError,RecursionError):
+        proof['issues'].append('Actual CLI skill discovery or owned cleanup failed; scored tasks must not run.')
+    save(root/'result.json',proof)
+    return disabled,proof
+
+def unselected_skill_reads(events,disabled):
+    paths=[str(Path(s['path']).resolve()).replace('\\','/').lower() for s in disabled]
+    for event in normalize_trace(events)[0]:
+        command=event.get('item',{}).get('command')
+        if isinstance(command,str):
+            normalized=command.replace('\\\\','\\').replace('\\','/').lower()
+            if any(path in normalized for path in paths):return True
+    return False
+
+def codex_command(args,work,skill,disabled,schema,final,prompt,model,effort):
+    selected=skill_configuration(skill,disabled)
+    return [str(args.codex_path),'-a','never','-c','skills.config='+selected,'-c','model_reasoning_effort='+json.dumps(effort),'-c','web_search="disabled"','-c','windows.sandbox="unelevated"','-c','shell_environment_policy.ignore_default_excludes=false','-c','mcp_servers.mql5-chm.command='+json.dumps(str(args.mcp_package_root/'runtime/node.exe')),'-c','mcp_servers.mql5-chm.args='+json.dumps([str(args.mcp_package_root/'app/server.mjs')]),'exec','--ignore-user-config','--ignore-rules','--ephemeral','--sandbox','workspace-write','--skip-git-repo-check','--json','--model',model,'-C',str(work),'--output-schema',str(schema),'-o',str(final),prompt]
+
+def shared_setup_failure(events,measurement):
+    """Stop shared client failures, rather than repeating them across all cases."""
+    if not measurement.get('cleanup_verified'):return 'Owned-process cleanup is unverified'
+    if measurement.get('status')=='launch_failed':return 'CLI process launch failed'
+    normalized,issues=normalize_trace(events)
+    errors=[e for e in normalized if e.get('type') in ('error','turn.failed') or e.get('item',{}).get('type')=='error']
+    text=' '.join(json.dumps(e,ensure_ascii=False) for e in errors).lower()
+    if re.search(r'usage[ _-]limit|rate[ _-]limit|insufficient[ _-](?:quota|credits)|quota[ _-]exceeded|credits[ _-](?:exhausted|depleted)',text):return 'Shared account usage, quota or rate limit reached'
+    if re.search(r'requires a newer version|unsupported model|model[^\n]{0,100}(?:not supported|not available)|invalid api key|unauthorized|authentication|sandbox[^\n]{0,100}(?:unavailable|failed)|mcp[^\n]{0,100}(?:startup|initialize)[^\n]{0,50}fail',text):return 'Shared authentication, model, sandbox or MCP setup failed'
+    if errors and not trace_summary(normalized)['commands']:return 'CLI failed before agent commands; shared setup must be checked'
+    return None
+
+def grade_preflight(work,final,events,measurement,probe,expected_mcp):
+    errors=[]
+    normalized,trace_errors=normalize_trace(events);errors+=trace_errors
+    if measurement.get('status')!='completed' or measurement.get('exit_code')!=0 or not measurement.get('cleanup_verified'):errors.append('Preflight execution or cleanup failed')
+    if measurement.get('console_bytes',0)>16777216:errors.append('Preflight output exceeded the supported limit')
+    if trace_summary(normalized)['execution_error']:errors.append('Preflight trace contains an execution error')
+    valid=isinstance(final,dict) and set(final)==set(SCHEMA['required'])
+    if valid:
+        valid=final['case_id']=='setup-preflight' and final['status']=='completed' and isinstance(final['findings'],list)
+        valid=valid and all(isinstance(f,dict) and set(f)=={'code','detail'} and all(isinstance(v,str) for v in f.values()) for f in final['findings'])
+        valid=valid and all(isinstance(final[k],list) and all(isinstance(v,str) for v in final[k]) for k in ('evidence','limitations'))
+    if not valid:errors.append('Preflight structured conclusion is unavailable or invalid')
+    try:
+        if load(work/'outputs/preflight.json')!={'probe':probe}:raise ValueError('Wrong sandbox output')
+        if (work/'inputs/preflight.txt').read_text(encoding='utf-8')!=probe:raise ValueError('Changed sandbox input')
+    except (OSError,ValueError,TypeError,RecursionError):errors.append('Sandbox read/write evidence is missing, changed or invalid')
+    matched=False
+    for event in normalized:
+        item=event.get('item',{})
+        if event.get('type')!='item.completed' or item.get('type')!='mcp_tool_call' or item.get('server')!='mql5-chm' or item.get('tool')!='mql5_chm_status' or item.get('status')!='completed' or item.get('error'):continue
+        result=item.get('result',{})
+        if not isinstance(result,dict) or result.get('isError') is True:continue
+        content=result.get('structured_content',result.get('structuredContent'))
+        if not isinstance(content,dict):
+            try:content=json.loads(next(c['text'] for c in result.get('content',[]) if isinstance(c,dict) and c.get('type')=='text'))
+            except (ValueError,KeyError,TypeError,StopIteration,RecursionError):continue
+        if isinstance(content,dict) and all(content.get(k)==v for k,v in expected_mcp.items()):matched=True
+    if not matched:errors.append('Preflight lacks a returned matching MCP status')
+    for event in normalized:
+        command=event.get('item',{}).get('command')
+        if isinstance(command,str) and forbidden_workflow_actions('scenario-validation',work,command):errors.append('Preflight attempted forbidden platform execution')
+    return errors
+
+def run_preflight(args,result,disabled,execution_env,model,effort):
+    deadline=time.monotonic()+min(args.timeout_seconds,180)
+    root=args.output/'preflight';root.mkdir();work=root/'workspace';work.mkdir()
+    skill=work/'.agents/skills/mql5-coding';shutil.copytree(args.skill_root,skill)
+    before=inventory(skill);probe=secrets.token_hex(16)
+    (work/'inputs').mkdir();(work/'outputs').mkdir();(work/'inputs/preflight.txt').write_text(probe,encoding='utf-8')
+    prompt='Setup preflight only. Read inputs/preflight.txt and write outputs/preflight.json with exactly one string property probe containing the file text. Call mql5_chm_status and inspect its returned status. Do not compile, run MT5, trade, publish, or edit the selected skill. Return the required structured conclusion with case_id setup-preflight, status completed, evidence [outputs/preflight.json], and concise findings/limitations. Use only the selected MCP. This is not a scored evaluation case.'
+    temporary=work/'.temp';temporary.mkdir()
+    disabled,isolation=resolve_skill_isolation(args,work,skill,root/'skill-discovery',execution_env,deadline=deadline)
+    remaining=int(deadline-time.monotonic())
+    if remaining<=0:isolation['issues'].append('Setup deadline exhausted before model execution')
+    if isolation['status']!='passed' or remaining<=0:
+        proof={'schema_version':1,'operation':'codex_setup_preflight','status':'failed','issues':isolation['issues'],'measurement':{'status':'launch_failed','exit_code':None,'cleanup_verified':all(p['measurement'].get('cleanup_verified',False) for p in isolation['probes']) if isolation['probes'] else False},'trace_sha256':None,'skill_discovery':str(root/'skill-discovery/result.json')}
+        save(root/'result.json',proof);result['preflight']=proof;save(args.output/'progress.json',result)
+        print('setup-preflight: failed',flush=True);return False
+    command=codex_command(args,work,skill,disabled,args.output/'response.schema.json',root/'final.json',prompt,model,effort)
+    try:measurement=run_owned(command,work,root/'trace.jsonl',root/'stderr.txt',env={**execution_env,'TEMP':str(temporary),'TMP':str(temporary)},seconds=remaining)
+    except (OSError,RuntimeError):
+        measurement={'status':'launch_failed','exit_code':None,'cleanup_verified':False,'elapsed_seconds':None,'console_bytes':sum(p.stat().st_size for p in (root/'trace.jsonl',root/'stderr.txt') if p.is_file())}
+    try:
+        if measurement['console_bytes']>16777216:events,errors=[],['Oversized preflight trace retained without parsing']
+        else:events,errors=read_trace(root/'trace.jsonl')
+    except (OSError,UnicodeError):events,errors=[],['Preflight trace unavailable or invalid']
+    try:final=load(root/'final.json')
+    except (OSError,ValueError,RecursionError):final=None
+    errors+=grade_preflight(work,final,events,measurement,probe,{'corpus_revision':result['mcp']['corpus_revision'],'index_sha256':result['mcp']['index_revision']})
+    errors+=staged_skill_issues(skill,before)
+    if unselected_skill_reads(events,disabled):errors.append('Preflight referenced an unselected skill')
+    proof={'schema_version':1,'operation':'codex_setup_preflight','status':'passed' if not errors else 'failed','issues':errors,'measurement':measurement,'model':model,'reasoning_effort':effort,'codex_version':result['codex_version'],'codex_sha256':result['codex_sha256'],'trace_sha256':sha(root/'trace.jsonl') if (root/'trace.jsonl').is_file() else None,'selected_skill_before':before,'selected_skill_after':inventory(skill)}
+    proof['skill_discovery']={'path':str(root/'skill-discovery/result.json'),'sha256':sha(root/'skill-discovery/result.json')}
+    save(root/'result.json',proof);result['preflight']={k:v for k,v in proof.items() if k not in ('selected_skill_before','selected_skill_after')};save(args.output/'progress.json',result)
+    print('setup-preflight: '+proof['status'],flush=True)
+    return not errors
+
 def main(argv=None)->int:
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('skill-root','baseline-skill-root','mcp-package-root','codex-path','powershell','output'):p.add_argument('--'+name,type=Path,required=True)
     p.add_argument('--python',type=Path,default=Path(sys.executable));p.add_argument('--repetitions',type=int,choices=(1,3,5),default=3);p.add_argument('--case',choices=CASES+SELECTION_CASES,action='append');p.add_argument('--model');p.add_argument('--reasoning-effort');p.add_argument('--timeout-seconds',type=int,default=600)
     p.add_argument('--include-selection-cases',action='store_true',help='Add four implicit selection cases to the seven default cases')
+    p.add_argument('--preflight-only',action='store_true',help='Check live CLI, sandbox and MCP setup without running scored cases')
     args=p.parse_args(argv)
     for path in (args.skill_root,args.baseline_skill_root,args.mcp_package_root,args.codex_path,args.powershell,args.output,args.python):
         if not path.is_absolute():p.error('Every path must be absolute')
@@ -592,8 +874,8 @@ def main(argv=None)->int:
     subprocess.run([str(csc),'/nologo','/target:exe','/out:'+str(binaries/'terminal64.exe'),str(REPO/'tests/FakeTerminal.cs'),str(metadata)],capture_output=True,check=True)
     result['synthetic_executable_sha256']=inventory(binaries)
     result['powershell']={'path':str(args.powershell.resolve()),'sha256':sha(args.powershell)}
-    result['evaluator_sha256']={p.name:sha(p) for p in (Path(__file__),Path(__file__).with_name('workflow_process.py'),REPO/'tests/Verify-WorkflowReceipts.ps1',REPO/'tests/evaluation-cases.json',REPO/'tests/selection-cases.json')}
-    disabled=[{'path':str(path.parent),'enabled':False} for path in (home/'skills').rglob('SKILL.md')]
+    result['evaluator_sha256']={p.name:sha(p) for p in (Path(__file__),Path(__file__).with_name('workflow_process.py'),REPO/'tests/workflow_skill_discovery.py',REPO/'tests/Verify-WorkflowReceipts.ps1',REPO/'tests/Inspect-WorkflowCommands.ps1',REPO/'tests/evaluation-cases.json',REPO/'tests/selection-cases.json')}
+    disabled=[]
     # Credentials stay in an ephemeral, job-local home outside fixtures and evidence.
     # Desktop IPC/originator variables would expose unrelated app tools and policy.
     auth_parent=Path.home()/'.codex-workflow-auth'
@@ -608,6 +890,10 @@ def main(argv=None)->int:
     # Prevent ordinary toolkit imports from changing either selected staged tree.
     # This is inherited only by evaluation children, never set globally.
     execution_env['PYTHONDONTWRITEBYTECODE']='1'
+    if not run_preflight(args,result,disabled,execution_env,model,effort):
+        result['status']='failed';save(args.output/'evaluation.json',result);credentials.cleanup();return 2
+    if args.preflight_only:
+        result['status']='preflight_passed';save(args.output/'evaluation.json',result);credentials.cleanup();return 0
     for case in args.case or (CASES+SELECTION_CASES if args.include_selection_cases else CASES):
         for arm,source in (('baseline',args.baseline_skill_root),('candidate',args.skill_root)):
             for repetition in range(1,args.repetitions+1):
@@ -616,11 +902,12 @@ def main(argv=None)->int:
                 staged_before=inventory(skill);save(runroot/'selected-skill-before.json',staged_before)
                 prompt=workflow_prompt(case,context,skill,args.python,args.powershell)
                 (runroot/'prompt.txt').write_text(prompt,encoding='utf-8');save(runroot/'input-hashes.json',context['input_hashes'])
-                settings=disabled+[{'path':str(skill),'enabled':True}]
-                settings_toml='['+','.join('{path='+json.dumps(s['path'])+',enabled='+str(s['enabled']).lower()+'}' for s in settings)+']'
-                command=[str(args.codex_path),'-a','never','-c','skills.config='+settings_toml,'-c','model_reasoning_effort='+json.dumps(effort),'-c','web_search="disabled"','-c','windows.sandbox="unelevated"','-c','shell_environment_policy.ignore_default_excludes=false','-c','mcp_servers.mql5-chm.command='+json.dumps(str(args.mcp_package_root/'runtime/node.exe')),'-c','mcp_servers.mql5-chm.args='+json.dumps([str(args.mcp_package_root/'app/server.mjs')]),'exec','--ignore-user-config','--ignore-rules','--ephemeral','--sandbox','workspace-write','--skip-git-repo-check','--json','--model',model,'-C',str(work),'--output-schema',str(args.output/'response.schema.json'),'-o',str(runroot/'final.json'),prompt]
                 temporary=work/'.temp';temporary.mkdir()
                 run_env={**execution_env,'TEMP':str(temporary),'TMP':str(temporary)}
+                disabled,isolation=resolve_skill_isolation(args,work,skill,runroot/'skill-discovery',run_env)
+                if isolation['status']!='passed':
+                    result['status']='aborted';result['abort_reason']='Actual skill discovery or cleanup failed before a scored task';save(args.output/'evaluation.json',result);credentials.cleanup();return 2
+                command=codex_command(args,work,skill,disabled,args.output/'response.schema.json',runroot/'final.json',prompt,model,effort)
                 started=time.time();measurement=run_owned(command,work,runroot/'trace.jsonl',runroot/'stderr.txt',env=run_env,seconds=args.timeout_seconds)
                 try:
                     if measurement['console_bytes']>16777216:events,errors=[],['Trace output exceeded the supported byte limit; retained evidence was not parsed']
@@ -629,17 +916,22 @@ def main(argv=None)->int:
                 try:final=load(runroot/'final.json')
                 except (OSError,ValueError,RecursionError):final=None;errors.append('Final output unavailable or malformed')
                 errors+=grade(case,work,final,events,context['input_hashes'],receipt_verifier=lambda paths:verify_workflow_receipts(args.powershell,args.skill_root,work,paths,runroot/'receipt-verification.json'),staged_before=staged_before,powershell_host=args.powershell)
+                unexpected_skill=unselected_skill_reads(events,disabled)
+                if unexpected_skill:errors.append('Task referenced an unselected skill; isolation failed')
                 staged_after=inventory(skill);save(runroot/'selected-skill-after.json',staged_after)
                 trace=trace_summary(events);errors+=trace['issues']
                 if trace['execution_error']:errors.append('CLI trace contains an execution/model error; no fallback or silent retry is accepted')
                 if measurement['status']!='completed' or measurement['exit_code']!=0 or not measurement['cleanup_verified']:errors.append('CLI execution incomplete, failed, or cleanup unverified')
                 usage=trace['usage'];commands=trace['commands'];command_text=[c['command'] for c in commands]
                 item={'case':case,'arm':arm,'repetition':repetition,'status':'passed' if not errors else 'failed','issues':errors,'selected_skill':{'before_sha256':sha(runroot/'selected-skill-before.json'),'after_sha256':sha(runroot/'selected-skill-after.json'),'issues':staged_skill_issues(skill,staged_before,staged_after)},'measurement':{**measurement,'commands':len(commands),'repeated_identical_commands':len(command_text)-len(set(command_text)),'runner_retries':0,'agent_retries':None,'retry_count_reason':'Semantic agent retries are not a stable trace metric; repeated identical completed commands are recorded separately','token_usage':usage,'token_usage_reason':None if usage else 'Usage unavailable in the emitted CLI trace','artifact_bytes':sum(p.stat().st_size for p in work.rglob('*') if p.is_file())},'trace':str(runroot/'trace.jsonl'),'trace_sha256':sha(runroot/'trace.jsonl'),'started_unix_seconds':started}
+                item['skill_discovery']={'path':str(runroot/'skill-discovery/result.json'),'sha256':sha(runroot/'skill-discovery/result.json')}
                 if case in ('standalone-source-review','selection-mql5-review'):
                     item['grading_scope']={'automatic':'Required typed artifact fields, known defect line and returned matching documentation/resource evidence.',
                                            'prose_semantics':'not_independently_graded; review the explanation before claiming source-review correctness'}
                 result['runs'].append(item);save(runroot/'score.json',item);save(args.output/'progress.json',result);print(case+' '+arm+' '+str(repetition)+': '+item['status'],flush=True)
-                if not measurement['cleanup_verified']:result['status']='aborted';save(args.output/'evaluation.json',result);return 2
+                shared_failure='Unselected skill referenced; shared isolation failed' if unexpected_skill else shared_setup_failure(events,measurement)
+                if shared_failure:
+                    result['status']='aborted';result['abort_reason']=shared_failure;save(args.output/'evaluation.json',result);credentials.cleanup();return 2
     for source,previous in originals.items():
         if inventory(Path(source))!=previous:raise RuntimeError('Evaluation changed an original skill tree')
     candidates=[r for r in result['runs'] if r['arm']=='candidate'];result['candidate_passed']=bool(candidates) and all(r['status']=='passed' for r in candidates);result['status']='passed' if result['candidate_passed'] else 'failed';save(args.output/'evaluation.json',result)

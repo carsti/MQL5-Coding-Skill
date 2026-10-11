@@ -4582,7 +4582,9 @@ try {
         -ExpectedLogMarker $markerBase `
         -FakeMarker $markerBase
     Assert-True -Condition ($inputEchoMarker.ExitCode -eq 1) `
-        -Message 'An automatically echoed input was accepted as an application marker.'
+        -Message ('Input echo rejection expected exit 1; actual exit={0}, status={1}, marker matched={2}. {3}' -f `
+            $inputEchoMarker.ExitCode,$inputEchoMarker.Result.status, `
+            $inputEchoMarker.Result.evidence.checks.expected_markers_matched,$inputEchoMarker.StandardError)
     Assert-True -Condition (
         -not [bool]$inputEchoMarker.Result.evidence.checks.expected_markers_matched
     ) -Message 'Input-echo marker evidence was marked as matched.'

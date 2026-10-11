@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "cli_version": "0.162.1",
+    "mcp_version": "1.3.8",
+    "trace_sha256": "8aa5ef20433c341e9baba235e98a9745228a2da2897a7a5aa400531ff4112f29",
+    "original_html_path": "variables.htm",
+    "original_html_sha256": "e2e45053af298bbbf7a6ace0b76efcc9e7ebc11eee4fe07fa19af7c964b9800c",
+    "scope": "Genuine native read: passage only in text content; structured metadata and exact citation retained. Expected indexing facts independently verified in the original CHM HTML."
+  },
+  "expected_relevant": true,
+  "event": {
+    "type": "item.completed",
+    "item": {
+      "type": "mcp_tool_call",
+      "server": "mql5-chm",
+      "tool": "mql5_chm_read",
+      "arguments": {
+        "topic_id": "mql5:40819ba6c3861812dc9b0d7b",
+        "section_id": "mql5:40819ba6c3861812dc9b0d7b:s001",
+        "max_chars": 6000,
+        "include_related": false
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Declaring Variables\nVariables must be declared before they are used. Unique names are used to identify variables. To declare a variable, you must specify its type and a unique name. Declaration of variable is not an operator.\nSimple types are:\n- char, short, int, long, uchar, ushort, uint, ulong \u2013 integers;\n- color \u2013 integer representing the RGB-color;\n- datetime \u2013 the date and time, an unsigned integer containing the number of seconds since 0 hour January 1, 1970;\n- bool \u2013 boolean values true and false;\n- double \u2013 double-precision floating point number;\n- float \u2013 single-precision floating point number;\n- string \u2013 character strings.\nExamples:\nstring szInfoBox;\nint    nOrders;\ndouble dSymbolPrice;\nbool   bLog;\ndatetime tBegin_Data   = D'2004.01.01 00:00';\ncolor    cModify_Color = C'0x44,0xB9,0xE6';\n|\nComplex or compound types:\nStructures are composite data types, constructed using other types.\nstruct MyTime\n  {\n   int hour;    // 0-23\n   int minute;  // 0-59\n   int second;  // 0-59\n  };\n...\nMyTime strTime; // Variable of the previously declared structure MyTime\n|\nYou can't declare variables of the structure type until you declare the structure.\nArrays\nArray is the indexed sequence of identical-type data:\nint    a[50];       // One-dimensional array of 50 integers.\ndouble m[7][50];    // Two-dimensional array of seven arrays,\n                    // each of them consisting of 50 numbers.\nMyTime t[100];      // Array containing elements such as MyTime\n|\nOnly an integer can be an array index. No more than four-dimensional arrays are allowed. Numbering of array elements starts with 0. The last element of a one-dimensional array has the number which is 1 less than the array size. This means that call for the last element of an array consisting of 50 integers will appear as a[49]. The same concerns multidimensional arrays: A dimension is indexed from 0 to the dimension size-1. The last element of a two-dimensional array from the example will appear as m[6][49].\nStatic arrays can't be represented as timeseries, i.e., the ArraySetAsSeries() function, which sets access to array elements from the end to beginning, can't be applied to them. If you want to provide access to an array the same as in timeseries, use the dynamic array object.\nIf there is an attempt to access out of the array range, the executing subsystem will generate a critical error and the program will be stopped.\n\nSource: mql5.chm | Variables | mql5:40819ba6c3861812dc9b0d7b:s001 | source b6b3338a985e"
+          }
+        ],
+        "structured_content": {
+          "topic_id": "mql5:40819ba6c3861812dc9b0d7b",
+          "section_id": "mql5:40819ba6c3861812dc9b0d7b:s001",
+          "source": "mql5",
+          "title": "Variables",
+          "breadcrumb": "MQL5 Reference > Language Basics > Variables",
+          "signature": "",
+          "source_revision": "b6b3338a985e1efedc2c87fa478f648d7de53e1daa6d2a8a9e5359b8878e23fa",
+          "corpus_revision": "8d058569d975ec5b5ec419770d952757acd0ea51ad8b63fe78eb49fb00751adc",
+          "section_heading": "Declaring Variables",
+          "focus_match": null,
+          "start_offset": 0,
+          "end_offset": 2409,
+          "topic_start_offset": 10,
+          "topic_end_offset": 2419,
+          "total_chars": 2409,
+          "returned_chars": 2409,
+          "index_sha256": "2987a6f58601d54743077096476aab82e22d19917f26430b035f7baf3d7b6ddd",
+          "citation": {
+            "source_file": "mql5.chm",
+            "title": "Variables",
+            "breadcrumb": "MQL5 Reference > Language Basics > Variables",
+            "topic_id": "mql5:40819ba6c3861812dc9b0d7b",
+            "section_id": "mql5:40819ba6c3861812dc9b0d7b:s001",
+            "source_revision": "b6b3338a985e1efedc2c87fa478f648d7de53e1daa6d2a8a9e5359b8878e23fa",
+            "corpus_revision": "8d058569d975ec5b5ec419770d952757acd0ea51ad8b63fe78eb49fb00751adc",
+            "index_revision": "2987a6f58601d54743077096476aab82e22d19917f26430b035f7baf3d7b6ddd"
+          },
+          "related": [],
+          "next_cursor": null,
+          "images": [],
+          "image_count": 0,
+          "next_image_cursor": null,
+          "image_continuation": false
+        }
+      },
+      "error": null,
+      "status": "completed"
+    }
+  }
+}
