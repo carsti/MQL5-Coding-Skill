@@ -11,13 +11,11 @@ on:
         required: true
         type: string
       model:
-        description: Identical model for both arms; no fallback
-        default: gpt-6-astra
+        description: Exact model selected for the originating request; identical for both arms, no fallback
         required: true
         type: string
       reasoning_effort:
-        description: Identical effort for both arms
-        default: xhigh
+        description: Reasoning setting selected for the originating request; identical for both arms
         required: true
         type: string
 permissions:

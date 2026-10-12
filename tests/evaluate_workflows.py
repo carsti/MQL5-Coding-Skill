@@ -11,7 +11,6 @@ import shutil
 import subprocess
 import sys
 import time
-import tomllib
 import atexit
 import tempfile
 import secrets
@@ -845,7 +844,7 @@ def run_preflight(args,result,disabled,execution_env,model,effort):
 def main(argv=None)->int:
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('skill-root','baseline-skill-root','mcp-package-root','codex-path','powershell','output'):p.add_argument('--'+name,type=Path,required=True)
-    p.add_argument('--python',type=Path,default=Path(sys.executable));p.add_argument('--repetitions',type=int,choices=(1,3,5),default=3);p.add_argument('--case',choices=CASES+SELECTION_CASES,action='append');p.add_argument('--model');p.add_argument('--reasoning-effort');p.add_argument('--timeout-seconds',type=int,default=600)
+    p.add_argument('--python',type=Path,default=Path(sys.executable));p.add_argument('--repetitions',type=int,choices=(1,3,5),default=3);p.add_argument('--case',choices=CASES+SELECTION_CASES,action='append');p.add_argument('--model',required=True,help='Exact model identifier selected for the active request; no saved-default fallback');p.add_argument('--reasoning-effort',required=True,help='Reasoning setting selected for the active request');p.add_argument('--timeout-seconds',type=int,default=600)
     p.add_argument('--include-selection-cases',action='store_true',help='Add four implicit selection cases to the seven default cases')
     p.add_argument('--preflight-only',action='store_true',help='Check live CLI, sandbox and MCP setup without running scored cases')
     args=p.parse_args(argv)
@@ -853,9 +852,8 @@ def main(argv=None)->int:
         if not path.is_absolute():p.error('Every path must be absolute')
     if args.output.exists():p.error('Select a new output directory')
     if args.timeout_seconds<1 or args.timeout_seconds>600:p.error('Deadline must be between 1 and 600 seconds')
-    home=Path(os.environ.get('CODEX_HOME',Path.home()/'.codex'));config=tomllib.loads((home/'config.toml').read_text()) if (home/'config.toml').exists() else {}
-    model=args.model or config.get('model');effort=args.reasoning_effort or config.get('model_reasoning_effort')
-    if not model or not effort:p.error('Select explicit model and reasoning effort when no configured values exist')
+    model=args.model;effort=args.reasoning_effort
+    if any(not value or any(character.isspace() for character in value) for value in (model,effort)):p.error('Pass the active request model identifier and reasoning setting without whitespace; saved defaults are not used')
     version=subprocess.check_output([str(args.codex_path),'--version'],text=True,timeout=10).strip()
     if not re.fullmatch(r'codex-cli \d+\.\d+\.\d+(?:[-+][A-Za-z0-9.]+)?',version):p.error('Unrecognized supported Codex CLI version response')
     help_text=subprocess.check_output([str(args.codex_path),'exec','--help'],text=True,timeout=10)
@@ -883,7 +881,8 @@ def main(argv=None)->int:
     credentials=tempfile.TemporaryDirectory(prefix='job-',dir=auth_parent)
     atexit.register(credentials.cleanup)
     private_home=Path(credentials.name)
-    auth=home/'auth.json'
+    authentication_home=Path(os.environ.get('CODEX_HOME',Path.home()/'.codex'))
+    auth=authentication_home/'auth.json'
     if auth.is_file():shutil.copy2(auth,private_home/'auth.json')
     execution_env={k:v for k,v in os.environ.items() if not k.startswith('CODEX_') and k not in ('METATRADER_MCP_API_KEY',)}
     execution_env['CODEX_HOME']=str(private_home)

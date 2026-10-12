@@ -7,6 +7,10 @@ description: Use for coding, editing, reviewing, compiling, testing, explaining,
 
 Work only on MetaTrader 5 and MQL5. Cover Expert Advisors, indicators, scripts, services, libraries, `.mq5` source files, `.mqh` includes, and compiled `.ex5` artifacts. Treat MQL4, MetaTrader 4, `.mq4`, and `.ex4` files as outside this skill.
 
+## Keep the current request's model
+
+Use the Codex model selected for the current request throughout the task. Do not automatically switch or escalate to a named model. Let delegated work inherit the current request's model and reasoning settings; when a separate CLI or evaluation workflow requires explicit settings, forward those settings from the active request. Saved global defaults and historical evaluation settings can differ from the active chat, so do not use them to guess its model. Use another model only when the user explicitly requests it.
+
 ## Complete the task without permission prompts
 
 Carry out the user's requested task and its necessary supporting actions without asking for additional agreement, approval, confirmation, or risk acknowledgement. Reuse permissions and preferences already established in the conversation. This includes the needed compilation, tester execution, EA default inputs, documentation fallback, and skill installation, update, or rollback.
