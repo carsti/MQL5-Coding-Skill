@@ -7,7 +7,7 @@ description: Use for coding, editing, reviewing, compiling, testing, explaining,
 
 Work only on MetaTrader 5 and MQL5: Expert Advisors, indicators, scripts, services, libraries, `.mq5`, `.mqh`, and `.ex5`. MQL4, MetaTrader 4, `.mq4`, and `.ex4` are out of scope.
 
-The skill runs in Codex and Claude Code. The installed skill root is the directory containing this `SKILL.md` (normally `%USERPROFILE%\.claude\skills\mql5-coding` in Claude Code, `CODEX_HOME\skills\mql5-coding` in Codex); run bundled scripts from its `scripts` directory. In Claude Code the MCP tools carry a server prefix, for example `mcp__mql5-chm__mql5_chm_search`.
+The skill runs in Codex and Claude Code. The installed skill root is the directory containing this `SKILL.md` (normally `%USERPROFILE%\.claude\skills\mql5-coding` in Claude Code, `CODEX_HOME\skills\mql5-coding` in Codex); run bundled scripts from its `scripts` directory. Clients may expose the MCP tools under a server prefix (in Claude Code, for example, `mcp__mql5-chm__mql5_chm_search`); use the names your client actually lists. The MCP's own connection instructions describe the same workflow as the section below.
 
 Use the model selected for the current request; do not switch or escalate models unless the user asks, and let delegated work inherit the request's model and reasoning settings.
 
