@@ -4,6 +4,12 @@ param(
     [string]$WorkspaceRoot = (Get-Location).Path,
     [string]$CodexHome,
     [string]$CodexPath,
+    # Client whose registration and skill installation are checked. When
+    # omitted, a checker running from a Claude Code skill tree checks Claude
+    # Code; otherwise Codex.
+    [ValidateSet('Codex','Claude')][string]$ClientHost,
+    [string]$ClaudeConfigDirectory,
+    [string]$ClaudePath,
     [string]$McpPackageRoot,
     [string]$SkillRoot,
     [string]$McpSourceRoot,
@@ -123,6 +129,89 @@ function Find-Codex {
     }
     return $null
 }
+function Find-Claude {
+    if ($ClaudePath) {return Full-Path $ClaudePath}
+    $command=Get-Command claude.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($command) {return $command.Source}
+    $native=Join-Path $env:USERPROFILE '.local\bin\claude.exe'
+    if (Test-Path -LiteralPath $native -PathType Leaf) {return $native}
+    return $null
+}
+function Get-JsonMemberText([string]$Text, [string[]]$Path) {
+    # Claude's configuration can hold project keys that differ only by case,
+    # which ConvertFrom-Json rejects. Navigate with case-sensitive parsers and
+    # return only the selected member's JSON text.
+    if ($PSVersionTable.PSEdition -eq 'Core') {
+        $document=[Text.Json.JsonDocument]::Parse($Text)
+        try {
+            $element=$document.RootElement
+            foreach ($name in $Path) {
+                if ($element.ValueKind -ne [Text.Json.JsonValueKind]::Object) {return $null}
+                $next=[Text.Json.JsonElement]::new()
+                if (-not $element.TryGetProperty([string]$name,[ref]$next)) {return $null}
+                $element=$next
+            }
+            return $element.GetRawText()
+        } finally {$document.Dispose()}
+    }
+    Add-Type -AssemblyName System.Web.Extensions
+    $serializer=New-Object Web.Script.Serialization.JavaScriptSerializer
+    $serializer.MaxJsonLength=[int]::MaxValue
+    $value=$serializer.DeserializeObject($Text)
+    foreach ($name in $Path) {
+        if ($value -isnot [Collections.Generic.IDictionary[string,object]] -or -not $value.ContainsKey($name)) {return $null}
+        $value=$value[$name]
+    }
+    return $serializer.Serialize($value)
+}
+function Get-JsonObjectKeys([string]$Text, [string[]]$Path) {
+    $memberText=Get-JsonMemberText $Text $Path
+    if ($null -eq $memberText) {return @()}
+    if ($PSVersionTable.PSEdition -eq 'Core') {
+        $document=[Text.Json.JsonDocument]::Parse($memberText)
+        try {
+            if ($document.RootElement.ValueKind -ne [Text.Json.JsonValueKind]::Object) {return @()}
+            return @($document.RootElement.EnumerateObject() | ForEach-Object {$_.Name})
+        } finally {$document.Dispose()}
+    }
+    $serializer=New-Object Web.Script.Serialization.JavaScriptSerializer
+    $serializer.MaxJsonLength=[int]::MaxValue
+    $value=$serializer.DeserializeObject($memberText)
+    if ($value -isnot [Collections.Generic.IDictionary[string,object]]) {return @()}
+    return @($value.Keys)
+}
+function Get-ClaudeRegistration([string]$ConfigPath, [string]$Workspace) {
+    # Claude Code precedence: local (per-project entry in the user config),
+    # then project (.mcp.json in the workspace), then user scope.
+    $candidates=@()
+    if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
+        $text=[IO.File]::ReadAllText($ConfigPath)
+        foreach ($key in @(Get-JsonObjectKeys $text @('projects'))) {
+            if ([string]::IsNullOrWhiteSpace($key)) {continue}
+            try {$projectPath=Full-Path ($key.Replace('/','\'))} catch {continue}
+            if (Same-Path $projectPath $Workspace) {
+                $local=Get-JsonMemberText $text @('projects',$key,'mcpServers','mql5-chm')
+                if ($null -ne $local) {$candidates+=@([pscustomobject]@{scope='local';text=$local})}
+            }
+        }
+    }
+    $projectFile=Join-Path $Workspace '.mcp.json'
+    if (Test-Path -LiteralPath $projectFile -PathType Leaf) {
+        $project=Get-JsonMemberText ([IO.File]::ReadAllText($projectFile)) @('mcpServers','mql5-chm')
+        if ($null -ne $project) {$candidates+=@([pscustomobject]@{scope='project';text=$project})}
+    }
+    if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
+        $user=Get-JsonMemberText ([IO.File]::ReadAllText($ConfigPath)) @('mcpServers','mql5-chm')
+        if ($null -ne $user) {$candidates+=@([pscustomobject]@{scope='user';text=$user})}
+    }
+    if ($candidates.Count -eq 0) {return $null}
+    $selected=$candidates[0]
+    $entry=$selected.text | ConvertFrom-Json
+    if ($entry -isnot [pscustomobject]) {throw 'Unsupported Claude registration.'}
+    # Present the Claude entry in the transport shape shared with Codex checks.
+    $transport=[pscustomobject]@{type=$(if ($null -eq (Value $entry 'type')) {'stdio'} else {Value $entry 'type'});command=(Value $entry 'command');args=@(Value $entry 'args' @());env=(Value $entry 'env')}
+    return [pscustomobject]@{scope=$selected.scope;shadowed_scopes=@($candidates | Select-Object -Skip 1 | ForEach-Object {$_.scope});registration=[pscustomobject]@{name='mql5-chm';enabled=$true;transport=$transport}}
+}
 function Skill-Files([string]$Root) {
     $Root=Directory-Path $Root
     $rootPrefix=$Root.TrimEnd('\')+'\'
@@ -232,7 +321,7 @@ function Find-Editors {
     return $editors
 }
 
-$report=[ordered]@{schema_version=1;kind='mql5_environment_health';checked_utc=[DateTime]::UtcNow.ToString('o');status='failed';workspace_root=$WorkspaceRoot;codex_home=$null;codex=[ordered]@{path=$null;version=$null;registration_state='not_checked';native_chat_availability='not_checked'};mcp=[ordered]@{package_root=$null;package_version=$null;node_version=$null;integrity='not_checked';checked_files=0;stdio_available=$false;connection='direct_stdio';corpus_revision=$null;index_revision=$null;source_comparison=@{status='not_requested'}};skill=[ordered]@{root=$null;installed=$false;declared_version=$null;file_count=0;fingerprint_sha256=$null;source_comparison=@{status='not_requested'}};metaeditor=[ordered]@{available=$false;candidates=@();selected_path=$null};python=[ordered]@{path=$null;available=$false;version=$null;pyyaml_available=$false;shared_launcher_present=$false};issues=@();exit_code=1}
+$report=[ordered]@{schema_version=1;kind='mql5_environment_health';checked_utc=[DateTime]::UtcNow.ToString('o');status='failed';workspace_root=$WorkspaceRoot;client_host=$null;codex_home=$null;codex=[ordered]@{path=$null;version=$null;registration_state='not_checked';native_chat_availability='not_checked'};claude=[ordered]@{config_directory=$null;config_path=$null;path=$null;version=$null;registration_state='not_checked';registration_scope=$null;shadowed_scopes=@()};mcp=[ordered]@{package_root=$null;package_version=$null;node_version=$null;integrity='not_checked';checked_files=0;stdio_available=$false;connection='direct_stdio';corpus_revision=$null;index_revision=$null;source_comparison=@{status='not_requested'}};skill=[ordered]@{root=$null;installed=$false;declared_version=$null;file_count=0;fingerprint_sha256=$null;source_comparison=@{status='not_requested'}};metaeditor=[ordered]@{available=$false;candidates=@();selected_path=$null};python=[ordered]@{path=$null;available=$false;version=$null;pyyaml_available=$false;shared_launcher_present=$false};issues=@();exit_code=1}
 try {
     $WorkspaceRoot=Full-Path $WorkspaceRoot
     if (-not (Test-Path -LiteralPath $WorkspaceRoot -PathType Container)) {throw 'Workspace directory does not exist.'}
@@ -240,6 +329,24 @@ try {
     $CodexHome=Full-Path $CodexHome
     $report.workspace_root=$WorkspaceRoot
     $report.codex_home=$CodexHome
+    $claudeDirectory=if ($ClaudeConfigDirectory) {$ClaudeConfigDirectory} elseif ($env:CLAUDE_CONFIG_DIR) {$env:CLAUDE_CONFIG_DIR} else {Join-Path $env:USERPROFILE '.claude'}
+    $claudeDirectory=Full-Path $claudeDirectory
+    if (-not $ClientHost) {
+        if ($PSBoundParameters.ContainsKey('CodexHome') -or $CodexPath) {$ClientHost='Codex'}
+        elseif ($ClaudeConfigDirectory -or $ClaudePath) {$ClientHost='Claude'}
+        else {
+            $claudeSkills=(Join-Path $claudeDirectory 'skills').TrimEnd('\')+'\'
+            $ClientHost=if ((Full-Path $PSScriptRoot).StartsWith($claudeSkills,[StringComparison]::OrdinalIgnoreCase)) {'Claude'} else {'Codex'}
+        }
+    }
+    $report.client_host=$ClientHost
+    if ($ClientHost -eq 'Claude') {
+        $report.claude.config_directory=$claudeDirectory
+        # Claude Code keeps user/local MCP entries in .claude.json: inside
+        # CLAUDE_CONFIG_DIR when set, otherwise in the user's home directory.
+        $report.claude.config_path=if ($ClaudeConfigDirectory -or $env:CLAUDE_CONFIG_DIR) {Join-Path $claudeDirectory '.claude.json'} else {Join-Path $env:USERPROFILE '.claude.json'}
+        if (-not $SkillRoot) {$SkillRoot=Join-Path $claudeDirectory 'skills\mql5-coding'}
+    }
     if (-not $SkillRoot) {$SkillRoot=Join-Path $CodexHome 'skills\mql5-coding'}
     $SkillRoot=Directory-Path $SkillRoot
     $report.skill.root=$SkillRoot
@@ -256,6 +363,10 @@ try {
             . (Join-Path $PSScriptRoot 'SkillRelease.ps1')
             $identity=Read-Mql5ReleaseJson (Join-Path $SkillRoot 'version.json')
             Assert-Mql5SkillVersion $identity
+            # Files introduced by later releases are required from their version on.
+            foreach ($required in @(Get-Mql5SkillReleaseFiles $identity.version)) {
+                if (-not $skillFiles.ContainsKey($required)) {throw 'An essential skill file is missing.'}
+            }
             $report.skill.declared_version=$identity.version
             $report.skill.installed=$true
             $report.skill.file_count=$skillFiles.Count
@@ -272,22 +383,12 @@ try {
             }
         } catch {Add-Issue 'skill_unreadable' 'error' 'The installed skill or selected source could not be read or has an invalid consumer contract.'}
     }
-    $codex=Find-Codex
     $registration=$null
-    if ($codex -and (Test-Path -LiteralPath $codex -PathType Leaf)) {
-        $report.codex.path=$codex
-        $version=Invoke-Probe $codex @('--version') $WorkspaceRoot
-        if ($version.ok -and $version.text.Trim() -match '^codex(?:-cli)?\s+(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)$') {$report.codex.version=$Matches[1]}
-        else {Add-Issue 'codex_version_unavailable' 'warning' 'Codex CLI version could not be verified.'}
-        $result=Invoke-Probe $codex @('mcp','get','mql5-chm','--json') $WorkspaceRoot
-        try {
-            if (-not $result.ok) {throw 'Codex query failed.'}
-            if (-not $result.text.TrimStart().StartsWith('{')) {throw 'Registration must be a JSON object.'}
-            $registration=$result.text | ConvertFrom-Json
+    $validateRegistration={
             Assert-RegistrationShape $registration
             if ((Value $registration 'name') -cne 'mql5-chm' -or (Value (Value $registration 'transport') 'type') -cne 'stdio') {throw 'Unexpected registration.'}
-            $report.codex.registration_state='enabled'
-            if (-not $registration.enabled) {$report.codex.registration_state='disabled'; Add-Issue 'mcp_disabled' 'error' 'The mql5-chm registration is disabled.'}
+            $clientReport.registration_state='enabled'
+            if (-not $registration.enabled) {$clientReport.registration_state='disabled'; Add-Issue 'mcp_disabled' 'error' 'The mql5-chm registration is disabled.'}
             $allowed=@(Value $registration 'enabled_tools' @())
             $allowListPresent=$null -ne $registration.PSObject.Properties['enabled_tools'] -and $null -ne $registration.enabled_tools
             $denied=@(Value $registration 'disabled_tools' @())
@@ -301,13 +402,50 @@ try {
             if (-not $McpPackageRoot) {$McpPackageRoot=$registeredRoot}
             $cwdProperty=$transport.PSObject.Properties['cwd']
             $cwdMatches=$null -eq $cwdProperty -or $null -eq $cwdProperty.Value -or ((Absolute-LaunchPath $cwdProperty.Value) -and (Same-Path $cwdProperty.Value $McpPackageRoot))
-            if (-not (Same-Path $McpPackageRoot $registeredRoot) -or -not (Same-Path $transport.command (Join-Path $McpPackageRoot 'runtime\node.exe')) -or -not (Same-Path ([string]$arguments[0]) (Join-Path $McpPackageRoot 'app\server.mjs')) -or -not $cwdMatches) {Add-Issue 'mcp_registration_mismatch' 'error' 'Codex command and server argument must select the tested package; an explicit working directory must select that same package.'}
+            if (-not (Same-Path $McpPackageRoot $registeredRoot) -or -not (Same-Path $transport.command (Join-Path $McpPackageRoot 'runtime\node.exe')) -or -not (Same-Path ([string]$arguments[0]) (Join-Path $McpPackageRoot 'app\server.mjs')) -or -not $cwdMatches) {Add-Issue 'mcp_registration_mismatch' 'error' "$ClientHost command and server argument must select the tested package; an explicit working directory must select that same package."}
             if (@((Value $transport 'env' ([pscustomobject]@{})).PSObject.Properties | Where-Object {$_.Name -eq 'MQL5_CHM_MCP_ROOT'}).Count -or 'MQL5_CHM_MCP_ROOT' -in @(Value $transport 'env_vars' @())) {Add-Issue 'mcp_ambient_root' 'error' 'The registration sets an unsupported ambient corpus-root override.'}
             if (@((Value $transport 'env' ([pscustomobject]@{})).PSObject.Properties).Count -gt 0 -or @(Value $transport 'env_vars' @()).Count -gt 0) {Add-Issue 'mcp_custom_environment' 'warning' 'Registration has custom environment settings. The direct package probe does not reproduce them, so configured startup is not fully verified.'}
-        } catch {$registration=$null; $report.codex.registration_state='unavailable'; Add-Issue 'codex_registration_unavailable' 'error' 'Codex could not return a supported mql5-chm registration in this workspace.'}
+    }
+    if ($ClientHost -eq 'Codex') {
+        $clientReport=$report.codex
+        $codex=Find-Codex
+        if ($codex -and (Test-Path -LiteralPath $codex -PathType Leaf)) {
+            $report.codex.path=$codex
+            $version=Invoke-Probe $codex @('--version') $WorkspaceRoot
+            if ($version.ok -and $version.text.Trim() -match '^codex(?:-cli)?\s+(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)$') {$report.codex.version=$Matches[1]}
+            else {Add-Issue 'codex_version_unavailable' 'warning' 'Codex CLI version could not be verified.'}
+            $result=Invoke-Probe $codex @('mcp','get','mql5-chm','--json') $WorkspaceRoot
+            try {
+                if (-not $result.ok) {throw 'Codex query failed.'}
+                if (-not $result.text.TrimStart().StartsWith('{')) {throw 'Registration must be a JSON object.'}
+                $registration=$result.text | ConvertFrom-Json
+                . $validateRegistration
+            } catch {$registration=$null; $report.codex.registration_state='unavailable'; Add-Issue 'codex_registration_unavailable' 'error' 'Codex could not return a supported mql5-chm registration in this workspace.'}
+        } else {
+            $report.codex.registration_state='cli_missing'
+            Add-Issue 'codex_cli_missing' 'warning' 'Codex CLI was not found; registration is unverified. Supply -CodexPath for a native executable.'
+        }
     } else {
-        $report.codex.registration_state='cli_missing'
-        Add-Issue 'codex_cli_missing' 'warning' 'Codex CLI was not found; registration is unverified. Supply -CodexPath for a native executable.'
+        $clientReport=$report.claude
+        $claude=Find-Claude
+        if ($claude -and (Test-Path -LiteralPath $claude -PathType Leaf)) {
+            $report.claude.path=$claude
+            $version=Invoke-Probe $claude @('--version') $WorkspaceRoot
+            if ($version.ok -and $version.text.Trim() -match '^(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)\s+\(Claude Code\)$') {$report.claude.version=$Matches[1]}
+            else {Add-Issue 'claude_version_unavailable' 'warning' 'Claude Code CLI version could not be verified.'}
+        } else {Add-Issue 'claude_cli_missing' 'warning' 'Claude Code CLI was not found; only its configuration file was inspected. Supply -ClaudePath for a native executable.'}
+        try {
+            $claudeRegistration=Get-ClaudeRegistration $report.claude.config_path $WorkspaceRoot
+            if ($null -eq $claudeRegistration) {
+                $report.claude.registration_state='absent'
+                Add-Issue 'claude_registration_missing' 'error' 'Claude Code has no mql5-chm registration for this workspace. Run the MCP package Install-Claude.ps1.'
+            } else {
+                $report.claude.registration_scope=$claudeRegistration.scope
+                $report.claude.shadowed_scopes=@($claudeRegistration.shadowed_scopes)
+                $registration=$claudeRegistration.registration
+                . $validateRegistration
+            }
+        } catch {$registration=$null; $report.claude.registration_state='unavailable'; Add-Issue 'claude_registration_unavailable' 'error' 'Claude Code configuration does not contain a supported mql5-chm registration for this workspace.'}
     }
     if (-not $McpPackageRoot) {Add-Issue 'mcp_package_missing' 'error' 'The MCP package could not be resolved. Supply -McpPackageRoot when registration is unavailable.'}
     else {
@@ -401,7 +539,8 @@ if ($Json) {Write-Output $reportJson}
 else {
     Write-Output "MQL5 health: $($report.status) (exit $($report.exit_code))"
     Write-Output "MCP: version $($report.mcp.package_version), integrity $($report.mcp.integrity), direct stdio available $($report.mcp.stdio_available)"
-    Write-Output "Codex CLI: version $($report.codex.version), registration $($report.codex.registration_state); native chat availability not checked"
+    if ($report.client_host -eq 'Claude') {Write-Output "Claude Code CLI: version $($report.claude.version), registration $($report.claude.registration_state) ($($report.claude.registration_scope) scope); loaded chat tools not checked"}
+    else {Write-Output "Codex CLI: version $($report.codex.version), registration $($report.codex.registration_state); native chat availability not checked"}
     Write-Output "Skill: installed $($report.skill.installed), $($report.skill.file_count) files, fingerprint $($report.skill.fingerprint_sha256)"
     Write-Output "Source comparison: MCP $($report.mcp.source_comparison.status), skill $($report.skill.source_comparison.status)"
     foreach ($component in @('mcp','skill')) {

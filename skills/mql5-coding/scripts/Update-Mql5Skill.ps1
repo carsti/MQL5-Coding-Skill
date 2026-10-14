@@ -7,20 +7,41 @@ param(
     [string]$BackupId,
     [string]$ArchivePath,
     [string]$ExpectedArchiveSha256,
-    [string]$ExpectedSourceCommit
+    [string]$ExpectedSourceCommit,
+    # Selects the client whose skill installation is managed. When omitted,
+    # an updater running from a Claude Code skill tree manages Claude Code;
+    # otherwise Codex, preserving the original behavior.
+    [ValidateSet('Codex','Claude')][string]$ClientHost,
+    [string]$ClaudeDirectory
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'SkillRelease.ps1')
 try {
-    if ([string]::IsNullOrWhiteSpace($CodexDirectory)) {
-        $CodexDirectory=if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {Join-Path $env:USERPROFILE '.codex'} else {$env:CODEX_HOME}
+    $claudeDefault=if ([string]::IsNullOrWhiteSpace($env:CLAUDE_CONFIG_DIR)) {Join-Path $env:USERPROFILE '.claude'} else {$env:CLAUDE_CONFIG_DIR}
+    if (-not $ClientHost -and $CodexDirectory) {$ClientHost='Codex'}
+    elseif (-not $ClientHost -and $ClaudeDirectory) {$ClientHost='Claude'}
+    elseif (-not $ClientHost) {
+        $claudeSkills=[IO.Path]::GetFullPath((Join-Path $(if ($ClaudeDirectory) {$ClaudeDirectory} else {$claudeDefault}) 'skills')).TrimEnd('\')+'\'
+        $ClientHost=if ([IO.Path]::GetFullPath($PSScriptRoot).StartsWith($claudeSkills,[StringComparison]::OrdinalIgnoreCase)) {'Claude'} else {'Codex'}
     }
-    $codex=Assert-Mql5ReleasePath $CodexDirectory
-    $target=Assert-Mql5ReleasePath (Join-Path $codex 'skills/mql5-coding')
-    $stateRoot=Assert-Mql5ReleasePath (Join-Path $codex 'tools/mql5-skill-updates')
+    if ($ClientHost -eq 'Claude') {
+        if ($CodexDirectory) {throw 'CodexDirectory applies only to -ClientHost Codex.'}
+        if ([string]::IsNullOrWhiteSpace($ClaudeDirectory)) {$ClaudeDirectory=$claudeDefault}
+        $clientRoot=Assert-Mql5ReleasePath $ClaudeDirectory
+        $target=Assert-Mql5ReleasePath (Join-Path $clientRoot 'skills/mql5-coding')
+        $stateRoot=Assert-Mql5ReleasePath (Join-Path $clientRoot 'mql5-skill-updates')
+    } else {
+        if ($ClaudeDirectory) {throw 'ClaudeDirectory applies only to -ClientHost Claude.'}
+        if ([string]::IsNullOrWhiteSpace($CodexDirectory)) {
+            $CodexDirectory=if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {Join-Path $env:USERPROFILE '.codex'} else {$env:CODEX_HOME}
+        }
+        $clientRoot=Assert-Mql5ReleasePath $CodexDirectory
+        $target=Assert-Mql5ReleasePath (Join-Path $clientRoot 'skills/mql5-coding')
+        $stateRoot=Assert-Mql5ReleasePath (Join-Path $clientRoot 'tools/mql5-skill-updates')
+    }
     if ($Action -eq 'Rollback') {
-        if ($BackupId -cnotmatch '\A[0-9a-f]{32}\z' -or $Version -or $ArchivePath -or $ExpectedArchiveSha256 -or $ExpectedSourceCommit) {throw 'Rollback requires only a recorded BackupId and optional CodexDirectory.'}
+        if ($BackupId -cnotmatch '\A[0-9a-f]{32}\z' -or $Version -or $ArchivePath -or $ExpectedArchiveSha256 -or $ExpectedSourceCommit) {throw 'Rollback requires only a recorded BackupId and an optional client selection.'}
     } elseif ($BackupId) {throw 'BackupId is only valid for Rollback.'}
     if ($Action -ne 'Rollback') {
         if ($ArchivePath) {
@@ -37,7 +58,7 @@ try {
             $identity=Read-Mql5ReleaseJson (Join-Path $target 'version.json')
             Assert-Mql5SkillVersion $identity;$installed=$identity.version
         }
-        [ordered]@{action='check';installed_version=$installed;release=$release;installed_bytes_verified=$false} | ConvertTo-Json -Depth 6
+        [ordered]@{action='check';installed_version=$installed;release=$release;installed_bytes_verified=$false;client_host=$ClientHost;target=$target} | ConvertTo-Json -Depth 6
         exit 0
     }
     [IO.Directory]::CreateDirectory($stateRoot) | Out-Null
@@ -101,7 +122,7 @@ try {
                     if (-not (Test-Path -LiteralPath (Join-Path $txn 'pending.json'))) {throw 'Backup tree is missing.'}
                     Assert-Mql5ReleaseInventory $target $record.files
                     & $resolvePending
-                    [ordered]@{action='recovered_unchanged';backup_id=$BackupId;target=$target;files_verified=$true} | ConvertTo-Json
+                    [ordered]@{action='recovered_unchanged';backup_id=$BackupId;target=$target;files_verified=$true;client_host=$ClientHost} | ConvertTo-Json
                     exit 0
                 }
                 Assert-Mql5ReleaseInventory $tree $record.files
@@ -127,7 +148,7 @@ try {
                 elseif (Test-Path -LiteralPath $target) {throw 'Recovery remains pending: the previously absent target was not restored.'}
                 [IO.File]::Delete((Join-Path $newTxn 'pending.json'));throw
             }
-            [ordered]@{action='rollback';restored_backup_id=$BackupId;backup_id=$newId;target=$target;files_verified=$true;restart_codex=$true} | ConvertTo-Json
+            [ordered]@{action='rollback';restored_backup_id=$BackupId;backup_id=$newId;target=$target;files_verified=$true;client_host=$ClientHost;restart_codex=($ClientHost -eq 'Codex');restart_client=$true} | ConvertTo-Json
             exit 0
         }
         $id=[guid]::NewGuid().ToString('N');$txn=Join-Path $stateRoot $id
@@ -150,7 +171,7 @@ try {
             if ([version]$current.version -gt [version]$Version) {throw 'Use Rollback for a downgrade; Update cannot install an older release.'}
             if ($current.version -ceq $Version) {
                 Assert-Mql5ReleaseInventory $target $manifest.files
-                [ordered]@{action='already_current';version=$Version;source_commit=$release.source_commit;files_verified=$true;target=$target} | ConvertTo-Json
+                [ordered]@{action='already_current';version=$Version;source_commit=$release.source_commit;files_verified=$true;target=$target;client_host=$ClientHost} | ConvertTo-Json
                 exit 0
             }
         }
@@ -168,6 +189,6 @@ try {
             elseif (Test-Path -LiteralPath $target) {throw 'Recovery remains pending: the previously absent target was not restored.'}
             [IO.File]::Delete((Join-Path $txn 'pending.json'));throw
         }
-        [ordered]@{action='updated';version=$Version;source_commit=$release.source_commit;archive_sha256=$release.sha256;backup_id=$id;had_previous_installation=[bool]$had;target=$target;files_verified=$true;restart_codex=$true} | ConvertTo-Json
+        [ordered]@{action='updated';version=$Version;source_commit=$release.source_commit;archive_sha256=$release.sha256;backup_id=$id;had_previous_installation=[bool]$had;target=$target;files_verified=$true;client_host=$ClientHost;restart_codex=($ClientHost -eq 'Codex');restart_client=$true} | ConvertTo-Json
     } finally {$lock.Dispose()}
 } catch {Write-Error $_;exit 1}

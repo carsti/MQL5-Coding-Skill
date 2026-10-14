@@ -294,17 +294,21 @@ function Protect-JournalLine {
         [string[]]$SensitiveValues = @()
     )
     $redacted = $Line
+    # The case-sensitive glued-label branch also covers acronym and all-caps
+    # labels such as InpAPIKey or InpPASSWORD; over-redaction is the safe failure.
     $secretLabelPattern =
         '(?:' +
             '(?:[A-Za-z0-9]+[._-])*' +
                 '(?:password|passwd|pwd|token|secret|authorization|auth|' +
                     'access[._-]+token|refresh[._-]+token|api[._-]+key|' +
                     'client[._-]+secret)' +
-                '(?:[._-][A-Za-z0-9]+)*' +
+                '[0-9]*(?:[._-][A-Za-z0-9]+)*' +
             '|' +
             '(?-i:[A-Za-z0-9]*(?:[Pp]assword|[Pp]asswd|[Pp]wd|[Tt]oken|' +
-                '[Ss]ecret|[Aa]uthorization|[Aa]uth|[Aa]pi[Kk]ey)' +
-                '(?:[A-Z][A-Za-z0-9]*)*)' +
+                '[Ss]ecret|[Aa]uthorization|[Aa]uth|[Aa]pi[Kk]ey|' +
+                'API[Kk](?:ey|EY)|PASSWORD|PASSWD|PWD|TOKEN|SECRET|' +
+                'AUTHORIZATION|AUTH)' +
+                '[0-9]*(?:[A-Z][A-Za-z0-9]*)*)' +
             '|' +
             'access[ \t]+token|refresh[ \t]+token|api[ \t]+key|' +
                 'client[ \t]+secret' +

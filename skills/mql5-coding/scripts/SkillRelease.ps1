@@ -1,7 +1,11 @@
 #Requires -Version 5.1
 # Trusted release primitives. No code from a downloaded archive is executed.
-function Get-Mql5SkillReleaseFiles {
-    return @('SKILL.md','agents/openai.yaml','references/strategy-tester.md','references/mcp-contract.json',
+function Get-Mql5SkillReleaseFiles([string]$Version) {
+    # Files introduced by a release are required only from that version on, so
+    # this verifier still accepts complete older packages.
+    $versioned=@()
+    if (-not [string]::IsNullOrEmpty($Version) -and [version]$Version -ge [version]'1.2.4') {$versioned+='references/compile.md'}
+    return @($versioned+@('SKILL.md','agents/openai.yaml','references/strategy-tester.md','references/mcp-contract.json',
         'references/environment-health.md','references/project-profiles.md','references/releases.md',
         'scripts/Mql5ProjectProfile.ps1','scripts/New-Mql5ProjectProfile.ps1','scripts/Invoke-Mql5Project.ps1',
         'scripts/Test-Mql5Environment.ps1','scripts/Compile-Mql5.ps1','scripts/CompilationReceipt.ps1',
@@ -14,7 +18,7 @@ function Get-Mql5SkillReleaseFiles {
         'scripts/Read-Mql5Journal.ps1','scripts/Invoke-Mql5ScenarioBatch.ps1',
         'references/toolkit.md','references/focused-review.md','references/performance.md','references/refactoring.md',
         'assets/scenarios.template.json','assets/comparison-expectations.template.json',
-        'assets/Mql5Assertions.mqh','assets/Mql5ToolkitSelfTest.mq5') | Sort-Object
+        'assets/Mql5Assertions.mqh','assets/Mql5ToolkitSelfTest.mq5')) | Sort-Object
 }
 function Get-Mql5ReleaseHash([string]$Path) {
     $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
@@ -188,7 +192,7 @@ function Assert-Mql5SkillManifest($Manifest,[string]$Version,[string]$Commit) {
         $Manifest.repository -cne 'shamwi2846/MQL5-Coding-Skill' -or $Manifest.version -cne $Version -or
         $Manifest.tag -cne ('v'+$Version) -or $Manifest.source_commit -cne $Commit -or
         $Commit -cnotmatch '\A[0-9a-f]{40}\z' -or $Version -cnotmatch '\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\z') {throw 'Release identity differs from the requested tag and commit.'}
-    $expected=@(Get-Mql5SkillReleaseFiles)
+    $expected=@(Get-Mql5SkillReleaseFiles $Version)
     if ($Manifest.files -isnot [Array] -or $Manifest.files.Count -lt $expected.Count -or $Manifest.files.Count -gt 128) {throw 'Release file set is incomplete or too large.'}
     $null=Get-Mql5ReleaseFileMap $Manifest.files
     foreach ($file in $Manifest.files) {

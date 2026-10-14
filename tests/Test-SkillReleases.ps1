@@ -214,7 +214,7 @@ $backup=$updated.data.backup_id
 $backupTree=Join-Path $fixtureHome ('tools/mql5-skill-updates/'+$backup+'/backup-tree')
 Assert-Mql5ReleaseInventory $backupTree (($old | ConvertTo-Json -Depth 4 -Compress) | ConvertFrom-Json)
 Check $true 'legacy custom files are backed up exactly'
-Check (@(Get-Mql5ReleaseInventory $target).Count -eq @(Get-Mql5SkillReleaseFiles).Count) 'installed release is complete'
+Check (@(Get-Mql5ReleaseInventory $target).Count -eq @(Get-Mql5SkillReleaseFiles $version).Count) 'installed release is complete'
 $again=RunUpdater $argsForUpdate
 Check ($again.code -eq 0 -and $again.data.action -ceq 'already_current') 'identical update is idempotent'
 [IO.File]::AppendAllText((Join-Path $target 'SKILL.md'),'changed')
@@ -452,6 +452,30 @@ try {
 $uninstall=RunUpdater @('-Action','Rollback','-CodexDirectory',$freshHome,'-BackupId',$fresh.data.backup_id)
 if ($uninstall.code) {throw $uninstall.error_text}
 Check (-not (Test-Path -LiteralPath (Join-Path $freshHome 'skills/mql5-coding'))) 'fresh install rollback restores absence'
+$claudeHome=Join-Path $work 'claude-home'
+$claude=RunUpdater @('-ClientHost','Claude','-Action','Update','-Version',$version,'-ClaudeDirectory',$claudeHome,'-ArchivePath',$archive,'-ExpectedArchiveSha256',$digest,'-ExpectedSourceCommit',$commit)
+if ($claude.code) {throw $claude.error_text}
+Check ($claude.data.client_host -ceq 'Claude' -and -not $claude.data.restart_codex -and $claude.data.restart_client -and (Test-Path -LiteralPath (Join-Path $claudeHome 'skills/mql5-coding/SKILL.md')) -and (Test-Path -LiteralPath (Join-Path $claudeHome ('mql5-skill-updates/'+$claude.data.backup_id+'/backup.json')))) 'Claude Code install uses the Claude skill and state directories'
+Check (-not (Test-Path -LiteralPath (Join-Path $claudeHome 'tools'))) 'Claude Code install leaves Codex state untouched'
+$mixed=RunUpdater @('-ClientHost','Claude','-Action','Update','-Version',$version,'-CodexDirectory',$claudeHome,'-ArchivePath',$archive,'-ExpectedArchiveSha256',$digest,'-ExpectedSourceCommit',$commit)
+Check ($mixed.code -ne 0) 'Claude Code selection rejects a Codex directory'
+$claudeBack=RunUpdater @('-ClientHost','Claude','-Action','Rollback','-ClaudeDirectory',$claudeHome,'-BackupId',$claude.data.backup_id)
+if ($claudeBack.code) {throw $claudeBack.error_text}
+Check (-not (Test-Path -LiteralPath (Join-Path $claudeHome 'skills/mql5-coding'))) 'Claude Code fresh install rollback restores absence'
+# Files introduced in 1.2.4 are required only from that version: a complete
+# older package without them still installs, and a newer one without them fails.
+$olderSkill=Join-Path $work 'older-skill';Copy-Item -LiteralPath $skill -Destination $olderSkill -Recurse
+[IO.File]::Delete((Join-Path $olderSkill 'references/compile.md'))
+[IO.File]::WriteAllText((Join-Path $olderSkill 'version.json'),'{"schema_version":1,"version":"1.2.3"}')
+& (Join-Path $repo 'scripts/Package-Skill.ps1') -SkillRoot $olderSkill -OutputDirectory (Join-Path $work 'older-package') -SourceCommit $commit | Out-Null
+$olderArchive=Join-Path $work 'older-package/mql5-coding-windows.zip'
+$olderHome=Join-Path $work 'older-home'
+$older=RunUpdater @('-ClientHost','Codex','-Action','Update','-Version','1.2.3','-CodexDirectory',$olderHome,'-ArchivePath',$olderArchive,'-ExpectedArchiveSha256',(Get-Mql5ReleaseHash $olderArchive),'-ExpectedSourceCommit',$commit)
+if ($older.code) {throw $older.error_text}
+Check ($older.data.version -ceq '1.2.3') 'current verifier installs a complete pre-1.2.4 package without compile.md'
+$missingSkill=Join-Path $work 'missing-compile-skill';Copy-Item -LiteralPath $skill -Destination $missingSkill -Recurse
+[IO.File]::Delete((Join-Path $missingSkill 'references/compile.md'))
+Reject {& (Join-Path $repo 'scripts/Package-Skill.ps1') -SkillRoot $missingSkill -OutputDirectory (Join-Path $work 'missing-compile-package') -SourceCommit $commit} 'a 1.2.4 package without compile.md is rejected'
 $base=RunUpdater (Options $freshHome $archive $digest)
 if ($base.code) {throw $base.error_text}
 $nextSkill=Join-Path $work 'next-skill';Copy-Item -LiteralPath $skill -Destination $nextSkill -Recurse

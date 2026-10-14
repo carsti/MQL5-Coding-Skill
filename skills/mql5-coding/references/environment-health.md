@@ -1,18 +1,16 @@
 # MQL5 environment health
 
-Use `scripts/Test-Mql5Environment.ps1` for installation checks and troubleshooting. It reads files and queries processes that it starts for the check. It never compiles code, starts MetaEditor or MT5, changes Codex configuration, downloads packages, or repairs installations.
+Use `scripts/Test-Mql5Environment.ps1` for installation checks and troubleshooting. It reads files and queries processes that it starts for the check. It never compiles code, starts MetaEditor or MT5, changes Codex or Claude Code configuration, downloads packages, or repairs installations.
 
-Resolve the installed command under `CODEX_HOME`:
+Resolve the command from the installed skill root (the directory containing `SKILL.md`; normally `%USERPROFILE%\.claude\skills\mql5-coding` in Claude Code or `CODEX_HOME\skills\mql5-coding` in Codex) and select the current client with `-ClientHost Claude` or `-ClientHost Codex`. When omitted, a checker running from a Claude Code skill tree checks Claude Code and any other location checks Codex:
 
 ```powershell
-$codexDirectory = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
-    Join-Path $env:USERPROFILE '.codex'
-} else { $env:CODEX_HOME }
-$healthCommand = Join-Path $codexDirectory 'skills\mql5-coding\scripts\Test-Mql5Environment.ps1'
+$skillRoot = '<installed skill root containing SKILL.md>'
+$healthCommand = Join-Path $skillRoot 'scripts\Test-Mql5Environment.ps1'
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $healthCommand -WorkspaceRoot '<absolute-workspace-directory>'
 ```
 
-PowerShell 7 (`pwsh`) and Windows PowerShell 5.1 are supported. Use an existing workspace directory; the command does not change the folder saved for a Codex chat. No Python dependency is needed to run the command.
+PowerShell 7 (`pwsh`) and Windows PowerShell 5.1 are supported. Use an existing workspace directory; the command does not change the folder saved for a Codex or Claude Code chat. No Python dependency is needed to run the command.
 
 Editor and associated-terminal metadata use the shared `WindowsExecutableMetadata.ps1` helper, including paths longer than 260 characters. Extended prefixes are used only for version-resource queries; reported paths remain canonical. Unreadable metadata is an explicit `executable_metadata_unavailable` error. This read-only discovery does not establish native execution support at a long path.
 
@@ -21,6 +19,7 @@ Explicit skill, package, and source roots may be absolute drive roots such as `X
 ## Checks and their limits
 
 - **Codex registration:** invokes the native Codex CLI's `mcp get mql5-chm --json` in the selected workspace with the selected `CODEX_HOME`. It checks the enabled state, required tool filters, command, server argument, and any explicit working directory against the selected portable package. An absent/null working directory is accepted because the absolute bundled server path selects its package independently of the inherited directory; an explicit directory must be fully qualified and match that package. Root-relative and drive-relative launch paths are rejected. Malformed enabled states, arguments, environment settings, or tool-filter types fail registration validation. An empty tool allowlist disables the required tools. See the official [Codex MCP guide](https://developers.openai.com/codex/mcp) and [configuration reference](https://developers.openai.com/codex/config-reference). CLI version is reported separately from MCP version; this does not identify the desktop app's version.
+- **Claude Code registration:** reads `.claude.json` (inside `CLAUDE_CONFIG_DIR` when set, otherwise in the user's home directory) with a case-sensitive JSON reader and the workspace `.mcp.json`. It applies Claude Code's precedence (local entry for this workspace, then project `.mcp.json`, then user scope), reports the selected `registration_scope` and any `shadowed_scopes`, and applies the same command, server-argument, environment, and package checks as for Codex. The Claude CLI is used only for `--version`. See the official [Claude Code MCP guide](https://code.claude.com/docs/en/mcp).
 - **Probe cleanup:** each native probe starts suspended and joins an owned kill-on-close Windows Job Object before resuming, with only its standard-stream handles inherited. Every exit path terminates that job and verifies it is empty, including when the parent exited while a child retained output pipes or detached its output. Failed cleanup cannot produce a successful probe result. Each stdout and stderr stream is limited to 1,048,576 decoded characters while reading; stderr is discarded. Exceeding either limit stops the probe and fails the check without returning its output.
 - **MCP integrity and availability:** verifies every entry in the package's `checksums.sha256` before running its pinned Node executable or existing smoke probe. The probe checks real stdio initialization, the four documentation tools, and `mql5_chm_status`, including the package version and active revisions. Integrity means the listed files match the local checksum manifest; it is not a signed authenticity check or an inventory of unlisted mutable files. It is a direct package probe. `native_chat_availability` remains `not_checked`: the command cannot establish whether the current chat has loaded that server. Custom registration environment settings are reported as unverified; their values are never printed.
 - **Skill installation:** requires the packaged instructions, metadata, references, and helpers and checks the consumer contract's server name. `version.json` must be an object with exactly an integer `schema_version` of 1 and a stable version string, using the same rules as packaging and updates. Malformed roots, duplicate/unknown keys, and array/string/boolean schema values fail. It reports the semantic version, file count, and a deterministic SHA-256 fingerprint of the complete skill inventory. This is an installation check, not the full YAML/consumer-contract validator.
@@ -32,11 +31,14 @@ Explicit skill, package, and source roots may be absolute drive roots such as `X
 
 | Option | Purpose |
 | --- | --- |
-| `-WorkspaceRoot` | Existing workspace used for Codex registration and source discovery. |
-| `-CodexHome` | Override the Codex directory for this check only; defaults to `CODEX_HOME` or the user's `.codex` directory. |
+| `-WorkspaceRoot` | Existing workspace used for registration and source discovery. |
+| `-ClientHost` | `Codex` or `Claude`. Defaults to `Claude` when the checker runs from a Claude Code skill tree, when `-ClaudeConfigDirectory` or `-ClaudePath` is supplied; otherwise `Codex`. |
+| `-CodexHome` | Override the Codex directory for this check only; defaults to `CODEX_HOME` or the user's `.codex` directory. The shared Python environment is always resolved here. |
 | `-CodexPath` | Explicit native `codex.exe`; shell shims are not used. |
+| `-ClaudeConfigDirectory` | Override the Claude Code configuration directory; defaults to `CLAUDE_CONFIG_DIR` or the user's `.claude` directory. |
+| `-ClaudePath` | Explicit native `claude.exe`, used only for its version. |
 | `-McpPackageRoot` | Portable package to inspect; otherwise inferred from registration. A registration/package mismatch fails the check. |
-| `-SkillRoot` | Skill to inspect; defaults to `CODEX_HOME\skills\mql5-coding`. |
+| `-SkillRoot` | Skill to inspect; defaults to `<claude directory>\skills\mql5-coding` for Claude Code or `CODEX_HOME\skills\mql5-coding` for Codex. |
 | `-McpSourceRoot`, `-SkillSourceRoot` | Select source roots for comparison. The skill root must contain `SKILL.md`. |
 | `-MetaEditorPath`, `-PythonPath` | Select executable paths instead of automatic discovery; the editor option also accepts its directory. |
 | `-TimeoutSeconds` | Each ordinary subprocess probe's deadline, 5–60 seconds; default 15. MCP smoke gets five additional seconds for cleanup. Multiple probes run sequentially, so this is not a total command deadline. |

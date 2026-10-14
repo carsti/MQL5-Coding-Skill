@@ -45,6 +45,7 @@ EXPECTED_SKILL_FILES = {
     "scripts/Read-Mql5Journal.ps1",
     "scripts/Invoke-Mql5ScenarioBatch.ps1",
     "references/toolkit.md",
+    "references/compile.md",
     "references/focused-review.md",
     "references/performance.md",
     "references/refactoring.md",
