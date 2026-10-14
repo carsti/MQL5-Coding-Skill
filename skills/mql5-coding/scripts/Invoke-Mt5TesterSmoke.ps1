@@ -25,7 +25,9 @@ param(
     [string[]]$ExpectedLogMarker = @(),
     $ExpectedLogMarkerFile,
 
-    # Optional legacy switch retained for command compatibility.
+    # Required for -Execute when the terminal has saved account credentials,
+    # or when that state cannot be inspected. Pass it only after the user
+    # confirms that the saved (possibly live) account may initialize.
     [switch]$AcknowledgeSavedAccountRisk,
 
     [switch]$Execute,
@@ -143,6 +145,10 @@ $result = [ordered]@{
         strategy_tester_requested = [bool]$Execute
         saved_account_risk_acknowledgement_required = $false
         saved_account_risk_acknowledged = [bool]$AcknowledgeSavedAccountRisk
+        saved_account_inspection = 'not_checked'
+        saved_accounts_detected = $null
+        default_data_directories = @()
+        selected_data_directory_is_default_for_terminal = $false
         saved_terminal_state_isolation_verified = $false
         optimization = $false
         visual_mode = $false
@@ -166,7 +172,7 @@ $result = [ordered]@{
         execution_staging_auto_cleanup = $false
         preflight_staging_auto_cleanup = $false
         untrusted_code_sandbox = $false
-        notice = 'The generated startup file requests local-only testing, disabled live trading, and terminal shutdown, but the effects of those startup keys are not verified in the installed MQL5 CHM. MT5 may initialize its saved broker account before the Strategy Tester starts. This runner does not attach the EA to a chart or call a live-order API, but it is not a security sandbox for untrusted EX5 code. The terminal is created suspended, assigned to a kill-on-close Windows Job Object, and resumed only after identity checks. Terminal-process discovery is point-in-time and cannot prevent a separately launched terminal from starting and exiting between checks.'
+        notice = 'The generated startup file requests local-only testing, disabled live trading, and terminal shutdown, but the effects of those startup keys are not verified in the installed MQL5 CHM. MT5 may initialize its saved broker account before the Strategy Tester starts, which can include resuming Signals copying; execution therefore requires -AcknowledgeSavedAccountRisk whenever saved account credentials are present or cannot be ruled out. This runner does not attach the EA to a chart or call a live-order API, but it is not a security sandbox for untrusted EX5 code. The terminal is created suspended, assigned to a kill-on-close Windows Job Object, and resumed only after identity checks. Terminal-process discovery is point-in-time and cannot prevent a separately launched terminal from starting and exiting between checks.'
     }
     artifacts = [ordered]@{}
     process = [ordered]@{
@@ -289,6 +295,11 @@ try {
         }
         $expectedExpertHash = ([string]$ExpectedExpertSha256).ToLowerInvariant()
         $result.inputs.expected_expert_sha256 = $expectedExpertHash
+    }
+    # Never stage an uncommitted EX5: a failed compilation can leave an older
+    # artifact at the same path. The profile wrapper enforces the same rule.
+    if ($null -eq $expectedExpertHash -and [string]::IsNullOrWhiteSpace([string]$CompilationReceiptPath)) {
+        throw 'Select the exact successful -CompilationReceiptPath or a trusted -ExpectedExpertSha256 for this run.'
     }
 
     Assert-SafeIniValue -Value $Symbol -Name 'Symbol' -MaximumLength 64
@@ -441,6 +452,30 @@ try {
         output_directory = $output
         terminal_image = $null
         terminal_origin = $null
+    }
+
+    # MT5 is launched with only /config, so it opens the default data
+    # directory bound to its installation, not necessarily the selected one.
+    # Inspect that directory and refuse a mismatch before any staging write.
+    $accountState = Get-TerminalSavedAccountState -TerminalPath $terminal -SelectedDataPath $data -Tracker $pathEntryLeases -LeasesByPath $leasedPathEntries
+    $result.safety.default_data_directories = @($accountState.default_data_directories)
+    $result.safety.selected_data_directory_is_default_for_terminal = [bool]$accountState.selected_is_default
+    $result.safety.saved_account_inspection = [string]$accountState.state
+    $result.safety.saved_accounts_detected = if ($accountState.state -ceq 'unknown') { $null } else { $accountState.state -ceq 'present' }
+    $result.safety.saved_account_risk_acknowledgement_required = $accountState.state -cne 'none'
+    if (@($accountState.default_data_directories).Count -gt 0 -and -not [bool]$accountState.selected_is_default) {
+        throw "BLOCKED: TerminalDataPath is not the data directory this terminal opens at startup ($(@($accountState.default_data_directories) -join '; ')). Select that directory or omit TerminalDataPath."
+    }
+    if ($accountState.state -cne 'none') {
+        $accountMessage = if ($accountState.state -ceq 'present') {
+            'The terminal has saved account credentials. Starting it may log into that (possibly live) account and resume Signals copying.'
+        } else {
+            "Saved account state could not be inspected: $($accountState.reason)"
+        }
+        if ($Execute -and -not $AcknowledgeSavedAccountRisk) {
+            throw "BLOCKED: $accountMessage Get explicit user confirmation, then rerun with -AcknowledgeSavedAccountRisk, or use a dedicated terminal without saved accounts."
+        }
+        $warnings.Add($accountMessage)
     }
 
     $lock = Open-DataDirectoryLock -TerminalDataPath $data -RunId $runId

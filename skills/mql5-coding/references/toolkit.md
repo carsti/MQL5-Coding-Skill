@@ -1,6 +1,22 @@
 # Reusable analysis and scenario toolkit
 
-Use these helpers for repeated processing. Ordinary reading, editing, searching, and diagnosis still use Codex directly. The documentation MCP remains the authority for MQL5 facts. The helpers are shell commands, not new MCP tools. No new Python environment or dependency is needed; use the shared environment described in SKILL.md. All Python modules use the standard library and Python 3.12 or newer.
+Use these helpers for repeated processing. Ordinary reading, editing, searching, and diagnosis still use the agent (Codex or Claude Code) directly. The documentation MCP remains the authority for MQL5 facts. The helpers are shell commands, not new MCP tools. No new Python environment or dependency is needed; use the shared environment below. All Python modules use the standard library and Python 3.12 or newer.
+
+## Shared Python environment
+
+Python analysis is optional and requires the separately managed shared MQL5 Python environment. It is shared by Codex and Claude Code and always lives under `CODEX_HOME` (default `%USERPROFILE%\.codex`). Place temporary analysis scripts and default outputs in its `work` directory, and invoke:
+
+```powershell
+$codexHome = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
+    Join-Path $env:USERPROFILE ".codex"
+} else {
+    $env:CODEX_HOME
+}
+$pythonLauncher = [IO.Path]::GetFullPath((Join-Path $codexHome "tools\mql5-python\mql5-python.cmd"))
+& $pythonLauncher "<absolute-analysis-script.py>" <absolute-input-paths>
+```
+
+If that launcher is unavailable, report the missing optional dependency rather than improvising another environment. Treat EA projects as read-only analysis inputs unless the user requested edits. Do not create project-local virtual environments, dependency files, caches, or Matplotlib state. Report the launcher's nonzero exit code as failure.
 
 ## Commands and evidence
 
@@ -111,7 +127,7 @@ Scenario IDs contain 1–64 ASCII letters, digits, underscores, or hyphens, star
 
 Batch marker files use the tester's shared strict UTF-8 reader (optional UTF-8 BOM), literal pass-protocol validator, and collection limits. Labels contain 1–64 ASCII letters, digits, underscores, dots, or hyphens. Files cannot exceed 65,536 bytes; select at most 64 markers totaling at most 8,192 characters. Blank lines are ignored; batches reject duplicate markers. UTF-16 files, unsupported labels, and exceeded limits fail the entire manifest before any scenario compiles or starts testing, including when the invalid selection appears after otherwise valid scenarios.
 
-`Invoke-Mql5ScenarioBatch.ps1 -ManifestPath <absolute-json> -OutputDirectory <new-absolute-directory>` defaults to `-Action Validate`, without compiling or launching MT5. `-Action Execute` compiles the selected tester entrypoint immediately before each sequential run and passes its freshly emitted receipt to the existing tester. Batch compilation suppresses the full console log to stay within bounded process capture; the compiler retains the complete log and its hash in the receipt for diagnostic inspection. Optional `-PythonPath` selects an already existing interpreter; otherwise the shared environment is required. Execution carries the existing tester's artifact, configuration, and process requirements, without another permission prompt.
+`Invoke-Mql5ScenarioBatch.ps1 -ManifestPath <absolute-json> -OutputDirectory <new-absolute-directory>` defaults to `-Action Validate`, without compiling or launching MT5. `-Action Execute` compiles the selected tester entrypoint immediately before each sequential run and passes its freshly emitted receipt to the existing tester. Batch compilation suppresses the full console log to stay within bounded process capture; the compiler retains the complete log and its hash in the receipt for diagnostic inspection. Optional `-PythonPath` selects an already existing interpreter; otherwise the shared environment is required. Execution carries the existing tester's artifact, configuration, process, and saved-account requirements. `-AcknowledgeSavedAccountRisk` is forwarded to every tester run in the batch; pass it only after the user explicitly confirms that the selected terminals' saved accounts may log in.
 
 The result fingerprints the manifest before validation, each profile before reading it, and optional evidence before processing it. It rechecks those selections after validation and at compiler, tester, and analysis stage boundaries once owned-process cleanup is verified. A changed or unavailable selection stops subsequent execution and skips remaining scenarios. Checks at these boundaries do not establish an atomic snapshot across concurrent file changes. Unicode receipt paths are preserved across the supported PowerShell process boundaries.
 

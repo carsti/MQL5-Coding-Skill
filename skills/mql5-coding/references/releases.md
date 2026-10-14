@@ -1,16 +1,15 @@
 # Verified releases, updates and rollback
 
-Stable releases use explicit tags, starting at `v1.0.0`; this source prepares package `v1.2.2`. Local preparation and verified offline installation do not publish a GitHub release. Version 1.2.2 keeps the model selected for the active request and removes named-model evaluation defaults. The ZIP contains exactly the skill files and a release manifest with the tag, version, reviewed source commit, lengths and SHA-256 of every file. The repository-level packager verifies its own output. Release CI validates both shells and the MCP pair before retaining packages; any later publication must use a successful commit's assets.
+Stable releases use explicit tags, starting at `v1.0.0`; this source prepares package `v1.2.4`. Local preparation and verified offline installation do not publish a GitHub release. Version 1.2.4 halves the always-loaded `SKILL.md` by moving compile detail to the on-demand `references/compile.md` and adds call-efficiency guidance for the documentation tools. Version 1.2.3 added Claude Code installation, update, rollback and health checks, and requires explicit confirmation before tester execution on a terminal with saved account state. Version 1.2.2 kept the model selected for the active request and removed named-model evaluation defaults. The ZIP contains exactly the skill files and a release manifest with the tag, version, reviewed source commit, lengths and SHA-256 of every file. The repository-level packager verifies its own output. Release CI validates both shells and the MCP pair before retaining packages; any later publication must use a successful commit's assets.
 
 Run the trusted installed `scripts/Update-Mql5Skill.ps1` from a directory outside the installed skill. For the first upgrade from an older installation, run the script from a reviewed checkout of this repository. In particular, the 1.0.2 verifier rejects the new `assets/` package location; the reviewed 1.1.0 verifier accepts that bounded location and retains the same manifest, hash, backup, and rollback checks. Do not run an updater from an unverified download. The updater requires Windows PowerShell 5.1 or PowerShell 7; online actions also require authenticated `gh` access to the private repository. Offline updates need neither GitHub access, Python, nor MetaTrader.
 
+The updater manages one client installation per call. `-ClientHost Claude` manages `<claude directory>\skills\mql5-coding` (the directory is `-ClaudeDirectory`, else `CLAUDE_CONFIG_DIR`, else `%USERPROFILE%\.claude`) with state in `<claude directory>\mql5-skill-updates`. `-ClientHost Codex` manages `CODEX_HOME\skills\mql5-coding` (`-CodexDirectory` overrides `CODEX_HOME`) with state in `CODEX_HOME\tools\mql5-skill-updates`. When `-ClientHost` is omitted, `-ClaudeDirectory` or an updater running from a Claude Code skill tree selects Claude Code; otherwise Codex. Always pass `-ClientHost` explicitly so one client's command cannot change the other's installation. A first Claude Code installation is a normal `Update` into an absent destination; its rollback restores that absence.
+
 ```powershell
-$codexDirectory = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
-    Join-Path $env:USERPROFILE '.codex'
-} else { $env:CODEX_HOME }
-$updater = Join-Path $codexDirectory 'skills/mql5-coding/scripts/Update-Mql5Skill.ps1'
-& $updater -Action Check -Version '<published-version>'
-& $updater -Action Update -Version '<published-version>'
+$updater = '<trusted installed skill root>\scripts\Update-Mql5Skill.ps1'
+& $updater -ClientHost Claude -Action Check -Version '<published-version>'
+& $updater -ClientHost Claude -Action Update -Version '<published-version>'
 ```
 
 `Check` reads authenticated release metadata and installed version, without downloading or modifying files. Its `installed_bytes_verified=false` explicitly distinguishes version inspection from byte verification. `Update` downloads the named stable release, verifies its length and GitHub asset SHA-256, resolves the tag's source commit, and checks the complete manifest and every skill file before replacing anything. Drafts, prereleases, missing digests, unlisted files, duplicate paths, links, traversal entries, oversized archives, and mismatched identities are rejected. No downloaded code is executed by the verifier. An already installed identical version is verified and returned as `already_current`; changed bytes at that version fail.
@@ -21,20 +20,20 @@ Rollback requires a typed backup record with the selected backup ID, exact desti
 
 Absolute drive roots retain their trailing separator through path validation and file inventory. Selecting `X:\` must not become the drive-relative `X:` or follow a current subfolder. Inventories keep correct paths relative to that root, and packaging still refuses an output directory inside the selected skill tree.
 
-Updates preserve the whole previous skill directory, including custom files, under `CODEX_HOME/tools/mql5-skill-updates/<backup_id>/backup-tree`. The result gives that ID. A lock excludes concurrent updater operations. The updater verifies a complete snapshot before changing anything, keeps the installed root directory in place, and stages on the same volume. It journals replacement of the root's children so an open Codex directory watcher does not block an update. Caught publication failures restore displaced children. It retains a pending transaction marker across a process or machine interruption and refuses another update until rollback resolves it. This is recoverable replacement, not a crash-atomic switch of all files. Close programs that lock individual child directories/files if a rename fails, or the root when rolling back a fresh installation to absence.
+Updates preserve the whole previous skill directory, including custom files, under the selected client's state directory (`CODEX_HOME/tools/mql5-skill-updates/<backup_id>/backup-tree` for Codex, `<claude directory>/mql5-skill-updates/<backup_id>/backup-tree` for Claude Code). The result gives that ID. A lock excludes concurrent updater operations. The updater verifies a complete snapshot before changing anything, keeps the installed root directory in place, and stages on the same volume. It journals replacement of the root's children so an open client directory watcher does not block an update. Caught publication failures restore displaced children. It retains a pending transaction marker across a process or machine interruption and refuses another update until rollback resolves it. This is recoverable replacement, not a crash-atomic switch of all files. Close programs that lock individual child directories/files if a rename fails, or the root when rolling back a fresh installation to absence.
 
 ```powershell
 & $updater -Action Rollback -BackupId '<32-character-ID-returned-by-update>'
 ```
 
-Rollback verifies the retained snapshot before restoring it and preserves the displaced installation in a new backup. Rolling back a fresh installation restores the previous absence of the skill. It does not download anything. Backup records and hashes are local integrity evidence, not cryptographic signatures; an actor able to change both can change the evidence. Keep retained backups until they are no longer needed. Project profiles, Python, MCP registration, terminals and broker settings are outside the skill tree and are not changed. Fully restart Codex after a changed installation so new chats load the new instructions.
+Rollback verifies the retained snapshot before restoring it and preserves the displaced installation in a new backup. Rolling back a fresh installation restores the previous absence of the skill. It does not download anything. Backup records and hashes are local integrity evidence, not cryptographic signatures; an actor able to change both can change the evidence. Keep retained backups until they are no longer needed. Project profiles, Python, MCP registration, terminals and broker settings are outside the skill tree and are not changed. Fully restart the selected client (`restart_client`; `restart_codex` remains true only for Codex) after a changed installation so new chats load the new instructions.
 
 If rollback is interrupted again, recovery follows the pending intents back to the original snapshot. After verifying the restored files, it clears all related pending markers, removing descendants before their ancestors. A cleanup failure retains the unresolved intent's recovery chain so a later rollback still selects the original snapshot.
 
 For an offline update, supply all trust inputs explicitly:
 
 ```powershell
-& $updater -Action Update -Version 1.2.2 -ArchivePath '<absolute-zip-path>' `
+& $updater -ClientHost Claude -Action Update -Version 1.2.4 -ArchivePath '<absolute-zip-path>' `
     -ExpectedArchiveSha256 '<trusted-64-hex-digest>' -ExpectedSourceCommit '<trusted-40-hex-commit>'
 ```
 

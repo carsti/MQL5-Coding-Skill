@@ -585,6 +585,123 @@ function Read-TerminalOrigin {
     }
 }
 
+function Read-TerminalOriginForInspection {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $info = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if ($info.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "Terminal origin file is a reparse point: $Path"
+    }
+    if ([long]$info.Length -le 0 -or [long]$info.Length -gt 32768) {
+        throw "Terminal origin file must contain 1-32768 bytes: $Path"
+    }
+    $strictUtf8 = New-Object Text.UTF8Encoding($false, $true)
+    $reader = New-Object IO.StreamReader($info.FullName, $strictUtf8, $true)
+    try {
+        $text = $reader.ReadToEnd()
+    }
+    finally {
+        $reader.Dispose()
+    }
+    return ConvertFrom-TerminalOriginText -Text $text -SourcePath $info.FullName
+}
+
+function Get-TerminalSavedAccountState {
+    # Read-only inspection. MT5 started with only /config opens the default
+    # data directory bound to its installation under the user's
+    # MetaQuotes\Terminal folder. Saved logins live in config\accounts.dat
+    # (observed terminal layout; Not verified in the installed MQL5 CHM).
+    # Unreadable state is reported as 'unknown', never as credential-free.
+    param(
+        [Parameter(Mandatory)][string]$TerminalPath,
+        [Parameter(Mandatory)][string]$SelectedDataPath,
+        [Parameter(Mandatory)]$Tracker,
+        [Parameter(Mandatory)][hashtable]$LeasesByPath
+    )
+
+    $install = [IO.Path]::GetFullPath((Split-Path -Parent $TerminalPath)).TrimEnd('\', '/')
+    $selected = [IO.Path]::GetFullPath($SelectedDataPath).TrimEnd('\', '/')
+    $defaults = New-Object 'System.Collections.Generic.List[string]'
+    $state = 'none'
+    $reasons = New-Object 'System.Collections.Generic.List[string]'
+
+    $terminalDataRoot = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'MetaQuotes\Terminal'
+    try {
+        if (Test-Path -LiteralPath $terminalDataRoot -PathType Container) {
+            # Lease the root no-follow before enumerating, as discovery does.
+            $null = Open-NonReparseDirectoryChain -Path $terminalDataRoot -Tracker $Tracker -LeasesByPath $LeasesByPath
+            foreach ($directory in @(Get-ChildItem -LiteralPath $terminalDataRoot -Directory -Force -ErrorAction Stop)) {
+                if ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                    $state = 'unknown'
+                    $reasons.Add("terminal data directory is a reparse point: $($directory.FullName)")
+                    continue
+                }
+                $originPath = Join-Path $directory.FullName 'origin.txt'
+                if (-not (Test-Path -LiteralPath $originPath -PathType Leaf)) {
+                    # A data directory without its binding could still be the
+                    # one MT5 opens. Saved accounts there cannot be ruled out.
+                    if (Test-Path -LiteralPath (Join-Path $directory.FullName 'config\accounts.dat')) {
+                        $state = 'unknown'
+                        $reasons.Add("unbound terminal data directory has saved accounts: $($directory.FullName)")
+                    }
+                    continue
+                }
+                try {
+                    $origin = Read-TerminalOriginForInspection -Path $originPath
+                }
+                catch {
+                    $state = 'unknown'
+                    $reasons.Add("unreadable origin.txt in $($directory.FullName)")
+                    continue
+                }
+                if ($origin.TrimEnd('\', '/').Equals($install, [StringComparison]::OrdinalIgnoreCase)) {
+                    $defaults.Add([IO.Path]::GetFullPath($directory.FullName).TrimEnd('\', '/'))
+                }
+            }
+        }
+    }
+    catch {
+        $state = 'unknown'
+        $reasons.Add("default data directories could not be enumerated: $($_.Exception.Message)")
+    }
+
+    $inspect = New-Object 'System.Collections.Generic.List[string]'
+    $inspect.Add($selected)
+    foreach ($directory in $defaults) {
+        if (-not ($inspect -icontains $directory)) {
+            $inspect.Add($directory)
+        }
+    }
+    foreach ($directory in $inspect) {
+        $accounts = Join-Path $directory 'config\accounts.dat'
+        try {
+            $accountsInfo = Get-Item -LiteralPath $accounts -Force -ErrorAction Stop
+            if ($accountsInfo.PSIsContainer -or [long]$accountsInfo.Length -gt 0) {
+                $state = 'present'
+            }
+        }
+        catch [Management.Automation.ItemNotFoundException] {
+            continue
+        }
+        catch {
+            if ($state -cne 'present') {
+                $state = 'unknown'
+            }
+            $reasons.Add("account store could not be inspected in $directory")
+        }
+    }
+
+    $selectedIsDefault = $defaults.Count -eq 1 -and
+        $defaults[0].Equals($selected, [StringComparison]::OrdinalIgnoreCase)
+    return [pscustomobject]@{
+        state = $state
+        reason = ($reasons.ToArray() -join '; ')
+        default_data_directories = $defaults.ToArray()
+        selected_is_default = $selectedIsDefault
+        inspected_data_directories = $inspect.ToArray()
+    }
+}
+
 function Resolve-TerminalBinding {
     param(
         [string]$RequestedTerminalPath,
@@ -635,6 +752,11 @@ function Resolve-TerminalBinding {
                 $candidateTerminal = [IO.Path]::GetFullPath(
                     (Join-Path $origin 'terminal64.exe')
                 )
+                # A leftover data directory can name a removed installation.
+                # Skip it here; unsafe existing paths still fail below.
+                if (-not (Test-Path -LiteralPath $origin -PathType Container)) {
+                    continue
+                }
                 $candidateTerminalLease = Try-OpenNonReparseFileLeaf -Path $candidateTerminal -Tracker $Tracker -LeasesByPath $LeasesByPath
                 if ($null -eq $candidateTerminalLease) {
                     continue

@@ -6,7 +6,10 @@ param(
     [ValidateSet('Validate','Execute')][string]$Action='Validate',
     [string]$PythonPath,
     [switch]$CaptureSourceSnapshot,
-    [string]$CancellationFile
+    [string]$CancellationFile,
+    # Forwarded to each tester run; pass only after the user confirms that a
+    # saved (possibly live) terminal account may initialize.
+    [switch]$AcknowledgeSavedAccountRisk
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
@@ -18,7 +21,7 @@ $hostExe=if ($PSVersionTable.PSEdition -eq 'Core') {Join-Path $PSHOME 'pwsh.exe'
 $output=$null;$current=$null;$abort=$false
 $result=[ordered]@{schema_version=1;operation='scenario batch';action=$Action;status='failed';manifest=$null;scenarios=@();issues=@();exit_code=2;duration_milliseconds=$null;duration_is_ea_cost=$false}
 $clock=[Diagnostics.Stopwatch]::StartNew()
-function Invoke-BatchProfile([string[]]$Arguments,[int]$Seconds,[bool]$SuppressLogOutput=$false) {
+function Invoke-BatchProfile([string[]]$Arguments,[int]$Seconds,[bool]$SuppressLogOutput=$false,[bool]$AcknowledgeAccount=$false) {
     $command='[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false); $OutputEncoding=[Console]::OutputEncoding; & '+"'"+(Join-Path $PSScriptRoot 'Invoke-Mql5Project.ps1').Replace("'","''")+"'"
     if ($Arguments.Count % 2) {throw 'Profile invocation requires named value pairs.'}
     for ($part=0;$part -lt $Arguments.Count;$part+=2) {
@@ -26,6 +29,7 @@ function Invoke-BatchProfile([string[]]$Arguments,[int]$Seconds,[bool]$SuppressL
         $command+=' '+$Arguments[$part]+" '"+$Arguments[$part+1].Replace("'","''")+"'"
     }
     if ($SuppressLogOutput) {$command+=' -SuppressLogOutput';if ($CaptureSourceSnapshot) {$command+=' -CaptureSourceSnapshot -PythonPath '+"'"+$python.Replace("'","''")+"'"}}
+    if ($AcknowledgeAccount) {$command+=' -AcknowledgeSavedAccountRisk'}
     $command+='; exit $LASTEXITCODE'
     $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     return Invoke-ToolkitProcess $hostExe @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded) $output $Seconds
@@ -178,7 +182,7 @@ try {
                 $arguments+=@('-BuildSnapshotPath',$snapshotMatches[0].Groups[1].Value.TrimEnd("`r"))
             }
             if ($item.expected_marker_file) {$arguments+=@('-ExpectedLogMarkerFile',$item.expected_marker_file)}
-            $tested=Invoke-BatchProfile $arguments ($item.profile.tester.timeout_seconds+60)
+            $tested=Invoke-BatchProfile $arguments ($item.profile.tester.timeout_seconds+60) $false ([bool]$AcknowledgeSavedAccountRisk)
             $runPath=Join-Path $scenarioRoot 'tester\smoke-result.json';$run=$null
             if (Test-Path -LiteralPath $runPath -PathType Leaf) {try {$run=Read-Mql5ReleaseJson $runPath} catch {$result.issues+=@(@{code='invalid_tester_result';scenario=$item.id})}}
             $nativeStatus=Get-ToolkitValue $run 'status'

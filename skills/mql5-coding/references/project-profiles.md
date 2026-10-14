@@ -2,17 +2,15 @@
 
 Use a profile when the user asks to save or reuse an EA project's setup. A profile is a versioned JSON data file with one object at its root, not an execution instruction. Wrapping that object in an array is unsupported and rejected. Creating it and the default `Validate` action do not start MetaEditor or MT5. Compilation and tester actions delegate to the existing wrappers and retain their exit codes, receipts, path checks, and evidence rules.
 
-Read the [Strategy Tester workflow](strategy-tester.md) completely before a tester action. A saved profile supplies settings, not executable trust or proof of a fresh build. Enter the tester workflow for execution or readiness checks requested or needed for the task, without a separate approval or saved-account acknowledgement.
+Read the [Strategy Tester workflow](strategy-tester.md) completely before a tester action. A saved profile supplies settings, not executable trust or proof of a fresh build. Enter the tester workflow for execution or readiness checks requested or needed for the task. Execution on a terminal with saved or uninspectable account state needs the user's explicit confirmation and `-AcknowledgeSavedAccountRisk`, as the tester workflow describes.
 
 ## Save an explicit selection
 
-Resolve the installed scripts directory under `CODEX_HOME\skills\mql5-coding\scripts` (or `%USERPROFILE%\.codex` when `CODEX_HOME` is unset). In PowerShell, substitute real paths and an unused profile filename whose parent already exists:
+Use the `scripts` directory of the installed skill root (the directory containing `SKILL.md`; normally `%USERPROFILE%\.claude\skills\mql5-coding` in Claude Code or `CODEX_HOME\skills\mql5-coding` in Codex). In PowerShell, substitute real paths and an unused profile filename whose parent already exists:
 
 ```powershell
-$codexDirectory = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
-    Join-Path $env:USERPROFILE '.codex'
-} else { $env:CODEX_HOME }
-$scripts = Join-Path $codexDirectory 'skills\mql5-coding\scripts'
+$skillRoot = '<installed skill root containing SKILL.md>'
+$scripts = Join-Path $skillRoot 'scripts'
 $selection = @{
     ProfilePath = 'D:\EA projects\Breakout\mql5-project.json'
     Name = 'Breakout'
@@ -76,7 +74,7 @@ For a readiness check, use the exact successful receipt and an unused output dir
     -OutputDirectory '<new-absolute-output-directory>'
 ```
 
-Execution uses `-Action TesterSmoke` and the same per-run evidence/output parameters, with no separate permission prompt or acknowledgement. `-AcknowledgeSavedAccountRisk` remains optional for compatibility with older commands. Supply an expected marker or marker-file only when the selected EA emits it. A trusted `-ExpectedExpertSha256` remains an alternative to a receipt; if both are supplied they must agree. Interpret `smoke-result.json` and the existing runner exit codes exactly as the tester reference requires. Presets and settings saved in a profile must still reflect the user's current intended run.
+Execution uses `-Action TesterSmoke` and the same per-run evidence/output parameters, `-AcknowledgeSavedAccountRisk` is required only when the runner reports saved or uninspectable account state, and only after the user explicitly confirms in chat; otherwise the runner blocks with exit `4` before starting MT5. Supply an expected marker or marker-file only when the selected EA emits it. A trusted `-ExpectedExpertSha256` remains an alternative to a receipt; if both are supplied they must agree. Interpret `smoke-result.json` and the existing runner exit codes exactly as the tester reference requires. Presets and settings saved in a profile must still reflect the user's current intended run.
 
 ## Portability and limits
 

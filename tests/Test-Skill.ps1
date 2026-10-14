@@ -138,7 +138,8 @@ function Invoke-RunnerCase {
         [string]$ExpectedLogMarker,
         [string]$ExpectedLogMarkerFile,
         [string]$FakeMarker = '',
-        [int]$TimeoutSeconds = 15
+        [int]$TimeoutSeconds = 15,
+        [switch]$AcknowledgeSavedAccountRisk
     )
 
     $outputDirectory = Join-Path (Join-Path $testRoot 'outputs') $Name
@@ -187,6 +188,9 @@ function Invoke-RunnerCase {
     if (-not [string]::IsNullOrWhiteSpace($ExpectedLogMarkerFile)) {
         $arguments.Add('-ExpectedLogMarkerFile')
         $arguments.Add((Quote-NativeArgument -Value $ExpectedLogMarkerFile))
+    }
+    if ($AcknowledgeSavedAccountRisk) {
+        $arguments.Add('-AcknowledgeSavedAccountRisk')
     }
 
     $startInfo = New-Object Diagnostics.ProcessStartInfo
@@ -1132,7 +1136,13 @@ $redactionProbe = & {
         'ERROR password_confirmation=confirmation-secret',
         'ERROR tokenValue=camel-token-value',
         'ERROR {\"password_confirmation\":\"json-confirmation-secret\"}',
-        'ERROR {\"tokenValue\":\"json-token-value\"}'
+        'ERROR {\"tokenValue\":\"json-token-value\"}',
+        'ERROR InpAPIKey=acronym-api-key',
+        'ERROR InpAPIKEY=caps-api-key',
+        'ERROR InpPASSWORD=caps-password',
+        'ERROR InpTOKEN: caps-token',
+        'ERROR InpAPIKey1=numbered-api-key',
+        'ERROR API_KEY2=numbered-snake-key'
     )
     $negative = @(
         'ERROR token refresh failed',
@@ -4659,6 +4669,78 @@ try {
         })
     Assert-True -Condition ($matchingTerminals.Count -eq 0) `
         -Message 'Synthetic terminal process remained after validation.'
+
+    # An EX5 without a receipt or trusted hash is never staged.
+    $uncommitted = Invoke-RunnerCase `
+        -Name 'execute-uncommitted-ex5' `
+        -Mode Execute `
+        -TerminalPath $terminal `
+        -TerminalDataPath $dataPath `
+        -ExpertPath $expert `
+        -PresetPath $preset `
+        -ExpertSha256 '' `
+        -FakeMode 'pass'
+    $uncommittedText = $uncommitted.StandardError + $uncommitted.StandardOutput
+    if ($null -ne $uncommitted.Result) {
+        $uncommittedText += (@($uncommitted.Result.errors) -join ' ')
+    }
+    Assert-True -Condition ($uncommitted.ExitCode -eq 2 -and
+        ($null -eq $uncommitted.Result -or -not [bool]$uncommitted.Result.process.process_created) -and
+        $uncommittedText -match 'CompilationReceiptPath') `
+        -Message "Runner accepted an EX5 without a receipt or trusted hash: exit $($uncommitted.ExitCode)."
+
+    $accountsDirectory = Join-Path $dataPath 'config'
+    $accountsPath = Join-Path $accountsDirectory 'accounts.dat'
+    [IO.Directory]::CreateDirectory($accountsDirectory) | Out-Null
+    [IO.File]::WriteAllBytes($accountsPath, [byte[]](1, 2, 3, 4))
+    try {
+        $savedAccountPreflight = Invoke-RunnerCase `
+            -Name 'preflight-saved-account' `
+            -Mode PreflightOnly `
+            -TerminalPath $terminal `
+            -TerminalDataPath $dataPath `
+            -ExpertPath $expert `
+            -PresetPath $preset `
+            -ExpertSha256 $expertHash
+        Assert-True -Condition ($savedAccountPreflight.ExitCode -eq 0 -and
+            $savedAccountPreflight.Result.safety.saved_account_inspection -ceq 'present' -and
+            [bool]$savedAccountPreflight.Result.safety.saved_account_risk_acknowledgement_required) `
+            -Message "Preflight did not report saved account state: exit $($savedAccountPreflight.ExitCode) $($savedAccountPreflight.StandardError)"
+
+        $savedAccountBlocked = Invoke-RunnerCase `
+            -Name 'execute-saved-account-blocked' `
+            -Mode Execute `
+            -TerminalPath $terminal `
+            -TerminalDataPath $dataPath `
+            -ExpertPath $expert `
+            -PresetPath $preset `
+            -ExpertSha256 $expertHash `
+            -FakeMode 'pass'
+        Assert-True -Condition ($savedAccountBlocked.ExitCode -eq 4 -and
+            $savedAccountBlocked.Result.status -ceq 'blocked' -and
+            -not [bool]$savedAccountBlocked.Result.process.process_created) `
+            -Message "Execution on a terminal with saved accounts was not blocked: exit $($savedAccountBlocked.ExitCode)."
+
+        $savedAccountAcknowledged = Invoke-RunnerCase `
+            -Name 'execute-saved-account-acknowledged' `
+            -Mode Execute `
+            -TerminalPath $terminal `
+            -TerminalDataPath $dataPath `
+            -ExpertPath $expert `
+            -PresetPath $preset `
+            -ExpertSha256 $expertHash `
+            -FakeMode 'pass' `
+            -AcknowledgeSavedAccountRisk
+        Assert-True -Condition ($savedAccountAcknowledged.ExitCode -eq 0 -and
+            [bool]$savedAccountAcknowledged.Result.safety.saved_account_risk_acknowledged) `
+            -Message "Acknowledged execution with saved accounts failed: exit $($savedAccountAcknowledged.ExitCode) $($savedAccountAcknowledged.StandardError)"
+    }
+    finally {
+        [IO.File]::Delete($accountsPath)
+    }
+    Assert-True -Condition ($pass.Result.safety.saved_account_inspection -ceq 'none' -and
+        -not [bool]$pass.Result.safety.saved_account_risk_acknowledgement_required) `
+        -Message 'A credential-free fixture terminal unexpectedly required an acknowledgement.'
 
     Write-Output (
         'SKILL_TEST_PASS host={0} compile=0,1,2,3,4 preflight={1} execute={2} timeout={3}' -f
