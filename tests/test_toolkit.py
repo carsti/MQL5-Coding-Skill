@@ -211,6 +211,14 @@ class ToolkitTests(unittest.TestCase):
             with self.assertRaisesRegex(InputError, "Ambiguous terminal build header"):
                 native_report(duplicate)
 
+    def test_oversized_report_is_rejected_with_a_bounded_read(self):
+        oversized = self.root/"oversized.htm"
+        with oversized.open("wb") as stream:
+            stream.truncate(64 * 1024 * 1024 + 1)
+        with patch.object(Path, "read_bytes", side_effect=AssertionError("unbounded read")):
+            with self.assertRaisesRegex(InputError, "Report exceeds 64 MiB"):
+                native_report(oversized)
+
     def test_input_build_text_cannot_supply_missing_terminal_evidence(self):
         html = (FIXTURES/"mixed-trades-utf8.htm").read_text(encoding="utf-8")
         html = html.replace("Fixture-Server (Build 6235)", "Fixture-Server", 1)
