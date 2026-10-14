@@ -118,7 +118,7 @@ def main(argv=None) -> int:
         return 2
     try:
         result = execute(args)
-    except (InputError, OSError, UnicodeError, ValueError, KeyError, TypeError, RecursionError, subprocess.SubprocessError) as exc:
+    except (InputError, OSError, UnicodeError, ValueError, KeyError, TypeError, RecursionError, RuntimeError, subprocess.SubprocessError) as exc:
         result = {"schema_version": 1, "operation": args.family + " " + args.command, "status": "failed",
                   "issues": [{"code": "invalid_input_or_tooling", "message": str(exc) if isinstance(exc, InputError) else "Input processing failed; inspect the selected format, paths, and tooling"}]}
         if args.family in {"report", "profile"}:

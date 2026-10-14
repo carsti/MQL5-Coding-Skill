@@ -174,8 +174,11 @@ def decoded(data: bytes) -> tuple[str, str]:
 
 
 def native_report(path: Path, result_path: Path | None = None) -> dict:
-    data = path.read_bytes()
-    if len(data) > 64 * 1024 * 1024:
+    limit = 64 * 1024 * 1024
+    # Bounded read: an oversized report is rejected without buffering all of it.
+    with path.open("rb") as stream:
+        data = stream.read(limit + 1)
+    if len(data) > limit:
         raise InputError("Report exceeds 64 MiB")
     text, encoding = decoded(data)
     parser = Tables()
