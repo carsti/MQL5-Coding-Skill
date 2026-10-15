@@ -194,7 +194,7 @@ Run `python -B -m unittest discover -s tests -p 'test_toolkit*.py' -v` and `test
 
 CI uses an isolated Python 3.12 x64 environment and installs `PyYAML==6.0.3` from `.github/requirements-ci.txt`, which locks the expected wheel hash. The local shared environment was also validated with Python 3.13. Do not modify a global Python environment solely to run repository validation. A real MetaEditor or MT5 fixture run is separate from these synthetic suites and follows the skill's compilation and tester workflow.
 
-Compatibility CI checks both counterpart `main` (or explicit `peer_ref`) and the exact approved commit in `.github/approved-peer.json`. The initial approved MCP is 1.3.6 at `2648888a8a903368080034595e71e2f984c974dd`. The record is independent of the containing skill commit, and packaging waits for both checks.
+Compatibility CI checks both counterpart `main` (or explicit `peer_ref`) and the exact approved MCP version and commit in `.github/approved-peer.json`. The record is independent of the containing skill commit, and packaging waits for both checks.
 
 CI preserves running main/tag validations and gives each manually dispatched package check an independent concurrency group. New pull-request validations can supersede older runs for the same pull request. The combined selection/native-harness step checks each command's exit code immediately, so a later successful suite cannot hide an earlier failure. These policies have executable regressions in `tests/test_ci_workflows.py`, including failure propagation under PowerShell 7 and 5.1.
 
