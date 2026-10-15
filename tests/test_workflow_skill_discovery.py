@@ -13,7 +13,9 @@ from workflow_skill_discovery import request_skills
 
 class Discovery(unittest.TestCase):
     def setUp(self):
-        self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
+        # Resolve like the code under test: CI runners use an 8.3 short TEMP path
+        # (C:\Users\RUNNER~1) that Path.resolve() expands to the long form.
+        self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name).resolve()
         self.skill=self.root/'.agents/skills/mql5-coding';self.skill.mkdir(parents=True)
         self.selected={'name':'mql5-coding','path':str(self.skill/'SKILL.md'),'scope':'repo','enabled':True}
         self.user={'name':'unrelated','path':str(self.root/'user/.agents/skills/unrelated/SKILL.md'),'scope':'user','enabled':True}
