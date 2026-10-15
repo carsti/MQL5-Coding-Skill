@@ -532,6 +532,12 @@ try {
     function Invoke-Mql5BoundedProcess {return [pscustomobject]@{status='completed';exit_code=1;stdout='';stderr='';cleanup_verified=$true}}
     $message=$null;try {Invoke-Mql5ReleaseGhProcess @('release','download') 600 'Authenticated release download failed.'} catch {$message=$_.Exception.Message}
     Check ($message -ceq 'Authenticated release download failed.') 'failed GitHub download keeps its specific error'
+    function Invoke-Mql5BoundedProcess {return [pscustomobject]@{status='completed';exit_code=0;stdout='{}';stderr='';cleanup_verified=$false}}
+    $message=$null;try {Invoke-Mql5ReleaseGhProcess @('api','x') 120 'failed'} catch {$message=$_.Exception.Message}
+    Check ($message -like 'GitHub CLI process cleanup could not be verified*') 'successful GitHub call with unverified cleanup is rejected'
+    function Invoke-Mql5BoundedProcess {return [pscustomobject]@{status='timed_out';exit_code=$null;stdout='';stderr='';cleanup_verified=$false}}
+    $message=$null;try {Invoke-Mql5ReleaseGhProcess @('api','x') 120 'failed'} catch {$message=$_.Exception.Message}
+    Check ($message -like 'GitHub CLI process cleanup could not be verified*') 'timed-out GitHub call with unverified cleanup is not reported as stopped'
 } finally {$env:PATH=$savedPath;Set-Item -Path function:Invoke-Mql5BoundedProcess -Value $realBounded}
 # Unit-test authenticated metadata policy independently of the real download exercised at release time.
 $script:fakeRelease=[pscustomobject]@{tag_name=('v'+$version);draft=$false;prerelease=$false;html_url='https://github.com/shamwi2846/MQL5-Coding-Skill/releases';assets=@([pscustomobject]@{name='mql5-coding-windows.zip';state='uploaded';digest=('sha256:'+$digest);size=1000})}
