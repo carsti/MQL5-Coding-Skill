@@ -279,6 +279,7 @@ function Invoke-Mql5ReleaseGhProcess([string[]]$Arguments,[int]$Seconds,[string]
     $gh=Get-Command gh.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $gh) {throw 'GitHub CLI (gh.exe) was not found on PATH. Install and authenticate gh, or use the offline update inputs.'}
     $run=Invoke-Mql5BoundedProcess $gh.Source $Arguments ([IO.Path]::GetTempPath()) $Seconds
+    if (-not $run.cleanup_verified) {throw 'GitHub CLI process cleanup could not be verified; a gh process may still be running. Close it, then retry.'}
     if ($run.status -eq 'timed_out') {throw "GitHub CLI did not finish within $Seconds seconds and was stopped. Check network access, then retry."}
     if ($run.status -ne 'completed' -or $run.exit_code -ne 0) {throw $FailureMessage}
     return $run.stdout
