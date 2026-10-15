@@ -122,6 +122,28 @@ function Get-CompilationFileRecord {
     }
 }
 
+function Move-PublishedFile {
+    # Antivirus or indexing can briefly hold a just-written file. Retry only a
+    # sharing or lock violation (Win32 32/33) for about 2 s; an occupied
+    # destination or any other failure still fails at once. Returns attempts.
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$Destination,
+        [int]$Attempts = 20,
+        [int]$DelayMilliseconds = 100
+    )
+    for ($attempt = 1; ; $attempt++) {
+        try { [IO.File]::Move($Source, $Destination); return $attempt }
+        catch {
+            $inner = $_.Exception
+            while ($inner -is [Management.Automation.MethodInvocationException] -and $null -ne $inner.InnerException) { $inner = $inner.InnerException }
+            $code = $inner.HResult -band 0xFFFF
+            if ($attempt -ge $Attempts -or $inner -isnot [IO.IOException] -or ($code -ne 32 -and $code -ne 33)) { throw }
+            Start-Sleep -Milliseconds $DelayMilliseconds
+        }
+    }
+}
+
 function Write-CompilationReceipt {
     # Unique CreateNew files never replace an earlier receipt, source, or log.
     # The canonical parent remains leased until both evidence files are closed.
@@ -158,7 +180,7 @@ function Write-CompilationReceipt {
         if ($null -ne $logStream) { $logStream.Dispose(); $logStream = $null }
         # Publish the complete file atomically, after all writes/flushes/closes.
         # File.Move refuses an occupied destination rather than overwriting it.
-        [IO.File]::Move($pendingPath, $receiptPath)
+        $null = Move-PublishedFile -Source $pendingPath -Destination $receiptPath
     }
     finally {
         if ($null -ne $jsonStream) { $jsonStream.Dispose() }
