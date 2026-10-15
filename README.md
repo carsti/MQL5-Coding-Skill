@@ -2,7 +2,7 @@
 
 A Windows skill for Codex and Claude Code for building, reviewing, compiling, testing, explaining, and debugging MetaTrader 5 MQL5 programs. It uses the installed [MQL5 CHM MCP](https://github.com/shamwi2846/MQL5-CHM-MCP) as the first authority for MQL5 API and language facts.
 
-**v1.2.7** stops a stalled GitHub CLI call in the updater at a deadline so it cannot hold the update lock; earlier changes are listed under [Release history](#release-history).
+**v1.2.8** stops a stalled GitHub CLI call in the updater at a deadline so it cannot hold the update lock, and rejects a call whose process cleanup cannot be verified; earlier changes are listed under [Release history](#release-history).
 
 To install it for Claude Code, run the trusted updater from a reviewed checkout with `-ClientHost Claude -Action Update` and the offline trust inputs described in [releases](skills/mql5-coding/references/releases.md); register the MCP with the MCP package's `Install-Claude.ps1`.
 
@@ -15,7 +15,7 @@ For shared modules, select [optional build-source snapshots](skills/mql5-coding/
 ## Requirements
 
 - Windows with PowerShell 7 or Windows PowerShell 5.1.
-- Codex with skill support.
+- Codex or Claude Code with skill support.
 - The `mql5-chm` MCP server installed and enabled.
 - MetaTrader 5 and MetaEditor only when compilation or Strategy Tester execution is requested.
 - Direct fixed-local-volume paths registered by the Windows mount manager and without reparse-point components for Strategy Tester staging and evidence; mapped network drives, SUBST aliases, and raw DOS-device aliases are rejected.
@@ -26,14 +26,22 @@ Ordinary source review and explanation do not start MetaTrader, MetaEditor, or S
 
 ## One environment health command
 
-Run the installed read-only checker to report Codex registration, real MCP stdio availability, listed package checksums and versions, source/installed differences, MetaEditor paths/builds, and Python/PyYAML availability:
+Run the installed read-only checker for the client you use to report its `mql5-chm` registration, real MCP stdio availability, listed package checksums and versions, source/installed differences, MetaEditor paths/builds, and Python/PyYAML availability:
 
 ```powershell
+# Codex
 $codexDirectory = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
     Join-Path $env:USERPROFILE '.codex'
 } else { $env:CODEX_HOME }
 $healthCommand = Join-Path $codexDirectory 'skills\mql5-coding\scripts\Test-Mql5Environment.ps1'
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $healthCommand -WorkspaceRoot '<absolute-workspace-directory>'
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $healthCommand -ClientHost Codex -WorkspaceRoot '<absolute-workspace-directory>'
+
+# Claude Code
+$claudeDirectory = if ([string]::IsNullOrWhiteSpace($env:CLAUDE_CONFIG_DIR)) {
+    Join-Path $env:USERPROFILE '.claude'
+} else { $env:CLAUDE_CONFIG_DIR }
+$healthCommand = Join-Path $claudeDirectory 'skills\mql5-coding\scripts\Test-Mql5Environment.ps1'
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $healthCommand -ClientHost Claude -WorkspaceRoot '<absolute-workspace-directory>'
 ```
 
 Use `-Json` for structured output and `-ReportPath '<new-report.json>'` to retain evidence. Missing optional compiler/Python tools and source differences are warnings; `-RequireCompiler` and `-RequirePython` make their absence fail. This command never starts MetaEditor/MT5 or changes configuration. Direct stdio success does not establish tool loading in the current chat. See [all options and limits](skills/mql5-coding/references/environment-health.md).
@@ -207,6 +215,8 @@ For local commands and optional validation of the installed pair, see the counte
 Both repositories are private. Each requires the Actions secret `MQL5_PEER_READ_KEY` containing a dedicated read-only SSH deploy key registered on the counterpart repository. Never reuse an account token or a write-enabled deploy key. Checkouts disable persisted credentials; fork pull requests skip the job that needs this secret. A trusted run with missing credentials fails. Rotate each key on its target repository and replace the consumer secret together. MCP release validation waits for this compatibility job before packaging; skill tag pushes also run the pair check.
 
 ## Release history
+
+v1.2.8 rejects a GitHub CLI result whose process cleanup cannot be verified instead of accepting it or reporting the process as stopped. The health check records why a failed MCP Node or stdio probe failed (`mcp.probe_failure`: phase, fixed reason category and exit code) and adds matching recovery advice without including probe output; the README lists Claude Code in the requirements and shows the health command for both clients.
 
 v1.2.7 runs the updater's GitHub CLI calls in a kill-on-close process job with deadlines (120 s for release metadata, 600 s for the download), reports a missing `gh.exe` before any GitHub call, and shares that runner with the toolkit. The rollback example now passes `-ClientHost`, and the README describes the saved-account tester gate accurately.
 

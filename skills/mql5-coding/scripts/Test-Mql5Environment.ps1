@@ -112,6 +112,21 @@ function Invoke-Probe([string]$Executable, [string[]]$Arguments, [string]$Direct
     }
     return $answer
 }
+# Fixed probe-failure categories with recovery advice; subprocess output and
+# exception text never enter the report.
+$probeAdvice=@{
+    timeout=' The probe did not finish in time; close any stuck node.exe, then retry or raise -TimeoutSeconds.'
+    launch_failed=' The probe could not start; check that the package runtime exists and is not blocked by security software.'
+    oversized_output=' The probe produced unexpectedly large output.'
+    output_timeout=' The probe exited but its output did not complete.'
+    cleanup_failed=' The probe process tree could not be cleaned up; close stray node.exe processes.'
+    nonzero_exit=' The probe exited with a failure code; reinstall the package if this persists.'
+    unexpected_result=' The probe ran but returned an unexpected version or result; the package may not match its manifest.'
+}
+function Get-ProbeFailure([string]$Phase,$Probe) {
+    $reason=if ($Probe.ok) {'unexpected_result'} elseif ($Probe.reason -eq 'completed') {'nonzero_exit'} else {[string]$Probe.reason}
+    return [ordered]@{phase=$Phase;reason=$reason;exit_code=$Probe.exit_code}
+}
 function Find-Codex {
     if ($CodexPath) {return Full-Path $CodexPath}
     $command=Get-Command codex.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -321,7 +336,7 @@ function Find-Editors {
     return $editors
 }
 
-$report=[ordered]@{schema_version=1;kind='mql5_environment_health';checked_utc=[DateTime]::UtcNow.ToString('o');status='failed';workspace_root=$WorkspaceRoot;client_host=$null;codex_home=$null;codex=[ordered]@{path=$null;version=$null;registration_state='not_checked';native_chat_availability='not_checked'};claude=[ordered]@{config_directory=$null;config_path=$null;path=$null;version=$null;registration_state='not_checked';registration_scope=$null;shadowed_scopes=@()};mcp=[ordered]@{package_root=$null;package_version=$null;node_version=$null;integrity='not_checked';checked_files=0;stdio_available=$false;connection='direct_stdio';corpus_revision=$null;index_revision=$null;source_comparison=@{status='not_requested'}};skill=[ordered]@{root=$null;installed=$false;declared_version=$null;file_count=0;fingerprint_sha256=$null;source_comparison=@{status='not_requested'}};metaeditor=[ordered]@{available=$false;candidates=@();selected_path=$null};python=[ordered]@{path=$null;available=$false;version=$null;pyyaml_available=$false;shared_launcher_present=$false};issues=@();exit_code=1}
+$report=[ordered]@{schema_version=1;kind='mql5_environment_health';checked_utc=[DateTime]::UtcNow.ToString('o');status='failed';workspace_root=$WorkspaceRoot;client_host=$null;codex_home=$null;codex=[ordered]@{path=$null;version=$null;registration_state='not_checked';native_chat_availability='not_checked'};claude=[ordered]@{config_directory=$null;config_path=$null;path=$null;version=$null;registration_state='not_checked';registration_scope=$null;shadowed_scopes=@()};mcp=[ordered]@{package_root=$null;package_version=$null;node_version=$null;integrity='not_checked';checked_files=0;stdio_available=$false;connection='direct_stdio';corpus_revision=$null;index_revision=$null;source_comparison=@{status='not_requested'};probe_failure=$null};skill=[ordered]@{root=$null;installed=$false;declared_version=$null;file_count=0;fingerprint_sha256=$null;source_comparison=@{status='not_requested'}};metaeditor=[ordered]@{available=$false;candidates=@();selected_path=$null};python=[ordered]@{path=$null;available=$false;version=$null;pyyaml_available=$false;shared_launcher_present=$false};issues=@();exit_code=1}
 try {
     $WorkspaceRoot=Full-Path $WorkspaceRoot
     if (-not (Test-Path -LiteralPath $WorkspaceRoot -PathType Container)) {throw 'Workspace directory does not exist.'}
@@ -479,7 +494,7 @@ try {
             $node=Join-Path $McpPackageRoot 'runtime\node.exe'
             $mcpPhase='node_version'
             $nodeVersion=Invoke-Probe $node @('--version') $McpPackageRoot
-            if (-not $nodeVersion.ok -or $nodeVersion.text.Trim() -cne ('v'+$package.engines.node)) {throw 'Pinned Node version does not match.'}
+            if (-not $nodeVersion.ok -or $nodeVersion.text.Trim() -cne ('v'+$package.engines.node)) {$report.mcp.probe_failure=Get-ProbeFailure 'node_version' $nodeVersion; throw 'Pinned Node version does not match.'}
             $report.mcp.node_version=$nodeVersion.text.Trim()
             $mcpPhase='active_revision'
             $pointer=Get-Content -LiteralPath (Join-Path $McpPackageRoot 'data\active.json') -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -490,9 +505,13 @@ try {
             $report.mcp.corpus_revision=$manifest.corpus_revision
             $mcpPhase='stdio'
             $probe=Invoke-Probe $node @((Join-Path $McpPackageRoot 'scripts\Smoke-Test-McpServer.mjs'),'--server',(Join-Path $McpPackageRoot 'app\server.mjs'),'--timeout-ms',([string]($TimeoutSeconds*1000)),'--expected-server-version',([string]$report.mcp.package_version),'--expected-active-revision',([string]$pointer.active_revision),'--expected-index-revision',([string]$pointer.active_revision),'--expected-corpus-revision',([string]$manifest.corpus_revision),'--expected-schema-version',([string]$manifest.schema_version)) $McpPackageRoot ($TimeoutSeconds+5)
-            if (-not $probe.ok -or $probe.text.Trim() -cne 'Verified MCP initialize, tools/list, and mql5_chm_status.') {throw 'MCP probe failed.'}
+            if (-not $probe.ok -or $probe.text.Trim() -cne 'Verified MCP initialize, tools/list, and mql5_chm_status.') {$report.mcp.probe_failure=Get-ProbeFailure 'stdio' $probe; throw 'MCP probe failed.'}
             $report.mcp.stdio_available=$true
-        } catch {Add-Issue ('mcp_'+$mcpPhase+'_failed') 'error' ('The MCP '+$mcpPhase.Replace('_',' ')+' check failed. See the selected package/source paths in this report.'); if ($mcpPhase -eq 'integrity') {$report.mcp.integrity='failed'}}
+        } catch {
+            $advice=if ($report.mcp.probe_failure) {$probeAdvice[$report.mcp.probe_failure.reason]} else {''}
+            Add-Issue ('mcp_'+$mcpPhase+'_failed') 'error' ('The MCP '+$mcpPhase.Replace('_',' ')+' check failed.'+$advice+' See the selected package/source paths in this report.')
+            if ($mcpPhase -eq 'integrity') {$report.mcp.integrity='failed'}
+        }
     }
     . (Join-Path $PSScriptRoot 'WindowsExecutableMetadata.ps1')
     $editors=@(Find-Editors)
