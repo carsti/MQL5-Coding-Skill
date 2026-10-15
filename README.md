@@ -56,7 +56,7 @@ The [reusable toolkit](skills/mql5-coding/references/toolkit.md) adds one standa
 
 Focused review, performance, and refactoring references extend the existing guidance. Scenario/comparison templates live under `assets/`, alongside a small assertion include and nontrading self-test EA. Genuine sanitized MT5 trading/no-trade reports and native MetaEditor profiler exports live under `tests/fixtures/` with provenance. They are validation inputs, not extra MCP tools.
 
-Save each EA's entrypoints, include directory, MetaEditor, and optional terminal/preset/tester settings with `New-Mql5ProjectProfile.ps1`. Use `Invoke-Mql5Project.ps1` to validate resolved paths, compile all or one saved entrypoint, or delegate a selected tester action. Project-relative paths survive moving the EA folder and its profile together. Trusted receipts/hashes and output paths remain separate per-run inputs. Execution requires no separate acknowledgement; the old switch remains optional for command compatibility. See [commands and limitations](skills/mql5-coding/references/project-profiles.md).
+Save each EA's entrypoints, include directory, MetaEditor, and optional terminal/preset/tester settings with `New-Mql5ProjectProfile.ps1`. Use `Invoke-Mql5Project.ps1` to validate resolved paths, compile all or one saved entrypoint, or delegate a selected tester action. Project-relative paths survive moving the EA folder and its profile together. Trusted receipts/hashes and output paths remain separate per-run inputs. Tester execution on a terminal whose saved-account state is `present` or `unknown` is blocked until the user explicitly confirms and `-AcknowledgeSavedAccountRisk` is passed; the profile runner forwards that switch. See [commands and limitations](skills/mql5-coding/references/project-profiles.md).
 
 Profile paths must use their documented relative base or a fully qualified absolute path. Values such as `\EA\Main.mq5` and `C:Main.mq5` are rejected rather than resolved through the process's current drive or directory. Update recovery also resolves repeated interrupted rollbacks and retains their original snapshot links if marker cleanup fails.
 
@@ -111,7 +111,7 @@ Fully restart Codex after installation.
 - MQL5 API and language claims use the installed MQL5 CHM first, with cited primary-source fallback when the CHM cannot verify a necessary fact or the MCP is unavailable.
 - Review and diagnosis preserve source files unless the task also includes changes.
 - Compilation does not prove Strategy Tester, broker, demo, or live behavior.
-- Strategy Tester execution and EA default inputs need no additional acceptance. The selected terminal may initialize saved account state; execution evidence still requires verified artifacts, settings, and process cleanup.
+- Strategy Tester execution and EA default inputs need no additional acceptance, with one gate: on a terminal whose saved-account state is `present` or `unknown`, `-Execute` is blocked (exit `4`) until the user explicitly confirms that its saved, possibly live, account may log in and resume Signals copying, and `-AcknowledgeSavedAccountRisk` is passed. Execution evidence still requires verified artifacts, settings, and process cleanup.
 - The bundled runner is not a sandbox. Never execute an untrusted `.ex5`.
 - Trade operations stay within the actions and account scope established by the user's task. Review, compilation, and tester smoke validation do not initiate trades.
 
