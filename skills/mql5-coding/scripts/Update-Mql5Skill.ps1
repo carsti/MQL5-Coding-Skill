@@ -156,8 +156,7 @@ try {
         $archive=Join-Path $txn 'download.zip'
         if ($ArchivePath) {Copy-Item -LiteralPath (Assert-Mql5ReleasePath $ArchivePath) -Destination $archive}
         else {
-            & gh release download ('v'+$Version) --repo 'shamwi2846/MQL5-Coding-Skill' --pattern 'mql5-coding-windows.zip' --dir $txn 2>$null
-            if ($LASTEXITCODE -ne 0) {throw 'Authenticated release download failed.'}
+            $null=Invoke-Mql5ReleaseGhProcess @('release','download',('v'+$Version),'--repo','shamwi2846/MQL5-Coding-Skill','--pattern','mql5-coding-windows.zip','--dir',$txn) 600 'Authenticated release download failed.'
             [IO.File]::Move((Join-Path $txn 'mql5-coding-windows.zip'),$archive)
             if ((Get-Item -LiteralPath $archive).Length -ne $release.bytes) {throw 'Downloaded release size differs from GitHub metadata.'}
         }

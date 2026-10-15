@@ -81,32 +81,7 @@ function Get-ToolkitPython([string]$Selected) {
     return [IO.Path]::GetFullPath($path)
 }
 function Invoke-ToolkitProcess([string]$Executable,[string[]]$Arguments,[string]$Directory,[int]$Seconds) {
-    if (-not ('Mql5Coding.JobProcessLaunch' -as [type])) {Add-Type -Path (Join-Path $PSScriptRoot 'TesterProcessJob.cs')}
-    $job=$null
-    $answer=[ordered]@{exit_code=$null;status='launch_failed';stdout='';stderr='';cleanup_verified=$true}
-    try {
-        $job=[Mql5Coding.JobProcessLaunch]::CreateSuspendedProbe($Executable,$Arguments,$Directory,@{PYTHONDONTWRITEBYTECODE='1';PYTHONNOUSERSITE='1'})
-        $out=[Mql5Coding.JobProcessLaunch]::ReadProbeOutputAsync($job.StandardOutput,1048576,$true)
-        $err=[Mql5Coding.JobProcessLaunch]::ReadProbeOutputAsync($job.StandardError,1048576,$true)
-        $job.Resume()
-        $clock=[Diagnostics.Stopwatch]::StartNew();$done=$false
-        do {
-            if (($out.IsCompleted -and $out.Result.LimitExceeded) -or ($err.IsCompleted -and $err.Result.LimitExceeded)) {$answer.status='output_limit';break}
-            $left=[int]($Seconds*1000-$clock.ElapsedMilliseconds)
-            if ($left -le 0) {$answer.status='timed_out';break}
-            $done=$job.WaitForExit([Math]::Min(100,$left))
-        } while (-not $done)
-        if ($done) {
-            $answer.exit_code=$job.ExitCode
-            if ($out.Wait(3000) -and $err.Wait(3000) -and -not $out.Result.LimitExceeded -and -not $err.Result.LimitExceeded) {
-                $answer.stdout=$out.Result.Text;$answer.stderr=$err.Result.Text;$answer.status='completed'
-            } else {$answer.status='output_limit'}
-        }
-    } finally {
-        if ($null -ne $job) {
-            try {$job.TerminateAndWaitForEmpty(5000)} catch {$answer.cleanup_verified=$false}
-            finally {$job.Dispose()}
-        }
-    }
+    $answer=Invoke-Mql5BoundedProcess $Executable $Arguments $Directory $Seconds @{PYTHONDONTWRITEBYTECODE='1';PYTHONNOUSERSITE='1'}
+    # Toolkit tests inject faults into disposable copies at this exact line.
     return [pscustomobject]$answer
 }

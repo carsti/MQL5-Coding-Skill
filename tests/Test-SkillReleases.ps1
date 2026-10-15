@@ -512,6 +512,27 @@ $junction=Join-Path $work 'aliased-home'
 New-Item -ItemType Junction -Path $junction -Target $freshHome | Out-Null
 $invalid=RunUpdater (Options $junction $archive $digest)
 Check ($invalid.code -ne 0) 'junction installation path rejected'
+# GitHub CLI calls run under a deadline in a kill-on-close job so a stalled call cannot hold the update lock.
+$cmd=Join-Path $env:WINDIR 'System32\cmd.exe'
+$stalled=Invoke-Mql5BoundedProcess $cmd @('/d','/c','ping -n 30 127.0.0.1 >nul') $work 2
+Check ($stalled.status -ceq 'timed_out' -and $stalled.cleanup_verified) 'bounded process stops a stalled process tree at its deadline'
+$finished=Invoke-Mql5BoundedProcess $cmd @('/d','/c','echo ok') $work 30
+Check ($finished.status -ceq 'completed' -and $finished.exit_code -eq 0 -and $finished.stdout.Trim() -ceq 'ok') 'bounded process returns completed output'
+$fakeBin=Join-Path $work 'fake-gh';[IO.Directory]::CreateDirectory($fakeBin) | Out-Null
+Copy-Item -LiteralPath $cmd -Destination (Join-Path $fakeBin 'gh.exe')
+$savedPath=$env:PATH;$realBounded=${function:Invoke-Mql5BoundedProcess}
+try {
+    $env:PATH=$work
+    $message=$null;try {Invoke-Mql5ReleaseGhProcess @('api','x') 5 'failed'} catch {$message=$_.Exception.Message}
+    Check ($message -like 'GitHub CLI (gh.exe) was not found*') 'missing gh is reported before any GitHub call'
+    $env:PATH=$fakeBin
+    function Invoke-Mql5BoundedProcess {return [pscustomobject]@{status='timed_out';exit_code=$null;stdout='';stderr='';cleanup_verified=$true}}
+    $message=$null;try {Invoke-Mql5ReleaseGhProcess @('release','download') 600 'Authenticated release download failed.'} catch {$message=$_.Exception.Message}
+    Check ($message -like 'GitHub CLI did not finish within 600 seconds*') 'stalled GitHub download fails with a timeout error'
+    function Invoke-Mql5BoundedProcess {return [pscustomobject]@{status='completed';exit_code=1;stdout='';stderr='';cleanup_verified=$true}}
+    $message=$null;try {Invoke-Mql5ReleaseGhProcess @('release','download') 600 'Authenticated release download failed.'} catch {$message=$_.Exception.Message}
+    Check ($message -ceq 'Authenticated release download failed.') 'failed GitHub download keeps its specific error'
+} finally {$env:PATH=$savedPath;Set-Item -Path function:Invoke-Mql5BoundedProcess -Value $realBounded}
 # Unit-test authenticated metadata policy independently of the real download exercised at release time.
 $script:fakeRelease=[pscustomobject]@{tag_name=('v'+$version);draft=$false;prerelease=$false;html_url='https://github.com/shamwi2846/MQL5-Coding-Skill/releases';assets=@([pscustomobject]@{name='mql5-coding-windows.zip';state='uploaded';digest=('sha256:'+$digest);size=1000})}
 function Invoke-Mql5ReleaseGh([string[]]$Arguments) {
