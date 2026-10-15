@@ -2870,6 +2870,19 @@ try {
     }
     [IO.File]::Move($testerFileProbe, $testerFileProbeRenamed)
     [IO.File]::Move($testerFileProbeRenamed, $testerFileProbe)
+
+    # A lease refused because another handle holds the entry reports the Win32 reason, not just the path.
+    $exclusiveHolder = [IO.File]::Open($testerFileProbe, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    $leaseFailure = $null
+    try {
+        try { $unexpectedLease = [Mql5Coding.JobProcessLaunch]::OpenFileLeafLease($testerFileProbe); $unexpectedLease.Dispose() }
+        catch { $leaseFailure = $_.Exception; while ($null -ne $leaseFailure.InnerException -and $leaseFailure -isnot [ComponentModel.Win32Exception]) { $leaseFailure = $leaseFailure.InnerException } }
+    }
+    finally { $exclusiveHolder.Dispose() }
+    Assert-True -Condition ($leaseFailure -is [ComponentModel.Win32Exception] -and $leaseFailure.NativeErrorCode -eq 32 -and
+        $leaseFailure.Message.StartsWith('Opening a path-integrity lease failed (Win32 32: ', [StringComparison]::Ordinal) -and
+        $leaseFailure.Message.EndsWith('): ' + $testerFileProbe, [StringComparison]::Ordinal)) `
+        -Message "A refused path lease did not report its Win32 reason: $($leaseFailure.Message)"
     Remove-Item -LiteralPath $testerFileProbe -Force
 
     $retainedArtifactDefinitions = New-Object 'System.Collections.Generic.List[string]'
@@ -3456,21 +3469,73 @@ try {
         -Message 'Receipt silently overrode a conflicting explicit EX5 hash.'
 
     $writerNode = $compilerAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Write-CompilationReceipt' }, $true)
+    $moverNode = $compilerAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Move-PublishedFile' }, $true)
+    Assert-True -Condition ($null -ne $writerNode -and $null -ne $moverNode) -Message 'Receipt publication functions were not found.'
     $publicationTarget = Join-Path $compileDirectory 'receipt-publish-collision.json'
     $publicationLog = Join-Path $compileDirectory 'receipt-publish-collision.log'
     [IO.File]::WriteAllText($publicationTarget, 'preserved receipt sentinel')
     $publicationHash = (Get-FileHash -LiteralPath $publicationTarget -Algorithm SHA256).Hash
-    $publicationBlocked = & {
-        param($Definition, $Target, $Log)
-        . ([scriptblock]::Create($Definition))
+    $publicationOutcome = & {
+        param($Definitions, $Target, $Log)
+        foreach ($definition in $Definitions) { . ([scriptblock]::Create($definition)) }
         $receiptPath = $Target
         $receiptLogPath = $Log
         $receiptLogBytes = [Text.Encoding]::UTF8.GetBytes('Result: 0 errors, 0 warnings')
         $receipt = [ordered]@{status='success';log=$null}
-        try { Write-CompilationReceipt; return $false } catch { return $true }
-    } $writerNode.Extent.Text $publicationTarget $publicationLog
-    Assert-True -Condition ($publicationBlocked -and (Get-FileHash -LiteralPath $publicationTarget -Algorithm SHA256).Hash -eq $publicationHash) `
-        -Message 'Receipt publication overwrote an existing file or hid a publication failure.'
+        # Shadow Start-Sleep in this scope to count retry delays exactly.
+        $retrySleeps = [ref]0
+        function Start-Sleep { $retrySleeps.Value++ }
+        try { Write-CompilationReceipt; return [pscustomobject]@{ Blocked = $false } }
+        catch {
+            $inner = $_.Exception
+            while ($inner -is [Management.Automation.MethodInvocationException] -and $null -ne $inner.InnerException) { $inner = $inner.InnerException }
+            return [pscustomobject]@{ Blocked = $true; IsIo = $inner -is [IO.IOException]; Code = $inner.HResult -band 0xFFFF; Sleeps = $retrySleeps.Value }
+        }
+    } @($moverNode.Extent.Text, $writerNode.Extent.Text) $publicationTarget $publicationLog
+    # An occupied destination (ERROR_ALREADY_EXISTS 183 / ERROR_FILE_EXISTS 80) fails at once, without the sharing retry.
+    Assert-True -Condition ($publicationOutcome.Blocked -and $publicationOutcome.IsIo -and $publicationOutcome.Code -in @(80, 183) -and
+        $publicationOutcome.Sleeps -eq 0 -and (Get-FileHash -LiteralPath $publicationTarget -Algorithm SHA256).Hash -eq $publicationHash) `
+        -Message "Receipt publication overwrote an existing file, hid the collision or retried it (code $($publicationOutcome.Code), $($publicationOutcome.Sleeps) retry sleeps)."
+
+    # A just-written receipt held briefly by another process (as antivirus does) is published after a bounded retry.
+    . ([scriptblock]::Create($moverNode.Extent.Text))
+    $hostExe = (Get-Process -Id $PID).Path
+    function Start-FileHolder([string]$Path, [int]$HoldMilliseconds, [string]$Marker) {
+        $command = "`$f=[IO.File]::Open('$($Path.Replace("'","''"))','Open','ReadWrite','None'); [IO.File]::WriteAllText('$($Marker.Replace("'","''"))','held'); Start-Sleep -Milliseconds $HoldMilliseconds; `$f.Dispose()"
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        $holder = Start-Process -FilePath $hostExe -ArgumentList @('-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) -WindowStyle Hidden -PassThru
+        $deadline = [DateTime]::UtcNow.AddSeconds(30)
+        while (-not (Test-Path -LiteralPath $Marker) -and [DateTime]::UtcNow -lt $deadline -and -not $holder.HasExited) { Start-Sleep -Milliseconds 25 }
+        if (-not (Test-Path -LiteralPath $Marker)) { throw 'The file-holder process did not take its lock.' }
+        return $holder
+    }
+    $sharedSource = Join-Path $compileDirectory 'receipt-shared.pending'
+    $sharedTarget = Join-Path $compileDirectory 'receipt-shared.json'
+    [IO.File]::WriteAllText($sharedSource, 'receipt bytes')
+    $holder = Start-FileHolder -Path $sharedSource -HoldMilliseconds 700 -Marker (Join-Path $compileDirectory 'holder-1.marker')
+    try { $sharedAttempts = Move-PublishedFile -Source $sharedSource -Destination $sharedTarget }
+    finally { $holder.WaitForExit(30000) | Out-Null; $holder.Dispose() }
+    Assert-True -Condition ($sharedAttempts -gt 1 -and (Test-Path -LiteralPath $sharedTarget) -and -not (Test-Path -LiteralPath $sharedSource) -and
+        [IO.File]::ReadAllText($sharedTarget) -ceq 'receipt bytes') `
+        -Message "A briefly locked receipt was not published after a bounded retry (attempts $sharedAttempts)."
+
+    # A lock that outlasts the retry budget still fails with the sharing violation and leaves both paths as they were.
+    $stuckSource = Join-Path $compileDirectory 'receipt-stuck.pending'
+    $stuckTarget = Join-Path $compileDirectory 'receipt-stuck.json'
+    [IO.File]::WriteAllText($stuckSource, 'stuck bytes')
+    $holder = Start-FileHolder -Path $stuckSource -HoldMilliseconds 3000 -Marker (Join-Path $compileDirectory 'holder-2.marker')
+    $stuckCode = $null
+    try {
+        try { $null = Move-PublishedFile -Source $stuckSource -Destination $stuckTarget -Attempts 3 -DelayMilliseconds 50 }
+        catch { $inner = $_.Exception; while ($inner -is [Management.Automation.MethodInvocationException] -and $null -ne $inner.InnerException) { $inner = $inner.InnerException }; $stuckCode = $inner.HResult -band 0xFFFF }
+    } finally { $holder.WaitForExit(30000) | Out-Null; $holder.Dispose() }
+    Assert-True -Condition ($stuckCode -eq 32 -and (Test-Path -LiteralPath $stuckSource) -and -not (Test-Path -LiteralPath $stuckTarget)) `
+        -Message "A lock outlasting the retry budget did not fail with the sharing violation (code $stuckCode)."
+
+    # Other failures are not retried: a missing source fails at once.
+    $missingClock = [Diagnostics.Stopwatch]::StartNew(); $missingFailed = $false
+    try { $null = Move-PublishedFile -Source (Join-Path $compileDirectory 'no-such.pending') -Destination (Join-Path $compileDirectory 'no-such.json') } catch { $missingFailed = $true }
+    Assert-True -Condition ($missingFailed -and $missingClock.ElapsedMilliseconds -lt 1000) -Message 'A missing receipt source was retried or accepted.'
 
     Assert-True -Condition (
         [Mql5Coding.CompilerProcessJob]::GetFileIdentity($artifactHardlinkSentinel) -ceq

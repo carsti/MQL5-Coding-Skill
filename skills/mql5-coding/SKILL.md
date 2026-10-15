@@ -27,13 +27,15 @@ Carry out the requested task and its necessary supporting actions (compilation, 
 Before asserting or implementing an MQL5 API, language, event, error, trade-retcode, symbol-property, or Strategy Tester fact:
 
 1. Call `mql5_chm_status` once per task to confirm the active corpus and index.
-2. Look up identifiers: for two or more names use one `mql5_chm_lookup_identifiers` call (up to 16 names, `source: "mql5"`, `limit: 1` unless alternatives are needed); for a single name, or when that tool is not exposed, use `mql5_chm_search` with `source: "mql5"` and `expand: false`.
+2. Look up identifiers: for two or more names use one `mql5_chm_lookup_identifiers` call (up to 16 identifiers or exact topic titles such as `Order Properties`, `source: "mql5"`, `limit: 1` unless alternatives are needed; MCP before 1.3.16 rejects titles, so search those); for a single name, or when that tool is not exposed, use `mql5_chm_search` with `source: "mql5"` and `expand: false`. Search concept phrases instead of batching them.
 3. Accept identifier support only for an exact match whose standalone title/signature matches, or whose aggregate topic's matched term, selected section, or passage contains the identifier as a complete token. Fuzzy, typo-fallback, prefix, and `non_exact` results are not support. Without an exact result, search a narrowly phrased concept and confirm relevance before reading.
-4. Read with `mql5_chm_read`, selecting `section_id` or `focus` when possible. For text-only work pass `include_related: false` and `include_images: false`; request images or related topics only when they help. Verify the identifier appears as a complete token in the returned passage; `focus_match` `approximate` or `none` is not proof. Continue reading or search again when the passage is insufficient.
+4. Read with `mql5_chm_read`, selecting `section_id` or `focus` rather than a large `max_chars` (500–8000). For text-only work pass `include_related: false` and `include_images: false`; request images or related topics only when they help. There is no offset or limit: continue with the returned `next_cursor` as `cursor`, same `topic_id` and `section_id`, without `focus`. Verify the identifier appears as a complete token in the returned passage; `focus_match` `approximate` or `none` is not proof. Continue reading or search again when the passage is insufficient.
 5. Reuse a verified passage for further claims in the same task while the revision is unchanged instead of re-reading it.
 6. Cite the exact title, topic ID, section ID when present, and the corpus or index revision once per answer.
 
 Never hard-code a previously observed topic ID or revision. The [MCP consumer contract](references/mcp-contract.json) lists the tool interfaces this skill relies on.
+
+If no `mql5_chm_*` tools are listed in this chat, the client has not loaded them even when the health command passes: start a new chat or restart the client before using the fallback below. The CHM covers the MQL5 reference and books, not MetaTrader 5 terminal configuration (startup/`.ini` parameters, terminal settings) or features newer than its snapshot; take those from official metatrader5.com or mql5.com pages and cite them.
 
 If the installed CHM does not support a required claim, state exactly:
 
@@ -74,7 +76,7 @@ Read only the references a task needs:
 - **Strategy Tester:** read [the Strategy Tester workflow](references/strategy-tester.md) completely before invoking or interpreting `Invoke-Mt5TesterSmoke.ps1`. Run `-PreflightOnly` first; it reports `saved_account_inspection`, and `-Execute` is blocked (exit `4`) on `present`/`unknown` state until the confirmation gate above is satisfied. Prefer a dedicated terminal without saved accounts. Never execute an untrusted `.ex5`; the runner is not a security sandbox. Source-only review and compilation need no terminal launch.
 - **Project profiles** (saved entrypoints, include root, compiler, tester settings): [project-profiles.md](references/project-profiles.md).
 - **Toolkit** (report extraction/comparison, include inventories, journal grouping, scenario batches, profiler exports, the shared Python environment): [toolkit.md](references/toolkit.md). Analysis does not prove tester completion or strategy correctness.
-- **Environment health** (setup checks, missing tools): run `scripts/Test-Mql5Environment.ps1 -ClientHost Claude|Codex -WorkspaceRoot <absolute>`; see [environment-health.md](references/environment-health.md). Distinguish direct MCP availability from whether this chat loaded the tools.
+- **Environment health** (setup checks, missing tools): run `scripts/Test-Mql5Environment.ps1 -ClientHost Claude|Codex -WorkspaceRoot <absolute>` for setup, after install/update/rollback, or when the environment is suspected, not routinely per task; see [environment-health.md](references/environment-health.md). Distinguish direct MCP availability from whether this chat loaded the tools.
 - **Install, update, rollback:** [releases.md](references/releases.md); use the trusted updater with an explicit version and `-ClientHost` for the current client, and keep its backup ID.
 - **Review aids:** [focused review](references/focused-review.md), [performance measurement](references/performance.md), [cleanup/refactoring](references/refactoring.md).
 

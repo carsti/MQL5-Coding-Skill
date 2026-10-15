@@ -2,7 +2,7 @@
 
 A Windows skill for Codex and Claude Code for building, reviewing, compiling, testing, explaining, and debugging MetaTrader 5 MQL5 programs. It uses the installed [MQL5 CHM MCP](https://github.com/shamwi2846/MQL5-CHM-MCP) as the first authority for MQL5 API and language facts.
 
-**v1.2.8** stops a stalled GitHub CLI call in the updater at a deadline so it cannot hold the update lock, and rejects a call whose process cleanup cannot be verified; earlier changes are listed under [Release history](#release-history).
+**v1.2.9** applies lessons from real usage: batch lookups may name exact topic titles, read continuation and corpus scope are stated where agents went wrong, the health check is reserved for setup and suspected faults, a briefly locked compilation receipt is retried, and refused path leases say why; earlier changes are listed under [Release history](#release-history).
 
 To install it for Claude Code, run the trusted updater from a reviewed checkout with `-ClientHost Claude -Action Update` and the offline trust inputs described in [releases](skills/mql5-coding/references/releases.md); register the MCP with the MCP package's `Install-Claude.ps1`.
 
@@ -215,6 +215,8 @@ For local commands and optional validation of the installed pair, see the counte
 Both repositories are private. Each requires the Actions secret `MQL5_PEER_READ_KEY` containing a dedicated read-only SSH deploy key registered on the counterpart repository. Never reuse an account token or a write-enabled deploy key. Checkouts disable persisted credentials; fork pull requests skip the job that needs this secret. A trusted run with missing credentials fails. Rotate each key on its target repository and replace the consumer secret together. MCP release validation waits for this compatibility job before packaging; skill tag pushes also run the pair check.
 
 ## Release history
+
+v1.2.9 follows a review of 62 real EA-project sessions. `SKILL.md` says batch lookups take identifiers or exact topic titles (MCP 1.3.16+), that the read tool has no offset or limit (continue with `next_cursor`), what to do when the `mql5_chm_*` tools are missing from a chat although the health check passes, that terminal configuration and features newer than the CHM come from official metatrader5.com/mql5.com pages, and to run the health check for setup, updates or suspected faults rather than every task. `Compile-Mql5.ps1` retries publishing a compilation receipt for about two seconds when another process (typically antivirus) briefly holds it; an existing receipt or any other error still fails at once. Path-integrity lease failures now include the Win32 code and reason (for example 32, file in use). The tester reference says how to recover when the bound terminal is already running.
 
 v1.2.8 rejects a GitHub CLI result whose process cleanup cannot be verified instead of accepting it or reporting the process as stopped. The health check records why a failed MCP Node or stdio probe failed (`mcp.probe_failure`: phase, fixed reason category and exit code) and adds matching recovery advice without including probe output; the README lists Claude Code in the requirements and shows the health command for both clients.
 

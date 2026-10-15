@@ -926,20 +926,25 @@ namespace Mql5Coding
                 IntPtr.Zero);
             if (handle == null || handle.IsInvalid)
             {
+                // Capture the error before cleanup can overwrite it.
+                int openError = Marshal.GetLastWin32Error();
                 if (handle != null)
                     handle.Dispose();
                 throw new Win32Exception(
-                    Marshal.GetLastWin32Error(),
-                    "Opening a path-integrity lease failed: " + path);
+                    openError,
+                    DescribeWin32Failure("Opening a path-integrity lease failed", openError, path));
             }
 
             try
             {
                 ByHandleFileInformation information;
                 if (!GetFileInformationByHandle(handle, out information))
+                {
+                    int readError = Marshal.GetLastWin32Error();
                     throw new Win32Exception(
-                        Marshal.GetLastWin32Error(),
-                        "Reading path-integrity attributes failed: " + path);
+                        readError,
+                        DescribeWin32Failure("Reading path-integrity attributes failed", readError, path));
+                }
 
                 bool isDirectory =
                     (information.FileAttributes & FileAttributeDirectory) != 0;
@@ -966,6 +971,14 @@ namespace Mql5Coding
                 if (handle != null)
                     handle.Dispose();
             }
+        }
+
+        // Keep the Win32 reason (for example 32, file in use by another process)
+        // in the reported message; callers surface only Exception.Message.
+        internal static string DescribeWin32Failure(string action, int error, string path)
+        {
+            return action + " (Win32 " + error.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                ": " + new Win32Exception(error).Message + "): " + path;
         }
 
         public static PathEntryLease OpenDirectoryComponentLease(string path)

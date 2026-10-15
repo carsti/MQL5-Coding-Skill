@@ -2,6 +2,8 @@
 
 Use `scripts/Test-Mql5Environment.ps1` for installation checks and troubleshooting. It reads files and queries processes that it starts for the check. It never compiles code, starts MetaEditor or MT5, changes Codex or Claude Code configuration, downloads packages, or repairs installations.
 
+Run it for initial setup, after installing, updating or rolling back the skill or MCP, and when a tool, compiler or terminal problem suggests an environment fault. It takes several seconds per run, so do not repeat it routinely for every task, and it cannot fix tool argument errors. When the `mql5_chm_*` tools are missing from a chat but the direct MCP check passes, start a new chat or restart the client.
+
 Resolve the command from the installed skill root (the directory containing `SKILL.md`; normally `%USERPROFILE%\.claude\skills\mql5-coding` in Claude Code or `CODEX_HOME\skills\mql5-coding` in Codex) and select the current client with `-ClientHost Claude` or `-ClientHost Codex`. When omitted, a checker running from a Claude Code skill tree checks Claude Code and any other location checks Codex:
 
 ```powershell
