@@ -431,8 +431,12 @@ exit $LASTEXITCODE
     }
     $validationDriftScripts=Join-Path $testRoot 'validation-drift-scripts';Copy-Item -LiteralPath $fixtureScripts -Destination $validationDriftScripts -Recurse
     $supportPath=Join-Path $validationDriftScripts 'ToolkitSupport.ps1'
+    # Inject manifest drift after Invoke-ToolkitProcess runs an analyzer that writes --output.
     $replacement='if ($Arguments -contains "--output") {[IO.File]::AppendAllText('+"'"+$manifestPath.Replace("'","''")+"'"+'," ",(New-Object Text.UTF8Encoding($false)))}; return [pscustomobject]$answer'
-    $support=[IO.File]::ReadAllText($supportPath).Replace('return [pscustomobject]$answer',$replacement)
+    $support=[IO.File]::ReadAllText($supportPath)
+    # Every fault injection below targets this line; fail loudly if it moves instead of silently not injecting.
+    if (([regex]::Matches($support,[regex]::Escape('return [pscustomobject]$answer'))).Count -ne 1) {throw 'ToolkitSupport.ps1 must contain exactly one Invoke-ToolkitProcess injection point.'}
+    $support=$support.Replace('return [pscustomobject]$answer',$replacement)
     [IO.File]::WriteAllText($supportPath,$support,(New-Object Text.UTF8Encoding($false)))
     Save $manifestPath @{schema_version=1;scenarios=@(@{id='validate-drift';profile=$profiles.success;baseline_report=$env:MQL5_SCENARIO_TEST_REPORT})}
     $validationDrift=Join-Path $testRoot 'batch-validation-drift';$priorTrace=[IO.File]::ReadAllText($env:MQL5_SCENARIO_TEST_TRACE)

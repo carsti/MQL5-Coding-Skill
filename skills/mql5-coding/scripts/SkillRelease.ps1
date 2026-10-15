@@ -242,11 +242,50 @@ function Expand-Mql5SkillRelease([string]$Archive,[string]$Digest,[string]$Versi
     if ($identity.version -cne $Version) {throw 'Packaged skill version differs from its manifest.'}
     return $manifest
 }
-function Invoke-Mql5ReleaseGh([string[]]$Arguments) {
+function Invoke-Mql5BoundedProcess([string]$Executable,[string[]]$Arguments,[string]$Directory,[int]$Seconds,[Collections.IDictionary]$Environment=@{}) {
+    # Runs one process tree in a kill-on-close job with a deadline and bounded output.
+    if (-not ('Mql5Coding.JobProcessLaunch' -as [type])) {Add-Type -Path (Join-Path $PSScriptRoot 'TesterProcessJob.cs')}
+    $job=$null
+    $answer=[ordered]@{exit_code=$null;status='launch_failed';stdout='';stderr='';cleanup_verified=$true}
+    try {
+        $job=[Mql5Coding.JobProcessLaunch]::CreateSuspendedProbe($Executable,$Arguments,$Directory,$Environment)
+        $out=[Mql5Coding.JobProcessLaunch]::ReadProbeOutputAsync($job.StandardOutput,1048576,$true)
+        $err=[Mql5Coding.JobProcessLaunch]::ReadProbeOutputAsync($job.StandardError,1048576,$true)
+        $job.Resume()
+        $clock=[Diagnostics.Stopwatch]::StartNew();$done=$false
+        do {
+            if (($out.IsCompleted -and $out.Result.LimitExceeded) -or ($err.IsCompleted -and $err.Result.LimitExceeded)) {$answer.status='output_limit';break}
+            $left=[int]($Seconds*1000-$clock.ElapsedMilliseconds)
+            if ($left -le 0) {$answer.status='timed_out';break}
+            $done=$job.WaitForExit([Math]::Min(100,$left))
+        } while (-not $done)
+        if ($done) {
+            $answer.exit_code=$job.ExitCode
+            if ($out.Wait(3000) -and $err.Wait(3000) -and -not $out.Result.LimitExceeded -and -not $err.Result.LimitExceeded) {
+                $answer.stdout=$out.Result.Text;$answer.stderr=$err.Result.Text;$answer.status='completed'
+            } else {$answer.status='output_limit'}
+        }
+    } finally {
+        if ($null -ne $job) {
+            try {$job.TerminateAndWaitForEmpty(5000)} catch {$answer.cleanup_verified=$false}
+            finally {$job.Dispose()}
+        }
+    }
+    return [pscustomobject]$answer
+}
+function Invoke-Mql5ReleaseGhProcess([string[]]$Arguments,[int]$Seconds,[string]$FailureMessage) {
     # gh owns authentication. Never read, print or persist its access token.
-    $result=& gh @Arguments 2>$null
-    if ($LASTEXITCODE -ne 0) {throw 'Authenticated GitHub operation failed. Check gh auth status and repository access.'}
-    return (($result -join "`n") | ConvertFrom-Json)
+    # A deadline keeps a stalled network call from holding the update lock.
+    $gh=Get-Command gh.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $gh) {throw 'GitHub CLI (gh.exe) was not found on PATH. Install and authenticate gh, or use the offline update inputs.'}
+    $run=Invoke-Mql5BoundedProcess $gh.Source $Arguments ([IO.Path]::GetTempPath()) $Seconds
+    if ($run.status -eq 'timed_out') {throw "GitHub CLI did not finish within $Seconds seconds and was stopped. Check network access, then retry."}
+    if ($run.status -ne 'completed' -or $run.exit_code -ne 0) {throw $FailureMessage}
+    return $run.stdout
+}
+function Invoke-Mql5ReleaseGh([string[]]$Arguments) {
+    $text=Invoke-Mql5ReleaseGhProcess $Arguments 120 'Authenticated GitHub operation failed. Check gh auth status and repository access.'
+    return ($text | ConvertFrom-Json)
 }
 function Move-Mql5ReleaseItem([string]$Source,[string]$Destination) {
     $source=Assert-Mql5ReleasePath $Source;$destination=Assert-Mql5ReleasePath $Destination
