@@ -10,7 +10,7 @@ Only the latest release on `main` receives fixes. Releases are immutable: a publ
 
 ## Scope
 
-In scope are the skill's scripts: compilation through MetaEditor, the Strategy Tester runner and its process and path isolation, the environment health check, the project-profile and toolkit helpers, and the updater, which verifies a release archive's SHA-256, manifest and source commit before installing. The skill never places trades, moves money or enters credentials. The tester runner refuses to start a terminal with saved accounts unless the user explicitly acknowledges that risk for the run.
+In scope are the skill's scripts: compilation through MetaEditor, the Strategy Tester runner and its process and path isolation, the environment health check, the project-profile and toolkit helpers, and the updater, which verifies a release archive's SHA-256, manifest and source commit before installing. The skill never places orders, moves money or enters credentials itself. Starting a terminal that has saved accounts can log into that account and resume an existing Signals subscription, which may copy trades, so the tester runner refuses such a terminal unless the user explicitly acknowledges that risk for the run.
 
 ## Automated checks
 
