@@ -512,6 +512,28 @@ Assert-True -Condition (
     $testerPathIntegrityText -match
         '\$script:fixedLocalVolumeIdentities\s*=\s*@\{\}'
 ) -Message 'The path-integrity helper does not initialize its script-scope volume cache.'
+$startupDataNode = $runnerAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-TerminalStartupDataDirectory' }, $true)
+Assert-True -Condition ($null -ne $startupDataNode -and $runnerScriptText -match 'Assert-TerminalStartupDataDirectory -AccountState \$accountState') `
+    -Message 'The runner does not check the terminal startup data directory.'
+$startupDataOutcomes = & {
+    param($Definition)
+    . ([scriptblock]::Create($Definition))
+    foreach ($case in @(
+        @{ default_data_directories = @(); selected_is_default = $false },
+        @{ default_data_directories = @('C:\D\A'); selected_is_default = $true },
+        @{ default_data_directories = @('C:\D\A'); selected_is_default = $false },
+        @{ default_data_directories = @('C:\D\A', 'C:\D\B'); selected_is_default = $false }
+    )) {
+        try { Assert-TerminalStartupDataDirectory -AccountState ([pscustomobject]$case); 'allowed' } catch { $_.Exception.Message }
+    }
+} $startupDataNode.Extent.Text
+# Unbound or matching selections pass; a mismatch names the startup directory;
+# several bound directories are reported as ambiguous, never as a mismatch.
+Assert-True -Condition ($startupDataOutcomes.Count -eq 4 -and $startupDataOutcomes[0] -ceq 'allowed' -and $startupDataOutcomes[1] -ceq 'allowed' -and
+    $startupDataOutcomes[2] -ceq 'BLOCKED: TerminalDataPath is not the data directory this terminal opens at startup (C:\D\A). Select that directory or omit TerminalDataPath.' -and
+    $startupDataOutcomes[3].StartsWith('BLOCKED: Several data directories name this terminal installation in origin.txt (C:\D\A; C:\D\B)', [StringComparison]::Ordinal) -and
+    $startupDataOutcomes[3] -match 'ambiguous' -and $startupDataOutcomes[3] -notmatch 'omit TerminalDataPath') `
+    -Message "Terminal startup data-directory outcomes changed: $($startupDataOutcomes -join ' | ')"
 $protectJournalNode = $runnerAst.Find(
     {
         param($node)

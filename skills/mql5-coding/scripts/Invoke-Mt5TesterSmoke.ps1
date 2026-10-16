@@ -463,9 +463,7 @@ try {
     $result.safety.saved_account_inspection = [string]$accountState.state
     $result.safety.saved_accounts_detected = if ($accountState.state -ceq 'unknown') { $null } else { $accountState.state -ceq 'present' }
     $result.safety.saved_account_risk_acknowledgement_required = $accountState.state -cne 'none'
-    if (@($accountState.default_data_directories).Count -gt 0 -and -not [bool]$accountState.selected_is_default) {
-        throw "BLOCKED: TerminalDataPath is not the data directory this terminal opens at startup ($(@($accountState.default_data_directories) -join '; ')). Select that directory or omit TerminalDataPath."
-    }
+    Assert-TerminalStartupDataDirectory -AccountState $accountState
     if ($accountState.state -cne 'none') {
         $accountMessage = if ($accountState.state -ceq 'present') {
             'The terminal has saved account credentials. Starting it may log into that (possibly live) account and resume Signals copying.'

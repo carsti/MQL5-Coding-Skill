@@ -702,6 +702,19 @@ function Get-TerminalSavedAccountState {
     }
 }
 
+function Assert-TerminalStartupDataDirectory {
+    # Refuse a selection MT5 would not open at startup. Several directories
+    # bound to one installation leave the startup directory ambiguous.
+    param([Parameter(Mandatory)]$AccountState)
+    $defaults = @($AccountState.default_data_directories)
+    if ($defaults.Count -gt 1) {
+        throw "BLOCKED: Several data directories name this terminal installation in origin.txt ($($defaults -join '; ')), so the directory MT5 opens at startup is ambiguous. Move stale data directories out of the MetaQuotes Terminal folder, or use a dedicated installation."
+    }
+    if ($defaults.Count -eq 1 -and -not [bool]$AccountState.selected_is_default) {
+        throw "BLOCKED: TerminalDataPath is not the data directory this terminal opens at startup ($($defaults[0])). Select that directory or omit TerminalDataPath."
+    }
+}
+
 function Resolve-TerminalBinding {
     param(
         [string]$RequestedTerminalPath,
