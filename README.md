@@ -212,7 +212,7 @@ The packaged `references/mcp-contract.json` describes the documentation interfac
 
 For local commands and optional validation of the installed pair, see the counterpart's [compatibility guide](https://github.com/shamwi2846/MQL5-CHM-MCP/blob/main/docs/skill-compatibility.md).
 
-Both repositories are private. Each requires the Actions secret `MQL5_PEER_READ_KEY` containing a dedicated read-only SSH deploy key registered on the counterpart repository. Never reuse an account token or a write-enabled deploy key. Checkouts disable persisted credentials; fork pull requests skip the job that needs this secret. A trusted run with missing credentials fails. Rotate each key on its target repository and replace the consumer secret together. MCP release validation waits for this compatibility job before packaging; skill tag pushes also run the pair check.
+Both repositories are public, so the counterpart is checked out with the job's read-only workflow token and no secret, and pull requests from forks run the pair check too (an owner approves workflow runs from outside contributors first). Checkouts disable persisted credentials. MCP release validation waits for this compatibility job before packaging; skill tag pushes also run the pair check. See [SECURITY.md](SECURITY.md) for vulnerability reporting and the automated checks.
 
 ## Release history
 

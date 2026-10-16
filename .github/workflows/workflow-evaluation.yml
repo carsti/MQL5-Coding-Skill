@@ -61,7 +61,6 @@ jobs:
           repository: ${{ github.repository_owner }}/MQL5-CHM-MCP
           ref: ${{ inputs.mcp_commit }}
           path: mcp
-          ssh-key: ${{ secrets.MQL5_PEER_READ_KEY }}
           persist-credentials: false
       - name: Use Node 24.17.0
         if: steps.credentials.outputs.available == 'true'
@@ -87,7 +86,7 @@ jobs:
           $run = gh run view $env:VALIDATION_RUN --repo $env:PEER_REPOSITORY --json headSha,conclusion,workflowName | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $run.headSha -cne $env:EXPECTED_COMMIT -or $run.conclusion -cne 'success' -or $run.workflowName -cne 'Release validation') { throw 'Candidate package run is not the reviewed successful release validation.' }
           gh run download $env:VALIDATION_RUN --repo $env:PEER_REPOSITORY --name ('mql5-chm-mcp-release-'+$env:EXPECTED_COMMIT) --dir downloads
-          if ($LASTEXITCODE -ne 0) { throw 'Reviewed CI package unavailable. For private counterpart artifacts, configure MQL5_PEER_ACTIONS_TOKEN with read-only Actions access; no published-package fallback.' }
+          if ($LASTEXITCODE -ne 0) { throw 'Reviewed CI package unavailable. If the counterpart artifact cannot be downloaded with the workflow token, configure MQL5_PEER_ACTIONS_TOKEN with read-only Actions access; no published-package fallback.' }
           . ./mcp/scripts/Common.ps1
           Assert-PortableZipSidecar -ZipPath ./downloads/mql5-chm-mcp-windows-x64.zip -ManifestPath ./downloads/mql5-chm-mcp-windows-x64.zip.manifest.json -ExpectedFile mql5-chm-mcp-windows-x64.zip | Out-Null
           Expand-Archive ./downloads/mql5-chm-mcp-windows-x64.zip ./portable
