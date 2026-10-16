@@ -199,6 +199,7 @@ function Get-ClaudeRegistration([string]$ConfigPath, [string]$Workspace) {
     # Claude Code precedence: local (per-project entry in the user config),
     # then project (.mcp.json in the workspace), then user scope.
     $candidates=@()
+    $disabled=$false
     if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
         $text=[IO.File]::ReadAllText($ConfigPath)
         foreach ($key in @(Get-JsonObjectKeys $text @('projects'))) {
@@ -207,6 +208,14 @@ function Get-ClaudeRegistration([string]$ConfigPath, [string]$Workspace) {
             if (Same-Path $projectPath $Workspace) {
                 $local=Get-JsonMemberText $text @('projects',$key,'mcpServers','mql5-chm')
                 if ($null -ne $local) {$candidates+=@([pscustomobject]@{scope='local';text=$local})}
+                # `/mcp disable` keeps the definition and adds the exact server
+                # name to this project's disabledMcpServers array; Claude Code
+                # ignores a value that is not an array.
+                $listed=Get-JsonMemberText $text @('projects',$key,'disabledMcpServers')
+                if ($null -ne $listed -and $listed.TrimStart().StartsWith('[',[StringComparison]::Ordinal)) {
+                    $names=ConvertFrom-Json $listed
+                    if ($names -ccontains 'mql5-chm') {$disabled=$true}
+                }
             }
         }
     }
@@ -225,7 +234,7 @@ function Get-ClaudeRegistration([string]$ConfigPath, [string]$Workspace) {
     if ($entry -isnot [pscustomobject]) {throw 'Unsupported Claude registration.'}
     # Present the Claude entry in the transport shape shared with Codex checks.
     $transport=[pscustomobject]@{type=$(if ($null -eq (Value $entry 'type')) {'stdio'} else {Value $entry 'type'});command=(Value $entry 'command');args=@(Value $entry 'args' @());env=(Value $entry 'env')}
-    return [pscustomobject]@{scope=$selected.scope;shadowed_scopes=@($candidates | Select-Object -Skip 1 | ForEach-Object {$_.scope});registration=[pscustomobject]@{name='mql5-chm';enabled=$true;transport=$transport}}
+    return [pscustomobject]@{scope=$selected.scope;shadowed_scopes=@($candidates | Select-Object -Skip 1 | ForEach-Object {$_.scope});registration=[pscustomobject]@{name='mql5-chm';enabled=(-not $disabled);transport=$transport}}
 }
 function Skill-Files([string]$Root) {
     $Root=Directory-Path $Root
