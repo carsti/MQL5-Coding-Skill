@@ -58,22 +58,25 @@ class McpContractTests(unittest.TestCase):
         # BaseLoader preserves the Actions key 'on' rather than YAML 1.1 boolean coercion.
         workflow = yaml.load((root / ".github/workflows/skill-compatibility.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
         self.assertEqual(workflow["permissions"], {"contents": "read"})
-        self.assertEqual(workflow["on"]["workflow_call"]["secrets"]["MQL5_PEER_READ_KEY"]["required"], "true")
+        # Both repositories are public: only the job's read-only token fetches the
+        # peer (no secret or extra token), and fork pull requests run the pair check.
+        self.assertNotIn("secrets", workflow["on"]["workflow_call"])
         pair = workflow["jobs"]["pair"]
-        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", pair["if"])
+        self.assertNotIn("if", pair)
         checkouts = [step for step in pair["steps"] if step.get("uses", "").startswith("actions/checkout@")]
         self.assertEqual(len(checkouts), 2)
         for checkout in checkouts:
             self.assertEqual(checkout["with"]["persist-credentials"], "false")
         self.assertEqual(checkouts[1]["with"]["repository"], "${{ github.repository_owner }}/MQL5-CHM-MCP")
-        self.assertEqual(checkouts[1]["with"]["ssh-key"], "${{ secrets.MQL5_PEER_READ_KEY }}")
+        self.assertNotIn("ssh-key", checkouts[1]["with"])
+        self.assertNotIn("token", checkouts[1]["with"])
         runs = "\n".join(step.get("run", "") for step in pair["steps"])
         self.assertIn("npm run build:candidate", runs)
         self.assertIn("--skill-root skill/skills/mql5-coding", runs)
         self.assertIn("--require-hashes -r skill/.github/requirements-ci.txt", runs)
         ci = yaml.load((root / ".github/workflows/ci.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
         self.assertEqual(ci["jobs"]["compatibility"]["uses"], "./.github/workflows/skill-compatibility.yml")
-        self.assertEqual(ci["jobs"]["compatibility"]["secrets"], "inherit")
+        self.assertNotIn("secrets", ci["jobs"]["compatibility"])
         self.assertIn("v*", ci["on"]["push"]["tags"])
 
 

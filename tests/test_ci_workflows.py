@@ -124,6 +124,38 @@ class ConcurrencyPolicy(unittest.TestCase):
         self.assertTrue(newer[1])
 
 
+class WorkflowHardening(unittest.TestCase):
+    """Every workflow pins actions to commits and never persists checkout credentials."""
+
+    PINNED = re.compile(r"(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_./-]+)?)@(?P<sha>[0-9a-f]{40})")
+
+    def steps(self):
+        for path in sorted((REPO / ".github/workflows").glob("*.yml")):
+            workflow = yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+            for job in workflow["jobs"].values():
+                for step in job.get("steps", []):
+                    yield path.name, step
+
+    def test_actions_are_pinned_to_one_commit_each(self):
+        pins = {}
+        for name, step in self.steps():
+            uses = step.get("uses")
+            if uses is None or uses.startswith("./"):
+                continue
+            match = self.PINNED.fullmatch(uses)
+            self.assertIsNotNone(match, f"{name}: {uses} is not pinned to a full commit SHA")
+            # Dependabot moves every use of an action together.
+            self.assertEqual(pins.setdefault(match["action"], match["sha"]), match["sha"], f"{name}: {uses}")
+        self.assertIn("actions/checkout", pins)
+
+    def test_checkouts_never_persist_credentials(self):
+        checkouts = [(name, step) for name, step in self.steps() if step.get("uses", "").startswith("actions/checkout@")]
+        self.assertTrue(checkouts)
+        for name, step in checkouts:
+            self.assertEqual(step.get("with", {}).get("persist-credentials"), "false", name)
+            self.assertNotIn("ssh-key", step.get("with", {}), name)
+
+
 @unittest.skipUnless(os.name == "nt", "Native PowerShell workflow execution")
 class TestCommandFailures(unittest.TestCase):
     def setUp(self):

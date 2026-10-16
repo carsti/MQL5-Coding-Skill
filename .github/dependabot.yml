@@ -1,0 +1,21 @@
+# Weekly pull requests that move the pinned GitHub Actions commits and the
+# hash-pinned CI validator dependency. See SECURITY.md for the manual pins.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: pip
+    directory: /.github
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2
