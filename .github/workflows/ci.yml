@@ -26,7 +26,9 @@ jobs:
   validate:
     name: Windows validation
     runs-on: windows-latest
-    timeout-minutes: 45
+    # Both PowerShell hosts run every suite here; hosted runners took 24-45
+    # minutes in October 2026, and one push run hit the earlier 45-minute limit.
+    timeout-minutes: 75
 
     steps:
       - name: Check out repository
