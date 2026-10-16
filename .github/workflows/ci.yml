@@ -117,6 +117,10 @@ jobs:
         shell: pwsh
         run: .\tests\Test-ProjectProfiles.ps1
 
+      - name: Test Codex lean mode with PowerShell 7
+        shell: pwsh
+        run: .\tests\Test-CodexLeanMode.ps1
+
       - name: Test with Windows PowerShell 5.1
         shell: powershell
         run: .\tests\Test-Skill.ps1
@@ -140,6 +144,10 @@ jobs:
       - name: Test project profiles with Windows PowerShell 5.1
         shell: powershell
         run: .\tests\Test-ProjectProfiles.ps1
+
+      - name: Test Codex lean mode with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\Test-CodexLeanMode.ps1
 
   updater:
     name: Release updater validation

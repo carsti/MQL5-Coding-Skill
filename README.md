@@ -105,6 +105,23 @@ Copy-Item -LiteralPath ".\skills\mql5-coding" -Destination $destination -Recurse
 
 Fully restart Codex after installation.
 
+## Codex lean mode (optional)
+
+Lean mode tells Codex to do less around each task: no unrequested refactors or tests, at most one quick check after a code change, no routine `mql5_chm_status` or health checks, one batched identifier lookup, and one compile of the affected entrypoints. The safety rules stay: no trades, and the saved-account confirmation before Strategy Tester `-Execute`. The full rules are in [codex/lean-mode.md](codex/lean-mode.md).
+
+Lean mode affects Codex only. The script adds or removes one marked section in `CODEX_HOME\AGENTS.md`, the global instruction file Codex loads for every task. Claude Code does not read that file, and text outside the section is kept. Run the script from the root of this checkout:
+
+```powershell
+# Turn lean mode on
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-CodexLeanMode.ps1 -Mode On
+# Turn lean mode off
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-CodexLeanMode.ps1 -Mode Off
+# Show whether lean mode is on
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-CodexLeanMode.ps1 -Mode Status
+```
+
+Start a new Codex chat after a change, and fully restart Codex if it still follows the old rules. To check, ask Codex to summarize its current instructions. After editing `codex/lean-mode.md`, run `-Mode On` again; `-Mode Status` reports when the installed rules differ. If `CODEX_HOME\AGENTS.override.md` exists and is not empty, Codex reads it instead of `AGENTS.md`, and the script warns that lean mode has no effect. Workflow evaluations run with a private `CODEX_HOME`, so lean mode does not change their results.
+
 ## Safety boundaries
 
 - The skill completes the requested task and necessary supporting actions without additional permission prompts. Codex, tool, operating-system, and account requirements still apply.
@@ -153,6 +170,7 @@ GitHub Actions and the local test commands validate:
 - the actual MCP server against this skill on each trusted push and pull request, with exact repository revisions retained in a compatibility artifact;
 - PowerShell syntax under PowerShell 7 and Windows PowerShell 5.1;
 - reproducible release ZIPs and sidecars, full file verification, authenticated metadata policy, legacy and versioned updates, additional verified resources, backup/rollback, interruption recovery, concurrent updater exclusion, archive tampering and path rejection under both shells;
+- the Codex lean mode switch under both shells: on, off, status, preserved user instructions and line endings, outdated rules, the override warning, and refused damaged markers;
 - project profiles under both shells: creation/overwrite refusal, moved paths, rejected execution fields and malformed selections, multiple entrypoints, compiler exit-code propagation, receipt freshness, and synthetic tester delegation without an acknowledgement switch;
 - environment-health success and failure cases against a real MCP bundle under both shells, including disabled registrations, checksum failures, source differences, optional dependencies, timeouts, redaction, preserved files, and an editor that must never be launched;
 - compiler-wrapper completion, source-path lease, artifact, exit-code contracts, compilation receipts, and automatic tester verification/rejection of changed evidence without starting real MetaEditor;
